@@ -1,2 +1,2 @@
-# unite
-Uniform NIRSpec Inference (Turbo) Engine
+# UNITE: Uniform NIRSpec Inference (Turbo) Engine
+
