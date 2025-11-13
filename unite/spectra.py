@@ -534,11 +534,11 @@ class NIRSpecSpectrum(Spectrum):
 
         # Compute resolution
         lsf_dir = resources.files('unite.data.resolution')
-        lsf_file = f'jwst_nirspec_{disperser.lower()}_lsf.fits'
+        lsf_file = f'jwst_nirspec_{disperser.lower()}_resolution.fits'
         self.lsf = calibration.PolyLSFCurve(lsf_dir.joinpath(lsf_file), λ_unit)
 
         # Compute pixel offset
-        disp_dir = resources.files('unite.data.resolution')
+        disp_dir = resources.files('unite.data.disp')
         disp_file = f'jwst_nirspec_{disperser.lower()}_disp.fits'
         self.offset = calibration.InterpPixelOffset(disp_dir.joinpath(disp_file), λ_unit)
 
