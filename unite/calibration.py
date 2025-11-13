@@ -3,10 +3,10 @@ Module for Handling LSF/lsf Curves
 """
 
 # Typing
-from typing import Final, Callable
+from typing import Callable
 
 # Import packages
-import astropy.units as u
+from astropy import units as u
 from astropy.table import Table
 
 # Bayesian Inference
@@ -15,10 +15,6 @@ from unite import priors
 
 # JAX packages
 from jax import jit, numpy as jnp
-
-# Conversion factor from FWHM to sigma for variance = 1/2
-SIGMA_TO_FWHM: Final[float] = 2 * jnp.sqrt(2 * jnp.log(2))
-
 
 # Generic Calibration
 def NIRSpecCalibration(names: list, fixed: list) -> None:
@@ -59,42 +55,43 @@ def NIRSpecCalibration(names: list, fixed: list) -> None:
     return calibration
 
 
-# Interpolated lsf Curve
-def InterpLSFCurve(lsf_file: str, λ_unit: u.Unit) -> Callable:
+def PolyLSFCurve(resolution_file: str, λ_unit: u.Unit) -> Callable:
     """
-    Initialize the lsf curve
+    Return the polynomial R curve
 
     Parameters
     ----------
-    lsf_file : str
-        File containing the lsf curve
+    resolution_file : str
+        File containing the polynomial coefficients for the R curve
     λ_unit : u.Unit
         Wavelength target unit
 
     Returns
     -------
-    None
+    Callable
+        Polynomial R Curve Function
     """
 
-    # Load the lsf from file
-    lsf_tab = Table.read(lsf_file)
+    # Load the polynomial coefficients from file
+    res_tab = Table.read(resolution_file)
+    res_unit = u.Unit(res_tab.meta['LAMUNIT'])
 
-    # Convert to JAX arrays in the correct units
-    wave = jnp.array((lsf_tab['wave']).to(λ_unit))
-    fwhm = jnp.array((lsf_tab['sigma']).to(λ_unit)) * SIGMA_TO_FWHM
+    # Compute the conversion
+    conversion = λ_unit.to(res_unit)
 
-    # Compute Interpolated lsf Curve
+    # Convert to JAX arrays
+    coeffs = jnp.array(res_tab['coeff'])  # Assumes polyval order
+
+    # Compute Polynomial Resolution Curve
+    # LSF FWHM in wavelength units
     @jit
     def lsf(λ, scale):
-        lsf_interp = scale * jnp.interp(
-            λ, wave, fwhm, left='extrapolate', right='extrapolate'
-        )
-        return lsf_interp
+        return scale * (λ / jnp.polyval(coeffs, λ * conversion))
 
     return lsf
 
 
-def PixelOffset(dispersion_file: str, λ_unit: u.Unit) -> Callable:
+def InterpPixelOffset(dispersion_file: str, λ_unit: u.Unit) -> Callable:
     """
     Return the pixel offset calibration function
 
