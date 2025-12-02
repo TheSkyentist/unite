@@ -4,6 +4,7 @@ Fitting functions for spectral data
 
 # Standard library
 import re
+import os
 
 # Typing
 from typing import Dict, Tuple
@@ -26,14 +27,25 @@ from jax import random, vmap, numpy as jnp
 
 # unite
 from unite.model import multiSpecModel
-from unite.plotting import plotResults
 from unite.spectra import NIRSpecSpectra
 from unite import utils, initial, parameters
 
+# Plotting packages
+from matplotlib import pyplot
 
-def NIRSpecFit(config: dict, rows: Table, backend: str = 'MCMC', verbose=True) -> None:
+
+def NIRSpecFit(
+    config: dict,
+    rows: Table,
+    spectra_directory: str,
+    output_directory: str,
+    N: int = 500,
+    num_warmup: int = 250,
+    backend: str = 'MCMC',
+    verbose=True,
+) -> None:
     # Get the model arguments
-    config, model_args = NIRSpecModelArgs(config, rows)
+    config, model_args = NIRSpecModelArgs(config, rows, spectra_directory)
 
     # Get the random key
     rng_key = random.PRNGKey(0)
@@ -41,7 +53,9 @@ def NIRSpecFit(config: dict, rows: Table, backend: str = 'MCMC', verbose=True) -
     # Fit the data
     match backend:
         case 'MCMC':
-            samples, extras = MCMCFit(model_args, rng_key, verbose=verbose)
+            samples, extras = MCMCFit(
+                model_args, rng_key, N=N, num_warmup=num_warmup, verbose=verbose
+            )
         case 'NS':
             samples, extras = NSFit(model_args, rng_key)
         case 'MAP':
@@ -51,13 +65,13 @@ def NIRSpecFit(config: dict, rows: Table, backend: str = 'MCMC', verbose=True) -
             raise ValueError(f'Unknown backend: {backend}')
 
     # Plot the results
-    plotResults(config, rows, model_args, samples)
+    plotResults(config, rows, model_args, samples, output_directory)
 
     # Save the results
-    saveResults(config, rows, model_args, samples, extras)
+    saveResults(config, rows, model_args, samples, extras, output_directory)
 
 
-def NIRSpecModelArgs(config: dict, rows: Table) -> Tuple:
+def NIRSpecModelArgs(config: dict, rows: Table, spectra_directory: str) -> Tuple:
     """
     Get the model arguments for the NIRSpec data.
 
@@ -75,7 +89,7 @@ def NIRSpecModelArgs(config: dict, rows: Table) -> Tuple:
     """
 
     # Load the spectra
-    spectra = NIRSpecSpectra(rows, 'NIRSpec/Spectra')
+    spectra = NIRSpecSpectra(rows, spectra_directory)
 
     # Restrict config to what we have coverage of
     config = utils.restrictConfig(config, spectra)
@@ -115,7 +129,11 @@ def NIRSpecModelArgs(config: dict, rows: Table) -> Tuple:
 
 
 def MCMCFit(
-    model_args: tuple, rng_key: random.PRNGKey, N: int = 500, verbose=True
+    model_args: tuple,
+    rng_key: random.PRNGKey,
+    N: int = 500,
+    num_warmup: int = 250,
+    verbose=True,
 ) -> Tuple[Dict, Dict]:
     """
     Fit the NIRSpec data with MCMC.
@@ -139,7 +157,9 @@ def MCMCFit(
 
     # MCMC
     kernel = infer.NUTS(multiSpecModel)
-    mcmc = infer.MCMC(kernel, num_samples=N, num_warmup=250, progress_bar=verbose)
+    mcmc = infer.MCMC(
+        kernel, num_samples=N, num_warmup=num_warmup, progress_bar=verbose
+    )
     mcmc.run(rng_key, *model_args)
 
     # Get the samples
@@ -276,12 +296,13 @@ def computeProbs(samples: dict, model_args: tuple) -> np.ndarray:
     return logL
 
 
-def saveResults(config, rows, model_args, samples, extras) -> None:
+def saveResults(config, rows, model_args, samples, extras, output_dir) -> None:
     # Get config name
     cname = '_' + config['Name'] if config['Name'] else ''
 
     # Get common filename
-    savename = f'NIRSpec/Results/{rows[0]["root"]}-{rows[0]["srcid"]}{cname}'
+    os.makedirs(f'{output_dir}/Results/', exist_ok=True)
+    savename = f'{output_dir}/Results/{rows[0]["root"]}-{rows[0]["srcid"]}{cname}'
 
     # Unpack model args
     spectra, _, _, _, _, cont_regs, _ = model_args
@@ -371,3 +392,147 @@ def saveResults(config, rows, model_args, samples, extras) -> None:
     df = pd.concat([t.to_pandas().quantile(qs).T for t in [out, extra]], axis=0)
     df.columns = ['P16', 'P50', 'P84']
     df.to_csv(f'{savename}_summary.csv')
+
+
+def plotResults(
+    config: list, rows: Table, model_args: tuple, samples: dict, output_dir: str
+) -> None:
+    """
+    Plot the results of the sampling.
+
+    Parameters
+    ----------
+    savedir : str
+        Directory to save the plots
+    config: list
+        Configuration list
+    rows : Table
+        Table of the rows
+    model_args : tuple
+        Arguments for the model
+    samples : dict
+        Samples from the MCMC
+
+
+    Returns
+    -------
+    None
+
+    """
+    # Get config name
+    cname = '_' + config['Name'] if config['Name'] else ''
+
+    os.makedirs(f'{output_dir}/Plots/', exist_ok=True)
+
+    # Unpack model arguements
+    spectra, _, _, line_centers, _, cont_regs, _ = model_args
+
+    # Get the number of spectra and regions
+    Nspec, Nregs = len(spectra.spectra), len(cont_regs)
+
+    # Plotting
+    figsize = (7.5 * Nregs, 6 * Nspec)
+    fig, axes = pyplot.subplots(
+        Nspec, Nregs, figsize=figsize, sharex='col', constrained_layout=True
+    )
+    # fig.subplots_adjust(hspace=0.05, wspace=0.05)
+
+    # Ensure axes is always a 2D array
+    if Nspec == 1 and Nregs == 1:
+        axes = np.array([[axes]])  # Convert single Axes object to a 2D array
+    elif Nspec == 1 or Nregs == 1:
+        axes = np.atleast_2d(axes).reshape(Nspec, Nregs)  # Convert 1D array to 2D array
+
+    # Plot the spectra
+    for i, spectrum in enumerate(spectra.spectra):
+        # Get the spectrum
+        _, wave, _, flux, err = spectrum()
+
+        for j, ax in enumerate(axes[i]):
+            # Get the continuum region
+            cont_reg = cont_regs[j]
+            mask = jnp.logical_and(wave > cont_reg[0], wave < cont_reg[1])
+
+            # Plot the spectrum
+            ax.plot(wave[mask], flux[mask], color='k', ds='steps-mid')
+
+            # Plot errorbars on the spectrum
+            ax.errorbar(wave[mask], flux[mask], yerr=err[mask], fmt='none', color='k')
+
+            # Plot the models
+            model = samples[f'{spectrum.name}_model']
+            for k in range(model.shape[0]):
+                ax.plot(
+                    wave[mask],
+                    model[k][mask],
+                    color='#E20134',
+                    alpha=np.clip(5 / len(model), 0.01, 1),
+                    ds='steps-mid',
+                )
+
+            # Plot the best logP model
+            m = model[samples['logP'].argmax()]
+            ax.plot(wave[mask], m[mask], color='#A40122', alpha=1, lw=2, ds='steps-mid')
+
+            # Label the axes
+            if j == 0:
+                ax.set(ylabel=f'{spectrum.name}')
+            ax.set(xlim=cont_reg)
+
+            # Add rest frame axis
+            rest_ax = ax.secondary_xaxis(
+                'top',
+                functions=(
+                    lambda x: x / (1 + spectra.redshift_initial),
+                    lambda x: x * (1 + spectra.redshift_initial),
+                ),
+            )
+
+            # Turn off top xticklabels in the middle
+            if i > 0:
+                rest_ax.set(xticklabels=[])
+
+            # Turn off top xticks
+            ax.tick_params(axis='x', which='both', top=False)
+
+            # Line Labels
+            for line in jnp.unique(line_centers):
+                line = line * (1 + spectra.redshift_initial)
+                if line < cont_reg[0] or line > cont_reg[1]:
+                    continue
+                ax.axvline(line, color='k', linestyle='--', alpha=0.5)
+
+    # Set superlabels
+    fig.supylabel(
+        rf'$f_\lambda$ [{spectrum.fλ_unit.to_string(format="latex", fraction=False)}]'
+    )
+    fig.supxlabel(
+        rf'$\lambda$ (Observed) [{spectrum.λ_unit.to_string(format="latex", fraction=False)}]',
+        y=-0.01,
+        va='center',
+        fontsize='medium',
+    )
+    fig.suptitle(
+        rf'$\lambda$ (Rest) [{spectrum.λ_unit:latex_inline}]',
+        y=1.015,
+        va='center',
+        fontsize='medium',
+    )
+    fig.text(
+        0.5,
+        1.05,
+        f'{rows[0]["srcid"]} ({rows[0]["root"]}): $z = {spectrum.redshift_initial:.3f}$',
+        ha='center',
+        va='center',
+        fontsize='large',
+    )
+
+    # Show the plot
+    fig.savefig(
+        os.path.join(
+            f'{output_dir}/Plots',
+            f'{rows[0]["root"]}-{rows[0]["srcid"]}{cname}_fit.png',
+        ),
+        dpi=300,
+    )
+    pyplot.close(fig)

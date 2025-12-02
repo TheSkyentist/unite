@@ -42,6 +42,7 @@ format = "ruff format unite"
 [tool.pixi.dependencies]
 python = ">=3.13.3,<3.14"
 ruff = ">=0.11.9,<0.12"
+pandas = ">=2.3.3,<3"
 
 [tool.pixi.pypi-dependencies]
 unite = { path = ".", editable = true }

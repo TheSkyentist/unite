@@ -1,0 +1,44 @@
+{
+    "Name": "broad",
+    "Unit": "Angstrom",
+    "Groups": {
+        "": {
+            "TieRedshift": true,
+            "TieDispersion": true,
+            "Species": [
+                {
+                    "Name": "HI",
+                    "LineType": "emission",
+                    "Lines": [
+                        {"Wavelength": 6564.61, "RelStrength": null},
+                        {"Wavelength": 4862.68, "RelStrength": null}
+                    ]
+                },
+                {
+                    "Name": "[NII]",
+                    "LineType": "emission",
+                    "Lines": [
+                        {"Wavelength": 6585.27, "RelStrength": 2.95},
+                        {"Wavelength": 6549.86, "RelStrength": 1}
+                    ]
+                },
+                {
+                    "Name": "[SII]",
+                    "LineType": "emission",
+                    "Lines": [
+                        {"Wavelength": 6718.29, "RelStrength": null},
+                        {"Wavelength": 6732.67, "RelStrength": null}
+                    ]
+                },
+                {
+                    "Name": "[OIII]",
+                    "LineType": "emission",
+                    "Lines": [
+                        {"Wavelength": 5008.24, "RelStrength": 2.98},
+                        {"Wavelength": 4960.295, "RelStrength": 1}
+                    ]
+                }
+            ]
+        }
+    }
+}
