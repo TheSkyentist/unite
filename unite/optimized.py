@@ -5,9 +5,10 @@ Optimized line profile integrals
 # Typing
 from typing import Final
 
+from jax import config, jit, lax, numpy as jnp, vmap
+
 # JAX packages
 from jax.scipy.special import erf, erfc
-from jax import config, jit, vmap, lax, numpy as jnp
 
 # Conversion factor from FWHM to sigma for variance = 1/2
 # σ = fwhm / ( 2 * sqrt( 2 * ln(2) ) )
@@ -50,6 +51,84 @@ def integrateGaussian(
 
     # Integrate using Gaussian CDF (error function)
     return (erf(t_high) - erf(t_low)) / 2
+
+
+@jit
+def integrateSplitNormal(
+    low: jnp.ndarray,
+    high: jnp.ndarray,
+    center: jnp.ndarray,
+    fwhm_blue: jnp.ndarray,
+    fwhm_red: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    Integrate split-normal (two-sided Gaussian) emission lines over wavelength bins.
+
+    This implements a piecewise-normalized PDF:
+      - For x <= center: Gaussian with FWHM = fwhm_blue
+      - For x >= center: Gaussian with FWHM = fwhm_red
+    with continuous value at the center and total integral = 1.
+
+    Parameters
+    ----------
+    low : jnp.ndarray
+        Low wavelength edges of bins
+    high : jnp.ndarray
+        High wavelength edges of bins
+    center : jnp.ndarray
+        Line centers
+    fwhm_blue : jnp.ndarray
+        FWHM on the blue side (x < center)
+    fwhm_red : jnp.ndarray
+        FWHM on the red side (x > center)
+
+    Returns
+    -------
+    jnp.ndarray
+        Integrated flux in each bin for each line
+    """
+    # Convert FWHM to sigma for variance = 1/2 parameterization
+    inv_sigma_b = _HALFVAR_SIGMA_TO_FWHM / fwhm_blue
+    inv_sigma_r = _HALFVAR_SIGMA_TO_FWHM / fwhm_red
+
+    # Distances normalized per-side
+    t_low_b = (low - center) * inv_sigma_b
+    t_high_b = (high - center) * inv_sigma_b
+    t_low_r = (low - center) * inv_sigma_r
+    t_high_r = (high - center) * inv_sigma_r
+
+    # Piecewise integral across [low, high] relative to center:
+    # 1) fully blue side: high <= center
+    blue_only = (erf(t_high_b) - erf(t_low_b)) / 2
+
+    # 2) fully red side: low >= center
+    red_only = (erf(t_high_r) - erf(t_low_r)) / 2
+
+    # 3) straddling the center: low < center < high
+    # blue part: [low, center] => erf(0) - erf(t_low_b)
+    blue_part = (0.0 - erf(t_low_b)) / 2
+    # red part: [center, high] => erf(t_high_r) - erf(0)
+    red_part = (erf(t_high_r) - 0.0) / 2
+    both = blue_part + red_part
+
+    # Normalize so total integral is 1:
+    # Integral of each half-Gaussian is proportional to sigma; weights are:
+    #   w_b = 2*sigma_r / (sigma_b + sigma_r) = 2*inv_sigma_b / (inv_sigma_b + inv_sigma_r)
+    #   w_r = 2*sigma_b / (sigma_b + sigma_r) = 2*inv_sigma_r / (inv_sigma_b + inv_sigma_r)
+    denom = inv_sigma_b + inv_sigma_r
+    w_blue = 2 * inv_sigma_b / denom
+    w_red = 2 * inv_sigma_r / denom
+
+    high_le_center = high <= center
+    low_ge_center = low >= center
+
+    return jnp.where(
+        high_le_center,
+        w_blue * blue_only,
+        jnp.where(
+            low_ge_center, w_red * red_only, (w_blue * blue_part + w_red * red_part)
+        ),
+    )
 
 
 @jit

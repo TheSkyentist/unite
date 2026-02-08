@@ -1,12 +1,12 @@
 [project]
 name = "unite"
-description = "Uniform NIRSpec Inference (Turbo) Engine"
+description = "Unified Numerical Integration Tool for spEctroscopy"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
-version = "0.0.1"
-dependencies = [ "numpyro>=0.18.0,<0.19", "astropy>=7.0.1,<8", "matplotlib>=3.10.3,<4", "jax>=0.4.38,<0.7", "tensorflow-probability>=0.25.0,<0.26", "jaxns>=2.6.6,<3"]
+version = "1.0.0"
+dependencies = [ "numpyro>=0.18.0,<0.19", "astropy>=7.0.1,<8", "matplotlib>=3.10.3,<4"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Science/Research",
   "Topic :: Scientific/Engineering :: Astronomy",
   "Topic :: Scientific/Engineering :: Physics",
@@ -14,11 +14,10 @@ classifiers = [
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13"
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14"
 ]
 
-# [project.optional-dependencies]
-# metal = ["jax-metal>=0.1.1,<0.2", "jaxlib<0.5"]
 
 [build-system]
 build-backend = "hatchling.build"
@@ -33,7 +32,6 @@ platforms = ["osx-arm64", "linux-64", "osx-64"]
 
 [tool.pixi.environments]
 default = {features = [], solve-group = "default"}
-metal = {features = ["metal"], solve-group = "metal"}
 build = {features = ["build"], solve-group = "build"}
 
 [tool.pixi.tasks]
@@ -42,18 +40,12 @@ format = "ruff format unite"
 [tool.pixi.dependencies]
 python = ">=3.13.3,<3.14"
 ruff = ">=0.11.9,<0.12"
-pandas = ">=2.3.3,<3"
 
 [tool.pixi.activation]
 env = {"JAX_ENABLE_X64" = "1", "JAX_LOGGING_LEVEL" = "ERROR"}
 
-
 [tool.pixi.pypi-dependencies]
 unite = { path = ".", editable = true }
-
-[tool.pixi.feature.metal.target.osx-arm64.pypi-dependencies]
-jax-metal = ">=0.1.1,<0.2"
-jaxlib = "<0.5"
 
 [tool.pixi.feature.build]
 dependencies = { twine = ">=6.1.0,<7" }
@@ -63,3 +55,12 @@ tasks = { build = "python -m build" }
 [tool.ruff.format]
 quote-style = "single"
 skip-magic-trailing-comma = true
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+length-sort = false
+combine-as-imports = true
+split-on-trailing-comma = false
+force-sort-within-sections = false

@@ -3,15 +3,15 @@ Module for Loading Spectra Data
 """
 
 # Import packages
-from os import path
 from importlib import resources
-
-# Astronomy packages
-from astropy.table import Table
-from astropy import units as u, constants as consts
+from os import path
 
 # Numerical packages
 import numpy as np
+from astropy import constants as consts, units as u
+
+# Astronomy packages
+from astropy.table import Table
 
 # Calibration
 from unite import calibration, defaults
@@ -292,8 +292,7 @@ class Spectrum:
         # Mask NaN values and store
         mask = np.invert(np.isnan(err))
         for key, array in zip(
-            ['wave', 'low', 'high', 'flux', 'err'],
-            [wave, low, high, flux, err],
+            ['wave', 'low', 'high', 'flux', 'err'], [wave, low, high, flux, err]
         ):
             setattr(self, key, array[mask])
 
@@ -361,10 +360,7 @@ class Spectrum:
 
     # Mask lines in continuum regions
     def maskLines(
-        self,
-        config: list,
-        continuum_region: np.ndarray,
-        linepad: u.Quantity,
+        self, config: list, continuum_region: np.ndarray, linepad: u.Quantity
     ) -> np.ndarray:
         """
         Mask the lines in the continuum region
@@ -540,7 +536,9 @@ class NIRSpecSpectrum(Spectrum):
         # Compute pixel offset
         disp_dir = resources.files('unite.data.disp')
         disp_file = f'jwst_nirspec_{disperser.lower()}_disp.fits'
-        self.offset = calibration.InterpPixelOffset(disp_dir.joinpath(disp_file), λ_unit)
+        self.offset = calibration.InterpPixelOffset(
+            disp_dir.joinpath(disp_file), λ_unit
+        )
 
         # Load the spectrum from file
         spec = Table.read(spec_file, 'SPEC1D')

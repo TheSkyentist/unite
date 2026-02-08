@@ -3,11 +3,10 @@ Compuation of parameter matrices
 """
 
 # Typing
-from typing import Dict, Tuple, List
+from typing import Dict, List, Tuple
 
-# Numerical packages
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 from jax.experimental.sparse import BCOO
 
 # unite
@@ -210,12 +209,14 @@ def configToMatrices(
     # Create the other matrices
     orig, add = [
         [
-            BCOO(
-                (jnp.ones(len(ind), int), list(ind.items())),
-                shape=(i, max(ind.values()) + 1),
-            ).T
-            if len(ind)
-            else jnp.zeros((0, i))
+            (
+                BCOO(
+                    (jnp.ones(len(ind), int), list(ind.items())),
+                    shape=(i, max(ind.values()) + 1),
+                ).T
+                if len(ind)
+                else jnp.zeros((0, i))
+            )
             for ind in inds
         ]
         for inds in (orig[1:], add[1:])
@@ -227,11 +228,14 @@ def configToMatrices(
 
     # Create the origin to additional matrices
     orig_add = [
-        BCOO(
-            (jnp.ones(len(ind), int), list(ind.items())), shape=(a.shape[0], o.shape[0])
-        ).T
-        if len(ind)
-        else jnp.zeros((0, o.shape[0]))
+        (
+            BCOO(
+                (jnp.ones(len(ind), int), list(ind.items())),
+                shape=(a.shape[0], o.shape[0]),
+            ).T
+            if len(ind)
+            else jnp.zeros((0, o.shape[0]))
+        )
         for ind, o, a in zip(orig_add, orig, add)
     ]
 
