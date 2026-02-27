@@ -1,0 +1,778 @@
+"""Emission line configuration for spectral fitting."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from itertools import count
+
+from astropy import units as u
+
+from unite.line.profiles import (
+    SEMG,
+    Cauchy,
+    GaussHermite,
+    Gaussian,
+    Laplace,
+    Profile,
+    PseudoVoigt,
+    SplitNormal,
+    profile_from_dict,
+)
+from unite.prior import Parameter, Prior, Uniform, prior_from_dict
+
+# ------------------------------------------------------------------
+# Alphabet-based auto-naming
+# ------------------------------------------------------------------
+
+_LETTERS = 'abcdefghijklmnopqrstuvwxyz'
+
+
+def _alpha_name(n: int) -> str:
+    """Return Excel-style column name for index *n* (0 → 'a', 25 → 'z', 26 → 'aa', …)."""
+    result = ''
+    n += 1
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = _LETTERS[r] + result
+    return result
+
+
+class Redshift(Parameter):
+    """
+    A named delta redshift parameter that can be shared between lines.
+
+    Default priors is uniform between -0.01 and 0.01.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Uniform(-0.01, 0.01)
+        super().__init__(name, prior=prior)
+
+
+class FWHM(Parameter):
+    """
+    A named FWHM parameter (km/s) that can be shared between lines.
+
+    Default prior is uniform between 0 and 1000 km/s.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Uniform(0, 1000)
+        super().__init__(name, prior=prior)
+
+
+class Param(Parameter):
+    """
+    A named generic shape parameter that can be shared between lines.
+
+    Used for dimensionless profile shape parameters such as Gauss-Hermite
+    moments (h3, h4) or spectral indices.  The default prior is a wide
+    uniform ``Uniform(-10, 10)``; in practice the profile's
+    :meth:`~unite.profile.base.Profile.default_priors` provides a more
+    specific default when no token is supplied explicitly.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Uniform(-10, 10)
+        super().__init__(name, prior=prior)
+
+
+class Flux(Parameter):
+    """
+    A named flux parameter that can be shared between lines.
+
+    Default prior is uniform between -3 and 3 (relative to initial guess).
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Uniform(-3, 3)
+        super().__init__(name, prior=prior)
+
+
+# ------------------------------------------------------------------
+# Profile resolution
+# ------------------------------------------------------------------
+
+_PROFILE_ALIASES: dict[str, Profile] = {
+    'gaussian': Gaussian(),
+    'normal': Gaussian(),
+    'lorentzian': Cauchy(),
+    'cauchy': Cauchy(),
+    'exponential': Laplace(),
+    'laplace': Laplace(),
+    'voigt': PseudoVoigt(),
+    'pseudovoigt': PseudoVoigt(),
+    'semg': SEMG(),
+    'exp-gaussian': SEMG(),
+    'hermite': GaussHermite(),
+    'gauss-hermite': GaussHermite(),
+    'splitnormal': SplitNormal(),
+    'split-normal': SplitNormal(),
+    'two-sided': SplitNormal(),
+}
+
+
+def _resolve_profile(profile: str | Profile) -> Profile:
+    """Convert a profile string or instance to a Profile object.
+
+    Parameters
+    ----------
+    profile : str or Profile
+        Profile name (case-insensitive) or instance.
+
+    Returns
+    -------
+    Profile
+
+    Raises
+    ------
+    ValueError
+        If the string is not a recognized profile alias.
+    """
+    if isinstance(profile, Profile):
+        return profile
+    if isinstance(profile, str):
+        key = profile.lower()
+        if key not in _PROFILE_ALIASES:
+            valid = ', '.join(sorted(_PROFILE_ALIASES))
+            msg = f'Unknown profile {profile!r}. Valid names: {valid}'
+            raise ValueError(msg)
+        return _PROFILE_ALIASES[key]
+    msg = f'profile must be a str or Profile, got {type(profile).__name__}'
+    raise TypeError(msg)
+
+
+# ------------------------------------------------------------------
+# Wavelength extraction
+# ------------------------------------------------------------------
+
+
+def _ensure_wavelength(center: u.Quantity):
+    """Ensure that the center wavelength is a Quantity in Angstrom."""
+    if not isinstance(center, u.Quantity):
+        raise TypeError(f'center wavelength must be a Quantity, got {type(center)}')
+    if not center.unit.is_equivalent(u.AA):
+        raise ValueError(
+            f'center wavelength must have units of length, got {center.unit}'
+        )
+    return center
+
+
+# ------------------------------------------------------------------
+# Parameter type rules
+# ------------------------------------------------------------------
+
+
+def _param_class_for(pn: str) -> type[Parameter]:
+    """Return the expected :class:`Parameter` subclass for a profile param name.
+
+    Parameters
+    ----------
+    pn : str
+        Profile parameter name (e.g. ``'fwhm_gauss'``, ``'h3'``).
+
+    Returns
+    -------
+    type
+        :class:`FWHM` for names starting with ``'fwhm'``, :class:`Param`
+        otherwise.
+    """
+    return FWHM if pn.startswith('fwhm') else Param
+
+
+# ------------------------------------------------------------------
+# Profile param resolution
+# ------------------------------------------------------------------
+
+
+def _resolve_params(
+    profile: Profile, param_kwargs: dict[str, Parameter]
+) -> dict[str, Parameter]:
+    """Resolve parameter tokens for a profile.
+
+    Named tokens are extracted from *param_kwargs*.  Any missing tokens
+    are filled with a fresh :class:`FWHM` or :class:`Param` instance
+    whose prior comes from
+    :meth:`~unite.profile.base.Profile.default_priors`.
+
+    Parameters
+    ----------
+    profile : Profile
+        The resolved profile object.
+    param_kwargs : dict
+        Named parameter tokens extracted from ``**kwargs``.
+
+    Returns
+    -------
+    dict of str to Parameter
+        Mapping from profile parameter name to token.
+
+    Raises
+    ------
+    ValueError
+        If an unrecognised parameter name is passed.
+    TypeError
+        If a token has the wrong type for its slot (e.g. a
+        :class:`Redshift` passed as ``fwhm_gauss``).
+    """
+    pnames = profile.param_names()
+    pname = type(profile).__name__
+
+    # Detect unrecognised keyword arguments before building defaults
+    unexpected = sorted(set(param_kwargs) - set(pnames))
+    if unexpected:
+        msg = (
+            f'Unexpected parameter keyword argument(s): {unexpected}. '
+            f'{pname} expects: {list(pnames)}.'
+        )
+        raise ValueError(msg)
+
+    # Validate types and fill defaults
+    defaults = profile.default_priors()
+    result: dict[str, Parameter] = {}
+    for pn in pnames:
+        if pn in param_kwargs:
+            tok = param_kwargs[pn]
+            expected = _param_class_for(pn)
+            if not isinstance(tok, expected):
+                msg = (
+                    f"Parameter '{pn}' must be a {expected.__name__}, "
+                    f'got {type(tok).__name__}.'
+                )
+                raise TypeError(msg)
+            result[pn] = tok
+        else:
+            result[pn] = _param_class_for(pn)(prior=defaults[pn])
+    return result
+
+
+# ------------------------------------------------------------------
+# Internal entry
+# ------------------------------------------------------------------
+
+
+@dataclass
+class _LineEntry:
+    """Internal record for a single spectral line."""
+
+    name: str
+    wavelength: u.Quantity
+    profile: Profile
+    redshift: Redshift
+    fwhms: dict[str, Parameter]  # profile param name -> parameter token
+    flux: Flux
+    strength: int | float = 1.0
+
+
+# ------------------------------------------------------------------
+# LineConfiguration
+# ------------------------------------------------------------------
+
+
+class LineConfiguration:
+    """Configuration of spectral lines for spectral fitting.
+
+    All lines are added via :meth:`add_line`.  Pass a scalar *center*
+    for a single line, or a sequence of wavelengths for a multiplet
+    (lines sharing one flux parameter with relative strengths).
+
+    Shared kinematics are expressed by passing the same
+    :class:`Redshift` or :class:`FWHM` instance to multiple calls.
+
+    Examples
+    --------
+    >>> z = Redshift('nlr', prior=Uniform(0, 0.5))
+    >>> fwhm = FWHM('nlr', prior=Uniform(0, 1000))
+    >>> config = LineConfiguration()
+    >>> config.add_line('Ha', 6564.61, z, fwhm=fwhm)
+    >>> config.add_line('[NII]', [6585.27, 6549.86], z,
+    ...     fwhm=fwhm, strength=[2.95, 1.0])
+    """
+
+    def __init__(self) -> None:
+        self._entries: list[_LineEntry] = []
+        # Token registry: id(token) -> short name (populated by add_line)
+        self._token_registry: dict[int, str] = {}
+        # Names already claimed per category, to detect clashes
+        self._used_names: dict[str, set[str]] = {}
+        # Per-category auto-name counter
+        self._counters: dict[str, count] = {}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def add_line(
+        self,
+        name: str,
+        center: u.Quantity,
+        *,
+        profile: str | Profile = 'gaussian',
+        redshift: Redshift | None = None,
+        flux: Flux | None = None,
+        strength: int | float = 1.0,
+        **param_kwargs: Parameter | None,
+    ) -> None:
+        """Add one spectral line.
+
+        Parameters
+        ----------
+        name : str
+            Identifier for the line (e.g. ``'Ha'``, ``'[OIII]5007'``).
+        center : float, Quantity, or sequence thereof
+            Rest-frame wavelength(s).
+        redshift : Redshift, optional
+            Redshift parameter token.  A fresh ``Redshift()`` is created
+            if not provided.
+        flux : Flux, optional
+            Flux parameter token.  A fresh ``Flux()`` is created if not
+            provided.
+        strength : float or sequence of float, optional
+            Relative flux strength.  For multiplets, broadcast to match
+            the number of centers.  Default ``1.0``.
+        profile : str or Profile, optional
+            Line profile.  Default ``'gaussian'``.
+        **param_kwargs : Parameter
+            Named parameter tokens keyed by the profile's
+            :meth:`~unite.profile.base.Profile.param_names`.  Missing
+            parameters are filled from
+            :meth:`~unite.profile.base.Profile.default_priors`.
+            Examples: ``fwhm_gauss=FWHM('narrow')``,
+            ``h3=Param('narrow_h3', prior=Uniform(-0.5, 0.5))``.
+        """
+        # --- Validate wavelength and resolve all tokens first ---
+        wl = _ensure_wavelength(center)
+
+        if redshift is None:
+            redshift = Redshift()
+        elif not isinstance(redshift, Redshift):
+            msg = f'redshift must be a Redshift, got {type(redshift).__name__}.'
+            raise TypeError(msg)
+
+        if flux is None:
+            flux = Flux()
+        elif not isinstance(flux, Flux):
+            msg = f'flux must be a Flux, got {type(flux).__name__}.'
+            raise TypeError(msg)
+
+        prof = _resolve_profile(profile)
+        fwhms = _resolve_params(prof, param_kwargs)
+
+        # --- Conflict check: (name, wavelength, redshift, fwhm) must be unique.
+        # Same name + wavelength is allowed when redshift or fwhm differs
+        # (e.g. narrow vs broad component of the same line). ---
+        fwhm_ids = {k: id(v) for k, v in fwhms.items()}
+        for entry in self._entries:
+            if (
+                entry.name == name
+                and entry.wavelength == wl
+                and entry.redshift is redshift
+                and {k: id(v) for k, v in entry.fwhms.items()} == fwhm_ids
+            ):
+                msg = (
+                    f'An identical line already exists: {name!r} at {wl} '
+                    f'with the same redshift and fwhm tokens. '
+                    f'Each (name, wavelength, redshift, fwhm) combination must be unique.'
+                )
+                raise ValueError(msg)
+
+        # --- Register / auto-name all kinematic tokens ---
+        # Auto-names follow the pattern "{line_name}_{param_type}", e.g.
+        # "Ha_z", "Ha_fwhm_gauss", "Ha_h3", "Ha_flux".  When the hint is
+        # already taken (two unnamed tokens of the same type on the same
+        # line), the fallback appends an alphabet suffix: "Ha_z_a", "_b", …
+        self._register_token(redshift, 'redshift', hint=f'{name}_z')
+        for wn, w_obj in fwhms.items():
+            self._register_token(w_obj, wn, hint=f'{name}_{wn}')
+        self._register_token(flux, 'flux', hint=f'{name}_flux')
+
+        self._entries.append(
+            _LineEntry(
+                name=name,
+                wavelength=wl,
+                profile=prof,
+                redshift=redshift,
+                fwhms=fwhms,
+                flux=flux,
+                strength=strength,
+            )
+        )
+
+    def add_lines(
+        self,
+        name: str,
+        centers: u.Quantity,
+        *,
+        profile: str | Profile = 'gaussian',
+        redshift: Redshift | Sequence[Redshift | None] | None = None,
+        flux: Flux | Sequence[Flux | None] | None = None,
+        strength: int | float | Sequence[int | float] = 1.0,
+        **param_kwargs,
+    ) -> None:
+        """Add multiple lines sharing the same name and profile.
+
+        Each entry in *centers* becomes one line.  All other arguments
+        may be supplied as a single value (broadcast to every line) or
+        as a sequence of the same length as *centers*.
+
+        Parameters
+        ----------
+        name : str
+            Shared identifier for all lines.
+        centers : Quantity
+            Rest-frame wavelengths.  Must be non-empty.
+        profile : str or Profile, optional
+            Line profile shared by all lines.  Default ``'gaussian'``.
+        redshift : Redshift or sequence thereof, optional
+            Redshift token(s).  A single value is shared across all
+            lines; a sequence assigns one token per line.
+        flux : Flux or sequence thereof, optional
+            Flux token(s).  Same broadcasting rule as *redshift*.
+        strength : float or sequence of float, optional
+            Relative flux strengths.  Default ``1.0``.
+        **param_kwargs : Parameter or sequence of Parameter
+            Profile parameter tokens.  Each value follows the same
+            broadcasting rule.
+
+        Raises
+        ------
+        ValueError
+            If *centers* is empty, or if any sequence argument has a
+            length other than 1 or ``len(centers)``.
+        TypeError
+            If any token has the wrong type for its slot.
+        """
+        n = len(centers)
+        if n == 0:
+            raise ValueError("'centers' must be non-empty.")
+
+        def _broadcast(val, arg_name: str) -> list:
+            if isinstance(val, list | tuple):
+                if len(val) == 1:
+                    return list(val) * n
+                if len(val) != n:
+                    raise ValueError(
+                        f"'{arg_name}' has {len(val)} entries; "
+                        f'expected 1 or {n} (len(centers)).'
+                    )
+                return list(val)
+            return [val] * n
+
+        redshifts = _broadcast(redshift, 'redshift')
+        fluxes = _broadcast(flux, 'flux')
+        strengths = _broadcast(strength, 'strength')
+        broadcasted_kwargs = {k: _broadcast(v, k) for k, v in param_kwargs.items()}
+
+        for i, center in enumerate(centers):
+            kw = {k: v[i] for k, v in broadcasted_kwargs.items()}
+            self.add_line(
+                name,
+                center,
+                profile=profile,
+                redshift=redshifts[i],
+                flux=fluxes[i],
+                strength=strengths[i],
+                **kw,
+            )
+
+    def _register_token(
+        self, token: Parameter, category: str, hint: str | None = None
+    ) -> None:
+        """Register a kinematic token, auto-naming it if it has no name yet.
+
+        Sets ``token.name`` in-place when unnamed.  Unnamed tokens use *hint*
+        as their name; when *hint* is already taken in the category, appends
+        ``_a``, ``_b``, … until a unique name is found.
+        Raises :exc:`ValueError` if a user-supplied name clashes with a name
+        already registered in the same *category*.
+
+        Parameters
+        ----------
+        token : Parameter
+            The token to register.
+        category : str
+            Grouping key for duplicate detection (e.g. ``'z'``,
+            ``'fwhm_gauss'``, ``'h3'``, ``'flux'``).
+        hint : str, optional
+            Preferred name to try first when the token is unnamed.
+        """
+        tid = id(token)
+        if tid in self._token_registry:
+            return  # already registered; name already assigned
+
+        used = self._used_names.setdefault(category, set())
+
+        if token.name is not None:
+            name = token.name
+            if name in used:
+                msg = (
+                    f'Duplicate {category} parameter name {name!r}. '
+                    f'Each token in the same category must have a unique name.'
+                )
+                raise ValueError(msg)
+        else:
+            # Try the hint first; when taken, append _a, _b, _c, …
+            if hint is not None and hint not in used:
+                name = hint
+            else:
+                base = hint if hint is not None else category
+                ctr = self._counters.setdefault(base, count())
+                while True:
+                    candidate = f'{base}_{_alpha_name(next(ctr))}'
+                    if candidate not in used:
+                        name = candidate
+                        break
+            token.name = name
+
+        used.add(name)
+        self._token_registry[tid] = name
+
+    # ------------------------------------------------------------------
+    # Matrix construction
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """Serialize to a YAML-safe dictionary.
+
+        Parameters are grouped into named sections by kind (``'redshift'``,
+        ``'fwhm_gauss'``, ``'flux'``, etc.).  Within each section the dict
+        key is simply the parameter's name, so there is no redundant prefix.
+        ``ParameterRef`` bounds may only reference parameters in the same
+        section; cross-kind references raise :exc:`TypeError`.
+
+        Returns
+        -------
+        dict
+            Ordered keys are the section names followed by ``'lines'``.
+        """
+        # Collect unique tokens per section in first-appearance order.
+        seen_ids: set[int] = set()
+        sections: dict[str, list[tuple[str, Parameter]]] = {}
+
+        def _collect(tok: Parameter, section: str) -> None:
+            tid = id(tok)
+            if tid not in seen_ids:
+                seen_ids.add(tid)
+                sections.setdefault(section, []).append((tok.name, tok))
+
+        for entry in self._entries:
+            _collect(entry.redshift, 'redshift')
+            for pn, w_obj in entry.fwhms.items():
+                _collect(w_obj, pn)
+            _collect(entry.flux, 'flux')
+
+        # Per-section param_namers: token object -> name (unique within section).
+        per_section_namers: dict[str, dict[object, str]] = {
+            sec: {tok: name for name, tok in toks} for sec, toks in sections.items()
+        }
+        result: dict = {}
+        for sec, toks in sections.items():
+            section_namer = per_section_namers[sec]
+            result[sec] = {
+                name: {'prior': tok.prior.to_dict(section_namer)} for name, tok in toks
+            }
+
+        lines = []
+        for entry in self._entries:
+            item: dict = {
+                'name': entry.name,
+                'wavelength': float(entry.wavelength.value),
+                'wavelength_unit': entry.wavelength.unit.to_string(),
+                'redshift': entry.redshift.name,
+                'params': {pn: tok.name for pn, tok in entry.fwhms.items()},
+                'flux': entry.flux.name,
+            }
+            if not isinstance(entry.profile, Gaussian):
+                item['profile'] = entry.profile.to_dict()
+            if entry.strength != 1.0:
+                item['strength'] = entry.strength
+            lines.append(item)
+
+        result['lines'] = lines
+        return result
+
+    @classmethod
+    def from_dict(cls, d: dict) -> LineConfiguration:
+        """Deserialize from a dictionary.
+
+        Parameters
+        ----------
+        d : dict
+            As produced by :meth:`to_dict`.
+
+        Returns
+        -------
+        LineConfiguration
+        """
+
+        def _class_for_section(section: str) -> type[Parameter]:
+            if section == 'redshift':
+                return Redshift
+            if section == 'flux':
+                return Flux
+            if section.startswith('fwhm'):
+                return FWHM
+            return Param
+
+        # Pass 1 — create token objects (name comes from the dict key).
+        # All tokens must exist before priors are parsed because priors may
+        # contain ParameterRefs that point to other tokens.
+        section_tokens: dict[str, dict[str, Parameter]] = {}
+        for section, params in d.items():
+            if section == 'lines':
+                continue
+            klass = _class_for_section(section)
+            section_tokens[section] = {name: klass(name=name) for name in params}
+
+        # Pass 2 — assign deserialized priors.
+        # ParameterRefs are resolved within the same section only.
+        for section, params in d.items():
+            if section == 'lines':
+                continue
+            section_registry = section_tokens[section]
+            for name, pdata in params.items():
+                section_tokens[section][name].prior = prior_from_dict(
+                    pdata['prior'], section_registry
+                )
+
+        config = cls()
+        for line_data in d['lines']:
+            profile = (
+                profile_from_dict(line_data['profile'])
+                if 'profile' in line_data
+                else Gaussian()
+            )
+            param_kwargs = {
+                pn: section_tokens[pn][tok_name]
+                for pn, tok_name in line_data['params'].items()
+            }
+            config.add_line(
+                line_data['name'],
+                line_data['wavelength'] * u.Unit(line_data['wavelength_unit']),
+                profile=profile,
+                redshift=section_tokens['redshift'][line_data['redshift']],
+                flux=section_tokens['flux'][line_data['flux']],
+                strength=line_data.get('strength', 1.0),
+                **param_kwargs,
+            )
+
+        return config
+
+    # ------------------------------------------------------------------
+    # Dunder methods
+    # ------------------------------------------------------------------
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __repr__(self) -> str:
+        if not self._entries:
+            return 'LineConfiguration: empty'
+
+        n_flux = len({id(e.flux) for e in self._entries})
+        n_z = len({id(e.redshift) for e in self._entries})
+        n_params = sum(
+            len({id(e.fwhms.get(wn)) for e in self._entries if wn in e.fwhms})
+            for wn in {wn for e in self._entries for wn in e.fwhms}
+        )
+
+        header = (
+            f'LineConfiguration: {len(self._entries)} lines, '
+            f'{n_flux} flux / {n_z} z / {n_params} profile params'
+        )
+
+        # --- Line table ---
+        rows: list[tuple[str, str, str, str, str, str, str]] = []
+        for entry in self._entries:
+            prof_name = type(entry.profile).__name__
+            # Tokens are always named after add_line registration
+            fwhm_display = ', '.join(f.name for f in entry.fwhms.values())
+
+            rows.append(
+                (
+                    entry.name,
+                    f'{entry.wavelength:.2f}',
+                    prof_name,
+                    entry.redshift.name,
+                    fwhm_display,
+                    entry.flux.name,
+                    f'{entry.strength:.2f}',
+                )
+            )
+
+        headers = (
+            'Name',
+            'Wavelength',
+            'Profile',
+            'Redshift',
+            'Params',
+            'Flux',
+            'Strength',
+        )
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(cell))
+
+        fmt = '  '.join(f'{{:<{w}}}' for w in widths)
+        sep = '  '.join('-' * w for w in widths)
+        lines_out = [header, '', '  ' + fmt.format(*headers), '  ' + sep]
+        for row in rows:
+            lines_out.append('  ' + fmt.format(*row))
+
+        # --- Parameter sections ---
+        # Collect unique tokens in first-appearance order
+        seen_z: set[int] = set()
+        z_params: list[tuple[str, Prior]] = []
+        for entry in self._entries:
+            zid = id(entry.redshift)
+            if zid not in seen_z:
+                seen_z.add(zid)
+                z_params.append((entry.redshift.name, entry.redshift.prior))
+
+        seen_fwhm: dict[str, set[int]] = {}
+        fwhm_key_order: list[str] = []
+        fwhm_params: dict[str, list[tuple[str, Prior]]] = {}
+        for entry in self._entries:
+            for wn, w_obj in entry.fwhms.items():
+                if wn not in seen_fwhm:
+                    seen_fwhm[wn] = set()
+                    fwhm_key_order.append(wn)
+                    fwhm_params[wn] = []
+                wid = id(w_obj)
+                if wid not in seen_fwhm[wn]:
+                    seen_fwhm[wn].add(wid)
+                    fwhm_params[wn].append((w_obj.name, w_obj.prior))
+
+        seen_flux: set[int] = set()
+        flux_params: list[tuple[str, Prior]] = []
+        for entry in self._entries:
+            fid = id(entry.flux)
+            if fid not in seen_flux:
+                seen_flux.add(fid)
+                flux_params.append((entry.flux.name, entry.flux.prior))
+
+        def _fmt_section(title: str, params: list[tuple[str, Prior]]) -> list[str]:
+            name_w = max(len(p[0]) for p in params)
+            out = ['', f'  {title}:']
+            for pname, prior in params:
+                out.append(f'    {pname:<{name_w}}  {prior!r}')
+            return out
+
+        lines_out += _fmt_section('Redshift', z_params)
+
+        for wn in fwhm_key_order:
+            lines_out += _fmt_section(f'Params ({wn})', fwhm_params[wn])
+
+        lines_out += _fmt_section('Flux', flux_params)
+
+        return '\n'.join(lines_out)

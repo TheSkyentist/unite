@@ -1,7 +1,55 @@
 # Python build files
 __pycache__/
+*.py[cod]
+*$py.class
 dist/
+build/
+*.egg-info/
+*.egg
+*.whl
+sdist/
 
 # pixi environments
-.pixi
-*.egg-info
+.pixi/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Coverage & testing
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+
+# Sphinx documentation
+docs/_build/
+docs/_static/
+docs/_templates/
+
+# IDE / editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+.zed
+
+# Jupyter
+.ipynb_checkpoints/
+
+# mypy / type-checking
+.mypy_cache/
+.pytype/
+
+# ruff
+.ruff_cache/
+
+# Environment variables
+.env
+.env.*
