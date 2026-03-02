@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-import jax.numpy as jnp
+import jax
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -93,6 +93,25 @@ class Profile(ABC):
         """
 
     @abstractmethod
+    def jax_branch(self):
+        """Return a JAX-compatible branch callable for ``lax.switch`` dispatch.
+
+        The returned function must have the fixed signature::
+
+            fn(low, high, center, lsf_fwhm, p0, p1, p2) -> Array
+
+        Parameters correspond to :meth:`param_names` in order: ``p0`` is
+        ``param_names()[0]``, ``p1`` is ``param_names()[1]``, ``p2`` is
+        ``param_names()[2]``.  Unused slots receive zero from the model
+        builder and must be ignored.
+
+        Returns
+        -------
+        callable
+            A pure-JAX function suitable as a ``lax.switch`` branch.
+        """
+
+    @abstractmethod
     def to_dict(self) -> dict:
         """Serialize to a YAML-safe dictionary."""
 
@@ -165,9 +184,14 @@ class Gaussian(Profile):
         lsf_fwhm: ArrayLike,
         **params: ArrayLike,
     ) -> Array:
-        fwhm = params['fwhm_gauss']
-        total_fwhm = jnp.sqrt(lsf_fwhm**2 + fwhm**2)
-        return integrate_gaussian(low, high, center, total_fwhm)
+        return integrate_gaussian(low, high, center, lsf_fwhm, params['fwhm_gauss'])
+
+    def jax_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss
+            return integrate_gaussian(lo, hi, c, lsf, p0)
+
+        return _fn
 
     def to_dict(self) -> dict:
         return {'type': 'Gaussian'}
@@ -219,6 +243,13 @@ class Cauchy(Profile):
         fwhm_lorentzian = params['fwhm_lorentzian']
         return integrate_voigt(low, high, center, lsf_fwhm, 0.0, fwhm_lorentzian)
 
+    def jax_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_lorentzian; pure Cauchy via PseudoVoigt with zero Gaussian width
+            return integrate_voigt(lo, hi, c, lsf, 0.0, p0)
+
+        return _fn
+
     def to_dict(self) -> dict:
         return {'type': 'Cauchy'}
 
@@ -261,9 +292,16 @@ class PseudoVoigt(Profile):
         lsf_fwhm: ArrayLike,
         **params: ArrayLike,
     ) -> Array:
-        fwhm_gauss = jnp.sqrt(lsf_fwhm**2 + params['fwhm_gauss'] ** 2)
-        fwhm_lorentz = params['fwhm_lorentz']
-        return integrate_voigt(low, high, center, fwhm_gauss, fwhm_lorentz)
+        return integrate_voigt(
+            low, high, center, lsf_fwhm, params['fwhm_gauss'], params['fwhm_lorentz']
+        )
+
+    def jax_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss, p1 = fwhm_lorentz
+            return integrate_voigt(lo, hi, c, lsf, p0, p1)
+
+        return _fn
 
     def to_dict(self) -> dict:
         return {'type': 'PseudoVoigt'}
@@ -309,6 +347,13 @@ class Laplace(Profile):
         fwhm = params['fwhm_exp']
         return integrate_gaussianLaplace(low, high, center, lsf_fwhm, 0, fwhm)
 
+    def jax_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_exp; pure Laplace convolved with Gaussian LSF
+            return integrate_gaussianLaplace(lo, hi, c, lsf, 0.0, p0)
+
+        return _fn
+
     def to_dict(self) -> dict:
         return {'type': 'Laplace'}
 
@@ -353,10 +398,16 @@ class SEMG(Profile):
         lsf_fwhm: ArrayLike,
         **params: ArrayLike,
     ) -> Array:
-        fwhm_gauss = jnp.sqrt(lsf_fwhm**2 + params['fwhm_gauss'] ** 2)
         return integrate_gaussianLaplace(
-            low, high, center, fwhm_gauss, params['fwhm_exp']
+            low, high, center, lsf_fwhm, params['fwhm_gauss'], params['fwhm_exp']
         )
+
+    def jax_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss, p1 = fwhm_exp
+            return integrate_gaussianLaplace(lo, hi, c, lsf, p0, p1)
+
+        return _fn
 
     def to_dict(self) -> dict:
         return {'type': 'SEMG'}
@@ -416,6 +467,13 @@ class GaussHermite(Profile):
             params['h4'],
         )
 
+    def jax_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss, p1 = h3, p2 = h4
+            return integrate_gaussHermite(lo, hi, c, lsf, p0, p1, p2)
+
+        return _fn
+
     def to_dict(self) -> dict:
         return {'type': 'GaussHermite'}
 
@@ -463,6 +521,13 @@ class SplitNormal(Profile):
             low, high, center, lsf_fwhm, params['fwhm_blue'], params['fwhm_red']
         )
 
+    def jax_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_blue, p1 = fwhm_red
+            return integrate_split_normal(lo, hi, c, lsf, p0, p1)
+
+        return _fn
+
     def to_dict(self) -> dict:
         return {'type': 'SplitNormal'}
 
@@ -478,3 +543,102 @@ class SplitNormal(Profile):
 
     def __hash__(self) -> int:
         return hash(type(self))
+
+
+_PROFILE_ALIASES: dict[str, Profile] = {
+    'gaussian': Gaussian(),
+    'normal': Gaussian(),
+    'lorentzian': Cauchy(),
+    'cauchy': Cauchy(),
+    'exponential': Laplace(),
+    'laplace': Laplace(),
+    'voigt': PseudoVoigt(),
+    'pseudovoigt': PseudoVoigt(),
+    'semg': SEMG(),
+    'exp-gaussian': SEMG(),
+    'hermite': GaussHermite(),
+    'gauss-hermite': GaussHermite(),
+    'split-normal': SplitNormal(),
+    'two-sided': SplitNormal(),
+}
+
+
+def resolve_profile(profile: str | Profile) -> Profile:
+    """Convert a profile string or instance to a Profile object.
+
+    Parameters
+    ----------
+    profile : str or Profile
+        Profile name (case-insensitive) or instance.
+
+    Returns
+    -------
+    Profile
+
+    Raises
+    ------
+    ValueError
+        If the string is not a recognized profile alias.
+    """
+    if isinstance(profile, Profile):
+        return profile
+    if isinstance(profile, str):
+        key = profile.lower()
+        if key not in _PROFILE_ALIASES:
+            valid = ', '.join(sorted(_PROFILE_ALIASES))
+            msg = f'Unknown profile {profile!r}. Valid names: {valid}'
+            raise ValueError(msg)
+        return _PROFILE_ALIASES[key]
+    msg = f'profile must be a str or Profile, got {type(profile).__name__}'
+    raise TypeError(msg)
+
+
+# -------------------------------------------------------------------
+# JAX dispatch: _integrate_single_line and _integrate_lines
+# -------------------------------------------------------------------
+
+# Build the lax.switch branch list once at import time.
+# Each Profile subclass owns its branch via jax_branch(); sorted by code
+# guarantees the list index matches Profile.code.
+_BRANCHES = [
+    cls().jax_branch()
+    for cls in sorted(_PROFILE_REGISTRY.values(), key=lambda c: c.code)
+]
+
+
+def _integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
+    """Integrate one line profile over pixel bins, dispatched by ``code``.
+
+    All FWHM parameters are in wavelength units.  Shape parameters (h3, h4)
+    are dimensionless.  ``lax.switch`` selects the branch at trace time, so
+    every branch must have identical output shape.
+
+    Parameters
+    ----------
+    low, high : jnp.ndarray, shape (n_pixels,)
+        Pixel bin edges.
+    center, lsf_fwhm, p0, p1, p2 : float
+        Per-line scalars: observed center, LSF FWHM, and three profile
+        parameter slots (in :meth:`Profile.param_names` order).  Slots
+        unused by a given profile receive zero.
+    code : int
+        ``Profile.code`` for the line (0=Gaussian, 1=Cauchy, 2=PseudoVoigt,
+        3=Laplace, 4=SEMG, 5=GaussHermite, 6=SplitNormal).
+
+    Returns
+    -------
+    jnp.ndarray, shape (n_pixels,)
+        Integrated profile fraction per pixel bin.
+    """
+    return jax.lax.switch(code, _BRANCHES, low, high, center, lsf_fwhm, p0, p1, p2)
+
+
+# vmap over lines: per-line scalars map to axis 0; pixel arrays are shared (None).
+integrate_lines = jax.vmap(
+    _integrate_single_line, in_axes=(None, None, 0, 0, 0, 0, 0, 0)
+)
+"""Vectorised integration over all lines simultaneously.
+
+Input shapes: ``low/high (n_pixels,)``, all others ``(n_lines,)``.
+Output shape: ``(n_lines, n_pixels)``.
+"""

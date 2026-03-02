@@ -23,6 +23,5 @@ except PackageNotFoundError:
     __version__ = '0.0.0'
 
 from unite.config import Configuration
-from unite.disperser.config import DispersersConfiguration
 
-__all__ = ['Configuration', 'DispersersConfiguration']
+__all__ = ['Configuration']

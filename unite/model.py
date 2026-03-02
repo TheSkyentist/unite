@@ -11,343 +11,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import jax
 import jax.numpy as jnp
-import numpy as np
 import numpyro
-import numpyro.distributions as dist
 from astropy import constants
+from numpyro import deterministic as determ, distributions as dist
 
 from unite.continuum.config import ContinuumConfiguration
-from unite.line.config import LineConfiguration, _LineEntry
-
-# Import all profile integration functions for dispatch
-# Each function has signature: (low, high, center, lsf_fwhm, *profile_params) -> Array
-# where lsf_fwhm is the instrumental line spread function FWHM in wavelength units
-from unite.line.functions import (
-    integrate_gaussHermite,
-    integrate_gaussian,
-    integrate_gaussianLaplace,
-    integrate_split_normal,
-    integrate_voigt,
-)
+from unite.line.config import ConfigMatrices, LineConfiguration
+from unite.line.profiles import integrate_lines
 from unite.prior import Fixed, Prior, topological_sort
 from unite.spectrum.spectrum import Spectra, Spectrum
 
 _C_KMS: float = constants.c.to('km/s').value
 """Speed of light in km/s."""
-
-
-# ------------------------------------------------------------------
-# Integration dispatch (vmapped over lines)
-# ------------------------------------------------------------------
-
-
-def _integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
-    """Integrate one line profile over pixel bins, dispatched by *code*.
-
-    All FWHM parameters are in wavelength units.  Shape parameters (h3, h4)
-    are dimensionless.  ``lax.switch`` selects the profile at compile time per
-    line, so every branch must have identical output shape.
-
-    Parameters
-    ----------
-    low, high : jnp.ndarray, shape (n_pixels,)
-        Pixel bin edges.
-    center, lsf_fwhm, p0, p1, p2 : float
-        Per-line scalars: observed center, LSF FWHM, and three profile
-        parameter slots.  Slots unused by a given profile are zero.
-    code : int
-        Profile code (0=Gaussian, 1=Cauchy, 2=PseudoVoigt, 3=Laplace,
-        4=SEMG, 5=GaussHermite, 6=SplitNormal).
-
-    Returns
-    -------
-    jnp.ndarray, shape (n_pixels,)
-        Integrated profile fraction per pixel bin.
-    """
-    # Profile dispatch functions - each corresponds to a profile code
-    # Signature: (low, high, center, lsf_fwhm, p0, p1, p2) -> Array
-    # where p0, p1, p2 are profile-specific parameters in wavelength units
-
-    def _gaussian(lo, hi, c, lsf, p0, p1, p2):
-        # p0 = fwhm_gauss (intrinsic), combined with LSF in quadrature.
-        return integrate_gaussian(lo, hi, c, lsf, p0)
-
-    def _cauchy(lo, hi, c, lsf, p0, p1, p2):
-        # p0 = fwhm_lorentzian; implemented as PseudoVoigt with zero Gaussian width.
-        return integrate_voigt(lo, hi, c, lsf, 0.0, p0)
-
-    def _pseudovoigt(lo, hi, c, lsf, p0, p1, p2):
-        # p0 = fwhm_gauss (intrinsic), p1 = fwhm_lorentz.
-        return integrate_voigt(lo, hi, c, lsf, p0, p1)
-
-    def _laplace(lo, hi, c, lsf, p0, p1, p2):
-        # p0 = fwhm_exp; pure Laplace profile convolved with Gaussian LSF.
-        return integrate_gaussianLaplace(lo, hi, c, lsf, 0.0, p0)
-
-    def _semg(lo, hi, c, lsf, p0, p1, p2):
-        # p0 = fwhm_gauss (intrinsic), p1 = fwhm_exp.
-        return integrate_gaussianLaplace(lo, hi, c, lsf, p0, p1)
-
-    def _gauss_hermite(lo, hi, c, lsf, p0, p1, p2):
-        # p0 = fwhm_gauss (intrinsic), p1 = h3, p2 = h4.
-        # integrate_gaussHermite handles LSF + fwhm_g convolution internally.
-        return integrate_gaussHermite(lo, hi, c, lsf, p0, p1, p2)
-
-    def _split_normal(lo, hi, c, lsf, p0, p1, p2):
-        # p0 = fwhm_blue, p1 = fwhm_red.
-        return integrate_split_normal(lo, hi, c, lsf, p0, p1)
-
-    return jax.lax.switch(
-        code,
-        [
-            _gaussian,
-            _cauchy,
-            _pseudovoigt,
-            _laplace,
-            _semg,
-            _gauss_hermite,
-            _split_normal,
-        ],
-        low,
-        high,
-        center,
-        lsf_fwhm,
-        p0,
-        p1,
-        p2,
-    )
-
-
-# vmap over lines: per-line scalars map to axis 0; pixel arrays are shared (None).
-_integrate_lines = jax.vmap(
-    _integrate_single_line, in_axes=(None, None, 0, 0, 0, 0, 0, 0)
-)
-"""Vectorised integration over all lines simultaneously.
-
-Input shapes: ``low/high (n_pixels,)``, all others ``(n_lines,)``.
-Output shape: ``(n_lines, n_pixels)``.
-"""
-
-
-# ------------------------------------------------------------------
-# ConfigMatrices — precomputed parameter-to-line mappings
-# ------------------------------------------------------------------
-
-
-@dataclass
-class ConfigMatrices:
-    """Precomputed indicator matrices mapping unique parameters to per-line arrays.
-
-    Each matrix has shape ``(n_unique_params, n_lines)``.  A ``1`` at
-    position ``[i, j]`` means unique parameter ``i`` contributes to line
-    ``j``.  Matrix-vector products turn a stacked vector of sampled values
-    into a per-line array, replacing a Python loop at JIT trace time.
-
-    Profile parameters are split into three *slots* matching the positional
-    arguments of :func:`_integrate_single_line`:
-
-    * **Slot 0** (``p0``): primary velocity FWHM (always ``fwhm_*``, converted
-      to wavelength before vmap).
-    * **Slot 1** (``p1``): secondary parameter — either a velocity FWHM
-      (``fwhm_lorentz`` / ``fwhm_exp``, stored in ``p1v_*``) or a dimensionless
-      shape parameter (``h3``, stored in ``p1d_*``).  The two sub-matrices are
-      summed after appropriate unit conversion:
-      ``p1 = p1v_kms * centers / C + p1d``.
-    * **Slot 2** (``p2``): tertiary dimensionless parameter (``h4``), pass-through.
-
-    Attributes
-    ----------
-    wavelengths : jnp.ndarray, shape (n_lines,)
-        Rest-frame line wavelengths (raw floats; units must match spectra).
-    strengths : jnp.ndarray, shape (n_lines,)
-        Multiplet relative flux strengths.
-    profile_codes : jnp.ndarray, shape (n_lines,)
-        Integer profile codes for ``lax.switch`` dispatch.
-    flux_names : list of str
-        Numpyro site names for unique flux parameters (rows of ``flux_matrix``).
-    flux_matrix : jnp.ndarray, shape (n_flux, n_lines)
-    z_names : list of str
-        Numpyro site names for unique redshift parameters.
-    z_matrix : jnp.ndarray, shape (n_z, n_lines)
-    p0_names : list of str
-    p0_matrix : jnp.ndarray, shape (n_p0, n_lines)
-    p1v_names : list of str
-        Velocity FWHM parameters in slot 1.
-    p1v_matrix : jnp.ndarray, shape (n_p1v, n_lines)
-    p1d_names : list of str
-        Dimensionless parameters in slot 1.
-    p1d_matrix : jnp.ndarray, shape (n_p1d, n_lines)
-    p2_names : list of str
-    p2_matrix : jnp.ndarray, shape (n_p2, n_lines)
-    priors : dict of str to Prior
-        Priors for all unique line parameter tokens.
-    """
-
-    wavelengths: jnp.ndarray
-    strengths: jnp.ndarray
-    profile_codes: jnp.ndarray
-
-    flux_names: list[str]
-    flux_matrix: jnp.ndarray
-
-    z_names: list[str]
-    z_matrix: jnp.ndarray
-
-    p0_names: list[str]
-    p0_matrix: jnp.ndarray
-
-    p1v_names: list[str]
-    p1v_matrix: jnp.ndarray
-
-    p1d_names: list[str]
-    p1d_matrix: jnp.ndarray
-
-    p2_names: list[str]
-    p2_matrix: jnp.ndarray
-
-    priors: dict[str, Prior]
-
-
-# ------------------------------------------------------------------
-# Matrix construction helpers
-# ------------------------------------------------------------------
-
-
-def _token_matrix(
-    entries: list[_LineEntry], get_tok, n_lines: int
-) -> tuple[list[str], jnp.ndarray]:
-    """Build a ``(n_unique, n_lines)`` indicator matrix for a token accessor.
-
-    Parameters
-    ----------
-    entries : list of _LineEntry
-    get_tok : callable
-        Extracts the token from a ``_LineEntry`` (e.g. ``lambda e: e.flux``).
-    n_lines : int
-
-    Returns
-    -------
-    names : list of str
-        Numpyro site names in row order.
-    matrix : jnp.ndarray, shape (n_unique, n_lines)
-    """
-    unique: list = []
-    seen: dict[int, int] = {}
-    for entry in entries:
-        tok = get_tok(entry)
-        if id(tok) not in seen:
-            seen[id(tok)] = len(unique)
-            unique.append(tok)
-    mat = np.zeros((len(unique), n_lines), dtype=float)
-    for j, entry in enumerate(entries):
-        mat[seen[id(get_tok(entry))], j] = 1.0
-    return [t.name for t in unique], jnp.array(mat)
-
-
-def _slot_matrix(
-    tok_pairs: list[tuple[int, object]], n_lines: int
-) -> tuple[list[str], jnp.ndarray]:
-    """Build an indicator matrix from ``(line_idx, token)`` pairs for one slot.
-
-    Parameters
-    ----------
-    tok_pairs : list of (int, token)
-        Each pair is ``(line_index, parameter_token)`` for lines that use this slot.
-    n_lines : int
-
-    Returns
-    -------
-    names : list of str
-    matrix : jnp.ndarray, shape (n_unique, n_lines)
-        Empty ``(0, n_lines)`` when *tok_pairs* is empty.
-    """
-    if not tok_pairs:
-        return [], jnp.zeros((0, n_lines))
-    unique: list = []
-    seen: dict[int, int] = {}
-    for _, tok in tok_pairs:
-        if id(tok) not in seen:
-            seen[id(tok)] = len(unique)
-            unique.append(tok)
-    mat = np.zeros((len(unique), n_lines), dtype=float)
-    for j, tok in tok_pairs:
-        mat[seen[id(tok)], j] = 1.0
-    return [t.name for t in unique], jnp.array(mat)
-
-
-def _build_matrices(entries: list[_LineEntry]) -> ConfigMatrices:
-    """Construct :class:`ConfigMatrices` from a list of line entries.
-
-    Parameters
-    ----------
-    entries : list of _LineEntry
-
-    Returns
-    -------
-    ConfigMatrices
-    """
-    n = len(entries)
-
-    wavelengths = jnp.array([float(e.wavelength.value) for e in entries])
-    strengths = jnp.array([float(e.strength) for e in entries])
-    profile_codes = jnp.array([e.profile.code for e in entries], dtype=int)
-
-    flux_names, flux_matrix = _token_matrix(entries, lambda e: e.flux, n)
-    z_names, z_matrix = _token_matrix(entries, lambda e: e.redshift, n)
-
-    # Assign profile params to slots based on each profile's param_names() order.
-    # Slot 0: first param (always a velocity FWHM, name starts with 'fwhm').
-    # Slot 1: second param — velocity FWHM (→ p1v) or dimensionless (→ p1d).
-    # Slot 2: third param (always dimensionless, only h4 currently).
-    p0_pairs: list[tuple[int, object]] = []
-    p1v_pairs: list[tuple[int, object]] = []
-    p1d_pairs: list[tuple[int, object]] = []
-    p2_pairs: list[tuple[int, object]] = []
-
-    for j, entry in enumerate(entries):
-        pnames = entry.profile.param_names()
-        if len(pnames) >= 1:
-            p0_pairs.append((j, entry.fwhms[pnames[0]]))
-        if len(pnames) >= 2:
-            pn1, tok1 = pnames[1], entry.fwhms[pnames[1]]
-            (p1v_pairs if pn1.startswith('fwhm') else p1d_pairs).append((j, tok1))
-        if len(pnames) >= 3:
-            p2_pairs.append((j, entry.fwhms[pnames[2]]))
-
-    p0_names, p0_matrix = _slot_matrix(p0_pairs, n)
-    p1v_names, p1v_matrix = _slot_matrix(p1v_pairs, n)
-    p1d_names, p1d_matrix = _slot_matrix(p1d_pairs, n)
-    p2_names, p2_matrix = _slot_matrix(p2_pairs, n)
-
-    # Collect priors from all unique tokens.
-    priors: dict[str, Prior] = {}
-    seen_ids: set[int] = set()
-    for entry in entries:
-        for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
-            if id(tok) not in seen_ids:
-                seen_ids.add(id(tok))
-                priors[tok.name] = tok.prior
-
-    return ConfigMatrices(
-        wavelengths=wavelengths,
-        strengths=strengths,
-        profile_codes=profile_codes,
-        flux_names=flux_names,
-        flux_matrix=flux_matrix,
-        z_names=z_names,
-        z_matrix=z_matrix,
-        p0_names=p0_names,
-        p0_matrix=p0_matrix,
-        p1v_names=p1v_names,
-        p1v_matrix=p1v_matrix,
-        p1d_names=p1d_names,
-        p1d_matrix=p1d_matrix,
-        p2_names=p2_names,
-        p2_matrix=p2_matrix,
-        priors=priors,
-    )
 
 
 # ------------------------------------------------------------------
@@ -501,10 +177,10 @@ def unite_model(args: ModelArgs) -> None:
         # LSF FWHM at each line centre (n_lines,), in wavelength units.
         lsf_fwhm = centers / (disp.R(centers) * r_scale)
 
-        # Integrate all lines simultaneously.  Shape: (n_lines, n_pixels).
-        pixints = _integrate_lines(
+        # Integrate all lines simultaneously and divide by pixel width to get average flux density in pixel.
+        pixints = integrate_lines(
             low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
-        )
+        ) / (high - low)
 
         # Sum over lines weighted by flux.
         line_model = (flux_per_line[:, None] * pixints).sum(axis=0)  # (n_pixels,)
@@ -524,7 +200,7 @@ def unite_model(args: ModelArgs) -> None:
                 continuum = continuum + jnp.where(in_region, region_cont, 0.0)
 
         # Likelihood.
-        model = flux_scale * (line_model + continuum)
+        model = flux_scale * determ(f'{spectrum.name}_model', (line_model + continuum))
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(obs_name, dist.Normal(model, spectrum.error), obs=spectrum.flux)
 
@@ -570,7 +246,7 @@ class ModelBuilder:
         self._spectra = spectra
 
         # Build precomputed matrices from line entries.
-        self._matrices = _build_matrices(list(line_config._entries))
+        self._matrices = line_config.build_matrices()
 
         # --- Collect all unique parameter tokens for prior / topo-sort ---
         all_priors: dict[str, Prior] = dict(self._matrices.priors)

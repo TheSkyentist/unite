@@ -175,7 +175,7 @@ class Linear(ContinuumForm):
         return ('angle', 'offset')
 
     def default_priors(self) -> dict[str, Prior]:
-        return {'angle': Uniform(-jnp.pi / 2, jnp.pi / 2), 'offset': Uniform(-10, 10)}
+        return {'angle': Uniform(-jnp.pi / 2, jnp.pi / 2), 'offset': Uniform(0, 1)}
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
+import numpy as np
 from astropy import units as u
 from jax.typing import ArrayLike
 
@@ -96,22 +96,11 @@ class NIRSpecSpectrum:
         )
 
     @classmethod
-    def from_fits(
-        cls,
-        path: str | Path,
-        disperser: NIRSpecDisperser,
-        *,
-        name: str = '',
+    def from_DJA(
+        cls, path: str | Path, disperser: NIRSpecDisperser, *, name: str = ''
     ) -> Spectrum:
-        """Load a NIRSpec x1d FITS file and return a :class:`~unite.spectrum.spectrum.Spectrum`.
-
-        Reads a standard NIRSpec x1d FITS file produced by the JWST pipeline.
-        The ``EXTRACT1D`` extension is expected to contain columns
-        ``WAVELENGTH``, ``FLUX``, and ``FLUX_ERROR`` (or ``ERROR``), all in
-        the standard pipeline units.  If ``WAVELENGTH_BIN_LOW`` /
-        ``WAVELENGTH_BIN_HIGH`` columns are present they are used directly for
-        pixel edges; otherwise edges are derived from the wavelength centres
-        via ``jnp.gradient``.
+        """
+        Create a :class:`~unite.spectrum.spectrum.Spectrum` from a DJA FITS file (or URL).
 
         Parameters
         ----------
@@ -133,34 +122,34 @@ class NIRSpecSpectrum:
         KeyError
             If the expected FITS extensions or columns are not found.
         """
-        from astropy.io import fits
+        from astropy.table import Table
 
-        path = Path(path)
-        with fits.open(path) as hdul:
-            data = hdul['EXTRACT1D'].data
-            wavelength = jnp.asarray(data['WAVELENGTH'], dtype=float)
-            flux = jnp.asarray(data['FLUX'], dtype=float)
+        # Load spectrum
+        spec = Table.read(path, hdu='SPEC1D')
 
-            # Try common error column names.
-            if 'FLUX_ERROR' in data.names:
-                error = jnp.asarray(data['FLUX_ERROR'], dtype=float)
-            elif 'ERROR' in data.names:
-                error = jnp.asarray(data['ERROR'], dtype=float)
-            else:
-                msg = 'FITS file has no FLUX_ERROR or ERROR column.'
-                raise KeyError(msg)
+        # Convert to correct units
+        λ = u.Quantity(spec['wave']).to(u.AA)
+        equiv = u.equivalencies.spectral_density(λ)
+        fλ_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
+        fλ = spec['flux'].to(fλ_unit, equivalencies=equiv)
+        eλ = spec['err'].to(fλ_unit, equivalencies=equiv)
 
-            # Derive pixel edges.
-            if 'WAVELENGTH_BIN_LOW' in data.names and 'WAVELENGTH_BIN_HIGH' in data.names:
-                low_vals = jnp.asarray(data['WAVELENGTH_BIN_LOW'], dtype=float)
-                high_vals = jnp.asarray(data['WAVELENGTH_BIN_HIGH'], dtype=float)
-            else:
-                # Approximate edges from centres via finite differences.
-                half = jnp.gradient(wavelength) / 2.0
-                low_vals = wavelength - half
-                high_vals = wavelength + half
+        # Compute edges
+        δλ = np.diff(λ) / 2
+        mid = λ[:-1] + δλ
+        edges = np.concatenate([λ[0:1] - δλ[0:1], mid, λ[-2:-1] + δλ[-2:-1]])
+        low = edges[:-1]
+        high = edges[1:]
 
-        low = low_vals * u.um
-        high = high_vals * u.um
+        # Apply mask
+        mask = ~spec['flux'].mask
+        mask = mask & np.logical_or(
+            np.logical_and(λ > 21002.4366 * u.AA, λ < 23910.4278 * u.AA),
+            np.logical_and(λ > 28356.0978 * u.AA, λ < 31340.9502 * u.AA),
+        )
+        low = low[mask]
+        high = high[mask]
+        fλ = fλ[mask]
+        eλ = eλ[mask]
 
-        return cls.from_arrays(low, high, flux, error, disperser, name=name)
+        return cls.from_arrays(low, high, fλ, eλ, disperser, name=name)

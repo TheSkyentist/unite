@@ -24,7 +24,7 @@ class ContinuumRegion:
     form : ContinuumForm
         Functional form for the continuum in this region.
     priors : dict of str to Prior
-        Per-region prior overrides for the form's parameters, keyed by
+        Per-region priors for the form's parameters, keyed by
         :meth:`ContinuumForm.param_names`.  Parameters not listed here
         use the form's :meth:`~ContinuumForm.default_priors`.
 
@@ -308,10 +308,11 @@ class ContinuumConfiguration:
         rows = []
         for r in self._regions:
             form_name = seen[id(r.form)]
-            override = ', '.join(r.priors) if r.priors else '—'
-            rows.append((f'[{r.low}, {r.high}]', form_name, override))
+            # Show prior names in the table (only explicitly set ones)
+            prior_names = ', '.join(r.priors.keys()) if r.priors else '—'
+            rows.append((f'[{r.low}, {r.high}]', form_name, prior_names))
 
-        col_headers = ('Range', 'Form', 'Prior overrides')
+        col_headers = ('Range', 'Form', 'Priors')
         widths = [len(h) for h in col_headers]
         for row in rows:
             for i, cell in enumerate(row):
@@ -322,4 +323,33 @@ class ContinuumConfiguration:
         lines = [header, '', '  ' + fmt.format(*col_headers), '  ' + sep]
         for row in rows:
             lines.append('  ' + fmt.format(*row))
+
+        # Add prior details section (like Line config)
+        # Show all priors (both explicit and default) for all regions
+        
+        # Collect all unique priors across all regions
+        seen_priors: dict[int, tuple[str, object, str]] = {}  # (name, prior, region_info)
+        for r in self._regions:
+            # Add explicit priors
+            for name, prior in r.priors.items():
+                prior_id = id(prior)
+                if prior_id not in seen_priors:
+                    seen_priors[prior_id] = (name, prior, f'region [{r.low}, {r.high}]')
+            
+            # Add default priors that are not overridden
+            default_priors = r.form.default_priors()
+            for name, prior in default_priors.items():
+                if name not in r.priors:  # Only show if not explicitly set
+                    prior_id = id(prior)
+                    if prior_id not in seen_priors:
+                        seen_priors[prior_id] = (name, prior, f'region [{r.low}, {r.high}]')
+        
+        # Format priors section
+        if seen_priors:
+            lines.append('')
+            lines.append('  Priors:')
+            name_width = max(len(name) for name, _, _ in seen_priors.values())
+            for name, prior, region_info in seen_priors.values():
+                lines.append(f'    {name:<{name_width}}  {prior!r}  # {region_info}')
+
         return '\n'.join(lines)

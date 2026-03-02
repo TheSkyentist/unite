@@ -67,8 +67,7 @@ from unite.disperser.nirspec.disperser import (
     G235M,
     G395H,
     G395M,
-    NIRSpecDisperser,
-    Prism,
+    PRISM,
 )
 from unite.prior import Parameter, prior_from_dict
 
@@ -77,14 +76,13 @@ from unite.prior import Parameter, prior_from_dict
 # ---------------------------------------------------------------------------
 
 _DISPERSER_REGISTRY: dict[str, type[Disperser]] = {
-    'NIRSpecDisperser': NIRSpecDisperser,
     'G140H': G140H,
     'G140M': G140M,
     'G235H': G235H,
     'G235M': G235M,
     'G395H': G395H,
     'G395M': G395M,
-    'Prism': Prism,
+    'PRISM': PRISM,
 }
 
 _CALIB_REGISTRY: dict[str, type[Parameter]] = {
@@ -300,12 +298,7 @@ class DispersersConfiguration:
 
         disperser = self[name]
         return Spectrum(
-            low=low,
-            high=high,
-            flux=flux,
-            error=error,
-            disperser=disperser,
-            name=name,
+            low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
         )
 
     # -- names ---------------------------------------------------------------
@@ -395,18 +388,18 @@ class DispersersConfiguration:
 
         header = f'DispersersConfiguration: {len(self._dispersers)} disperser(s)'
 
-        def _tok(token: Parameter | None) -> str:
+        def _tok_name(token: Parameter | None) -> str:
             if token is None:
                 return '— (fixed)'
-            return f'{type(token).__name__}({token.name!r}, prior={token.prior!r})'
+            return token.name or '—'
 
         rows = [
             (
                 d.name,
                 repr(d),
-                _tok(d.r_scale),
-                _tok(d.flux_scale),
-                _tok(d.pix_offset),
+                _tok_name(d.r_scale),
+                _tok_name(d.flux_scale),
+                _tok_name(d.pix_offset),
             )
             for d in self._dispersers
         ]
@@ -422,4 +415,37 @@ class DispersersConfiguration:
         lines = [header, '', '  ' + fmt.format(*col_headers), '  ' + sep]
         for row in rows:
             lines.append('  ' + fmt.format(*row))
+
+        # Add calibration parameter details section (like Line config)
+        calib_params: dict[str, list[tuple[str, Parameter]]] = {
+            'r_scale': [],
+            'flux_scale': [],
+            'pix_offset': [],
+        }
+
+        seen_ids: dict[str, set[int]] = {
+            'r_scale': set(),
+            'flux_scale': set(),
+            'pix_offset': set(),
+        }
+
+        for d in self._dispersers:
+            for attr in ('r_scale', 'flux_scale', 'pix_offset'):
+                token = getattr(d, attr)
+                if token is not None:
+                    token_id = id(token)
+                    if token_id not in seen_ids[attr]:
+                        seen_ids[attr].add(token_id)
+                        calib_params[attr].append((token.name, token))
+
+        # Format calibration parameter sections
+        for attr, params in calib_params.items():
+            if params:
+                lines.append('')
+                section_title = attr.replace('_', ' ').title()
+                lines.append(f'  {section_title}:')
+                name_width = max(len(name) for name, _ in params)
+                for name, token in params:
+                    lines.append(f'    {name:<{name_width}}  {token.prior!r}')
+
         return '\n'.join(lines)

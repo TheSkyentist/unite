@@ -7,8 +7,7 @@ from unite.disperser.nirspec.disperser import (
     G235M,
     G395H,
     G395M,
-    NIRSpecDisperser,
-    Prism,
+    PRISM,
 )
 from unite.disperser.nirspec.spectrum import NIRSpecSpectrum
 
@@ -19,7 +18,6 @@ __all__ = [
     'G235M',
     'G395H',
     'G395M',
-    'NIRSpecDisperser',
+    'PRISM',
     'NIRSpecSpectrum',
-    'Prism',
 ]

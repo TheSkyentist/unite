@@ -174,46 +174,46 @@ def integrate_voigt(
 
 # Don't need this since we always convolve with LSF
 # But keeping anyways just in case
-# @jit
-# def integrate_laplace(
-#     low: ArrayLike,
-#     high: ArrayLike,
-#     center: ArrayLike,
-#     lsf_fwhm: ArrayLike,
-#     fwhm: ArrayLike,
-# ) -> Array:
-#     """Integrate a Laplace (double-exponential) profile over wavelength bins.
+@jit
+def _integrate_laplace(
+    low: ArrayLike,
+    high: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm: ArrayLike,
+) -> Array:
+    """Integrate a Laplace (double-exponential) profile over wavelength bins.
 
-#     The LSF is **not** convolved --- this profile is a pure Laplace
-#     distribution.
+    The LSF is **not** convolved --- this profile is a pure Laplace
+    distribution.
 
-#     Parameters
-#     ----------
-#     low : ArrayLike
-#         Lower bin edges.
-#     high : ArrayLike
-#         Upper bin edges.
-#     center : ArrayLike
-#         Line center wavelength.
-#     lsf_fwhm : ArrayLike
-#         Instrumental line spread function FWHM at the line center.
-#     fwhm : ArrayLike
-#         Laplace FWHM (related to scale parameter *b* by
-#         ``FWHM = 2 b ln 2``).
+    Parameters
+    ----------
+    low : ArrayLike
+        Lower bin edges.
+    high : ArrayLike
+        Upper bin edges.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm : ArrayLike
+        Laplace FWHM (related to scale parameter *b* by
+        ``FWHM = 2 b ln 2``).
 
-#     Returns
-#     -------
-#     jnp.ndarray
-#         Integrated fraction per bin.
-#     """
-#     # For Laplace, we don't convolve with LSF - it's a pure Laplace distribution
-#     b = fwhm / _EXP_SCALE_TO_FWHM
+    Returns
+    -------
+    jnp.ndarray
+        Integrated fraction per bin.
+    """
+    # For Laplace, we don't convolve with LSF - it's a pure Laplace distribution
+    b = fwhm / _EXP_SCALE_TO_FWHM
 
-#     def _cdf(x):
-#         t = (x - center) / b
-#         return 0.5 + 0.5 * jnp.sign(t) * (1.0 - jnp.exp(-jnp.abs(t)))
+    def _cdf(x):
+        t = (x - center) / b
+        return 0.5 + 0.5 * jnp.sign(t) * (1.0 - jnp.exp(-jnp.abs(t)))
 
-#     return _cdf(high) - _cdf(low)
+    return _cdf(high) - _cdf(low)
 
 
 def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:
@@ -490,3 +490,7 @@ def integrate_gaussHermite(
     gh_correction = _integrandGH(t_high, c3, c4) - _integrandGH(t_low, c3, c4)
 
     return gaussian_cdf - _INV_SQRT2PI * gh_correction
+
+
+# _integrate_single_line and _integrate_lines live in unite.line.profiles,
+# where each Profile subclass owns its JAX branch via jax_branch().

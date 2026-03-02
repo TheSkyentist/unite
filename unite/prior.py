@@ -242,15 +242,31 @@ def _deserialize_bound(value: float | dict, token_registry: dict | None) -> Boun
 # -------------------------------------------------------------------
 
 
+def _normalize_bound(value: Bound | Parameter) -> Bound:
+    """Convert a bound value to a Bound type (float or ParameterRef).
+
+    If value is a Parameter, convert it to ParameterRef with no offset.
+    """
+    if isinstance(value, ParameterRef):
+        return value
+    elif isinstance(value, Parameter):
+        # Convert Parameter to ParameterRef with no offset
+        return ParameterRef(value, scale=1.0, offset=0.0)
+    else:
+        return float(value)
+
+
 class Uniform(Prior):
     """Uniform prior with bounds that may reference other parameters.
 
     Parameters
     ----------
-    low : float or ParameterRef
-        Lower bound.
-    high : float or ParameterRef
-        Upper bound.
+    low : float, ParameterRef, or Parameter
+        Lower bound. Can be a fixed float, a ParameterRef expression,
+        or a Parameter token (automatically converted to ParameterRef).
+    high : float, ParameterRef, or Parameter
+        Upper bound. Can be a fixed float, a ParameterRef expression,
+        or a Parameter token (automatically converted to ParameterRef).
 
     Examples
     --------
@@ -258,14 +274,18 @@ class Uniform(Prior):
 
     >>> Uniform(0, 750)
 
-    Dependent bound (broad fwhm > narrow fwhm + 150 km/s):
+    Dependent bound using arithmetic (broad fwhm > narrow fwhm + 150 km/s):
 
     >>> Uniform(low=narrow_fwhm * 2 + 150, high=2500)
+
+    Direct parameter reference (equivalent to param + 0):
+
+    >>> Uniform(low=base_redshift, high=base_redshift + 0.1)
     """
 
     def __init__(self, low: Bound = 0, high: Bound = 1) -> None:
-        self.low = low if isinstance(low, ParameterRef) else float(low)
-        self.high = high if isinstance(high, ParameterRef) else float(high)
+        self.low = _normalize_bound(low)
+        self.high = _normalize_bound(high)
 
     def to_dist(self, context: dict) -> dist.Distribution:
         return dist.Uniform(
@@ -298,21 +318,24 @@ class TruncatedNormal(Prior):
 
     Parameters
     ----------
-    loc : float or ParameterRef
-        Mean of the underlying normal distribution.
+    loc : float, ParameterRef, or Parameter
+        Mean of the underlying normal distribution. Can be a fixed float,
+        a ParameterRef expression, or a Parameter token.
     scale : float
         Standard deviation of the underlying normal distribution.
-    low : float or ParameterRef
-        Lower truncation bound.
-    high : float or ParameterRef
-        Upper truncation bound.
+    low : float, ParameterRef, or Parameter
+        Lower truncation bound. Can be a fixed float, a ParameterRef expression,
+        or a Parameter token (automatically converted to ParameterRef).
+    high : float, ParameterRef, or Parameter
+        Upper truncation bound. Can be a fixed float, a ParameterRef expression,
+        or a Parameter token (automatically converted to ParameterRef).
     """
 
     def __init__(self, loc: Bound, scale: float, low: Bound, high: Bound) -> None:
-        self.loc = loc if isinstance(loc, ParameterRef) else float(loc)
+        self.loc = _normalize_bound(loc)
         self.scale = float(scale)
-        self.low = low if isinstance(low, ParameterRef) else float(low)
-        self.high = high if isinstance(high, ParameterRef) else float(high)
+        self.low = _normalize_bound(low)
+        self.high = _normalize_bound(high)
 
     def to_dist(self, context: dict) -> dist.Distribution:
         return dist.TruncatedNormal(

@@ -6,19 +6,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import count
 
+import jax.numpy as jnp
+import numpy as np
 from astropy import units as u
 
-from unite.line.profiles import (
-    SEMG,
-    Cauchy,
-    GaussHermite,
-    Gaussian,
-    Laplace,
-    Profile,
-    PseudoVoigt,
-    SplitNormal,
-    profile_from_dict,
-)
+from unite.line.profiles import Profile, profile_from_dict, resolve_profile
 from unite.prior import Parameter, Prior, Uniform, prior_from_dict
 
 # ------------------------------------------------------------------
@@ -47,7 +39,7 @@ class Redshift(Parameter):
 
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
-            prior = Uniform(-0.01, 0.01)
+            prior = Uniform(-0.0025, 0.0025)
         super().__init__(name, prior=prior)
 
 
@@ -92,59 +84,6 @@ class Flux(Parameter):
         if prior is None:
             prior = Uniform(-3, 3)
         super().__init__(name, prior=prior)
-
-
-# ------------------------------------------------------------------
-# Profile resolution
-# ------------------------------------------------------------------
-
-_PROFILE_ALIASES: dict[str, Profile] = {
-    'gaussian': Gaussian(),
-    'normal': Gaussian(),
-    'lorentzian': Cauchy(),
-    'cauchy': Cauchy(),
-    'exponential': Laplace(),
-    'laplace': Laplace(),
-    'voigt': PseudoVoigt(),
-    'pseudovoigt': PseudoVoigt(),
-    'semg': SEMG(),
-    'exp-gaussian': SEMG(),
-    'hermite': GaussHermite(),
-    'gauss-hermite': GaussHermite(),
-    'splitnormal': SplitNormal(),
-    'split-normal': SplitNormal(),
-    'two-sided': SplitNormal(),
-}
-
-
-def _resolve_profile(profile: str | Profile) -> Profile:
-    """Convert a profile string or instance to a Profile object.
-
-    Parameters
-    ----------
-    profile : str or Profile
-        Profile name (case-insensitive) or instance.
-
-    Returns
-    -------
-    Profile
-
-    Raises
-    ------
-    ValueError
-        If the string is not a recognized profile alias.
-    """
-    if isinstance(profile, Profile):
-        return profile
-    if isinstance(profile, str):
-        key = profile.lower()
-        if key not in _PROFILE_ALIASES:
-            valid = ', '.join(sorted(_PROFILE_ALIASES))
-            msg = f'Unknown profile {profile!r}. Valid names: {valid}'
-            raise ValueError(msg)
-        return _PROFILE_ALIASES[key]
-    msg = f'profile must be a str or Profile, got {type(profile).__name__}'
-    raise TypeError(msg)
 
 
 # ------------------------------------------------------------------
@@ -249,6 +188,220 @@ def _resolve_params(
         else:
             result[pn] = _param_class_for(pn)(prior=defaults[pn])
     return result
+
+
+# ------------------------------------------------------------------
+# ConfigMatrices — precomputed parameter-to-line mappings
+# ------------------------------------------------------------------
+
+
+@dataclass
+class ConfigMatrices:
+    """Precomputed indicator matrices mapping unique parameters to per-line arrays.
+
+    Each matrix has shape ``(n_unique_params, n_lines)``.  A ``1`` at
+    position ``[i, j]`` means unique parameter ``i`` contributes to line
+    ``j``.  Matrix-vector products turn a stacked vector of sampled values
+    into a per-line array, replacing a Python loop at JIT trace time.
+
+    Profile parameters are split into three *slots* matching the positional
+    arguments of ``_integrate_single_line``:
+
+    * **Slot 0** (``p0``): primary velocity FWHM (always ``fwhm_*``, converted
+      to wavelength before vmap).
+    * **Slot 1** (``p1``): secondary parameter — either a velocity FWHM
+      (``fwhm_lorentz`` / ``fwhm_exp``, stored in ``p1v_*``) or a dimensionless
+      shape parameter (``h3``, stored in ``p1d_*``).  The two sub-matrices are
+      summed after appropriate unit conversion:
+      ``p1 = p1v_kms * centers / C + p1d``.
+    * **Slot 2** (``p2``): tertiary dimensionless parameter (``h4``), pass-through.
+
+    Attributes
+    ----------
+    wavelengths : jnp.ndarray, shape (n_lines,)
+        Rest-frame line wavelengths (raw floats; units must match spectra).
+    strengths : jnp.ndarray, shape (n_lines,)
+        Multiplet relative flux strengths.
+    profile_codes : jnp.ndarray, shape (n_lines,)
+        Integer profile codes for ``lax.switch`` dispatch.
+    flux_names : list of str
+        Numpyro site names for unique flux parameters (rows of ``flux_matrix``).
+    flux_matrix : jnp.ndarray, shape (n_flux, n_lines)
+    z_names : list of str
+        Numpyro site names for unique redshift parameters.
+    z_matrix : jnp.ndarray, shape (n_z, n_lines)
+    p0_names : list of str
+    p0_matrix : jnp.ndarray, shape (n_p0, n_lines)
+    p1v_names : list of str
+        Velocity FWHM parameters in slot 1.
+    p1v_matrix : jnp.ndarray, shape (n_p1v, n_lines)
+    p1d_names : list of str
+        Dimensionless parameters in slot 1.
+    p1d_matrix : jnp.ndarray, shape (n_p1d, n_lines)
+    p2_names : list of str
+    p2_matrix : jnp.ndarray, shape (n_p2, n_lines)
+    priors : dict of str to Prior
+        Priors for all unique line parameter tokens.
+    """
+
+    wavelengths: jnp.ndarray
+    strengths: jnp.ndarray
+    profile_codes: jnp.ndarray
+
+    flux_names: list[str]
+    flux_matrix: jnp.ndarray
+
+    z_names: list[str]
+    z_matrix: jnp.ndarray
+
+    p0_names: list[str]
+    p0_matrix: jnp.ndarray
+
+    p1v_names: list[str]
+    p1v_matrix: jnp.ndarray
+
+    p1d_names: list[str]
+    p1d_matrix: jnp.ndarray
+
+    p2_names: list[str]
+    p2_matrix: jnp.ndarray
+
+    priors: dict[str, Prior]
+
+
+def _token_matrix(
+    entries: list[_LineEntry], get_tok, n_lines: int
+) -> tuple[list[str], jnp.ndarray]:
+    """Build a ``(n_unique, n_lines)`` indicator matrix for a token accessor.
+
+    Parameters
+    ----------
+    entries : list of _LineEntry
+    get_tok : callable
+        Extracts the token from a ``_LineEntry`` (e.g. ``lambda e: e.flux``).
+    n_lines : int
+
+    Returns
+    -------
+    names : list of str
+        Numpyro site names in row order.
+    matrix : jnp.ndarray, shape (n_unique, n_lines)
+    """
+    unique: list = []
+    seen: dict[int, int] = {}
+    for entry in entries:
+        tok = get_tok(entry)
+        if id(tok) not in seen:
+            seen[id(tok)] = len(unique)
+            unique.append(tok)
+    mat = np.zeros((len(unique), n_lines), dtype=float)
+    for j, entry in enumerate(entries):
+        mat[seen[id(get_tok(entry))], j] = 1.0
+    return [t.name for t in unique], jnp.array(mat)
+
+
+def _slot_matrix(
+    tok_pairs: list[tuple[int, object]], n_lines: int
+) -> tuple[list[str], jnp.ndarray]:
+    """Build an indicator matrix from ``(line_idx, token)`` pairs for one slot.
+
+    Parameters
+    ----------
+    tok_pairs : list of (int, token)
+        Each pair is ``(line_index, parameter_token)`` for lines that use this slot.
+    n_lines : int
+
+    Returns
+    -------
+    names : list of str
+    matrix : jnp.ndarray, shape (n_unique, n_lines)
+        Empty ``(0, n_lines)`` when *tok_pairs* is empty.
+    """
+    if not tok_pairs:
+        return [], jnp.zeros((0, n_lines))
+    unique: list = []
+    seen: dict[int, int] = {}
+    for _, tok in tok_pairs:
+        if id(tok) not in seen:
+            seen[id(tok)] = len(unique)
+            unique.append(tok)
+    mat = np.zeros((len(unique), n_lines), dtype=float)
+    for j, tok in tok_pairs:
+        mat[seen[id(tok)], j] = 1.0
+    return [t.name for t in unique], jnp.array(mat)
+
+
+def _build_matrices(entries: list[_LineEntry]) -> ConfigMatrices:
+    """Construct :class:`ConfigMatrices` from a list of line entries.
+
+    Parameters
+    ----------
+    entries : list of _LineEntry
+
+    Returns
+    -------
+    ConfigMatrices
+    """
+    n = len(entries)
+
+    wavelengths = jnp.array([float(e.wavelength.value) for e in entries])
+    strengths = jnp.array([float(e.strength) for e in entries])
+    profile_codes = jnp.array([e.profile.code for e in entries], dtype=int)
+
+    flux_names, flux_matrix = _token_matrix(entries, lambda e: e.flux, n)
+    z_names, z_matrix = _token_matrix(entries, lambda e: e.redshift, n)
+
+    # Assign profile params to slots based on each profile's param_names() order.
+    # Slot 0: first param (always a velocity FWHM, name starts with 'fwhm').
+    # Slot 1: second param — velocity FWHM (→ p1v) or dimensionless (→ p1d).
+    # Slot 2: third param (always dimensionless, only h4 currently).
+    p0_pairs: list[tuple[int, object]] = []
+    p1v_pairs: list[tuple[int, object]] = []
+    p1d_pairs: list[tuple[int, object]] = []
+    p2_pairs: list[tuple[int, object]] = []
+
+    for j, entry in enumerate(entries):
+        pnames = entry.profile.param_names()
+        if len(pnames) >= 1:
+            p0_pairs.append((j, entry.fwhms[pnames[0]]))
+        if len(pnames) >= 2:
+            pn1, tok1 = pnames[1], entry.fwhms[pnames[1]]
+            (p1v_pairs if pn1.startswith('fwhm') else p1d_pairs).append((j, tok1))
+        if len(pnames) >= 3:
+            p2_pairs.append((j, entry.fwhms[pnames[2]]))
+
+    p0_names, p0_matrix = _slot_matrix(p0_pairs, n)
+    p1v_names, p1v_matrix = _slot_matrix(p1v_pairs, n)
+    p1d_names, p1d_matrix = _slot_matrix(p1d_pairs, n)
+    p2_names, p2_matrix = _slot_matrix(p2_pairs, n)
+
+    # Collect priors from all unique tokens.
+    priors: dict[str, Prior] = {}
+    seen_ids: set[int] = set()
+    for entry in entries:
+        for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
+            if id(tok) not in seen_ids:
+                seen_ids.add(id(tok))
+                priors[tok.name] = tok.prior
+
+    return ConfigMatrices(
+        wavelengths=wavelengths,
+        strengths=strengths,
+        profile_codes=profile_codes,
+        flux_names=flux_names,
+        flux_matrix=flux_matrix,
+        z_names=z_names,
+        z_matrix=z_matrix,
+        p0_names=p0_names,
+        p0_matrix=p0_matrix,
+        p1v_names=p1v_names,
+        p1v_matrix=p1v_matrix,
+        p1d_names=p1d_names,
+        p1d_matrix=p1d_matrix,
+        p2_names=p2_names,
+        p2_matrix=p2_matrix,
+        priors=priors,
+    )
 
 
 # ------------------------------------------------------------------
@@ -360,7 +513,7 @@ class LineConfiguration:
             msg = f'flux must be a Flux, got {type(flux).__name__}.'
             raise TypeError(msg)
 
-        prof = _resolve_profile(profile)
+        prof = resolve_profile(profile)
         fwhms = _resolve_params(prof, param_kwargs)
 
         # --- Conflict check: (name, wavelength, redshift, fwhm) must be unique.
@@ -382,14 +535,14 @@ class LineConfiguration:
                 raise ValueError(msg)
 
         # --- Register / auto-name all kinematic tokens ---
-        # Auto-names follow the pattern "{line_name}_{param_type}", e.g.
-        # "Ha_z", "Ha_fwhm_gauss", "Ha_h3", "Ha_flux".  When the hint is
+        # Auto-names follow the pattern "{line_name}-{wavelength}-{param}", e.g.
+        # "Ha-6564-z", "Ha-6564-fwhm_gauss", "Ha-6564-flux".  When the hint is
         # already taken (two unnamed tokens of the same type on the same
-        # line), the fallback appends an alphabet suffix: "Ha_z_a", "_b", …
-        self._register_token(redshift, 'redshift', hint=f'{name}_z')
+        # line), the fallback appends an alphabet suffix: "Ha-6564-z_a", "_b", …
+        self._register_token(redshift, 'redshift', hint=f'{name}-{wl.value}-z')
         for wn, w_obj in fwhms.items():
-            self._register_token(w_obj, wn, hint=f'{name}_{wn}')
-        self._register_token(flux, 'flux', hint=f'{name}_flux')
+            self._register_token(w_obj, wn, hint=f'{name}-{wl.value}-{wn}')
+        self._register_token(flux, 'flux', hint=f'{name}-{wl.value}-flux')
 
         self._entries.append(
             _LineEntry(
@@ -536,6 +689,16 @@ class LineConfiguration:
     # Matrix construction
     # ------------------------------------------------------------------
 
+    def build_matrices(self) -> ConfigMatrices:
+        """Build precomputed indicator matrices from this configuration.
+
+        Returns
+        -------
+        ConfigMatrices
+            Parameter-to-line mapping matrices and line metadata.
+        """
+        return _build_matrices(self._entries)
+
     # ------------------------------------------------------------------
     # Serialization
     # ------------------------------------------------------------------
@@ -570,15 +733,18 @@ class LineConfiguration:
                 _collect(w_obj, pn)
             _collect(entry.flux, 'flux')
 
-        # Per-section param_namers: token object -> name (unique within section).
-        per_section_namers: dict[str, dict[object, str]] = {
-            sec: {tok: name for name, tok in toks} for sec, toks in sections.items()
-        }
+        # Create a global param_namer that includes all tokens from all sections
+        # This is needed for priors that reference parameters from other sections
+        global_param_namer: dict[object, str] = {}
+        for toks in sections.values():
+            for name, tok in toks:
+                global_param_namer[tok] = name
+
         result: dict = {}
         for sec, toks in sections.items():
-            section_namer = per_section_namers[sec]
             result[sec] = {
-                name: {'prior': tok.prior.to_dict(section_namer)} for name, tok in toks
+                name: {'prior': tok.prior.to_dict(global_param_namer)}
+                for name, tok in toks
             }
 
         lines = []
@@ -591,8 +757,7 @@ class LineConfiguration:
                 'params': {pn: tok.name for pn, tok in entry.fwhms.items()},
                 'flux': entry.flux.name,
             }
-            if not isinstance(entry.profile, Gaussian):
-                item['profile'] = entry.profile.to_dict()
+            item['profile'] = entry.profile.to_dict()
             if entry.strength != 1.0:
                 item['strength'] = entry.strength
             lines.append(item)
@@ -634,23 +799,22 @@ class LineConfiguration:
             section_tokens[section] = {name: klass(name=name) for name in params}
 
         # Pass 2 — assign deserialized priors.
-        # ParameterRefs are resolved within the same section only.
+        # ParameterRefs can reference parameters from any section, so we need a global registry.
+        global_token_registry: dict[str, Parameter] = {}
+        for tokens in section_tokens.values():
+            global_token_registry.update(tokens)
+
         for section, params in d.items():
             if section == 'lines':
                 continue
-            section_registry = section_tokens[section]
             for name, pdata in params.items():
                 section_tokens[section][name].prior = prior_from_dict(
-                    pdata['prior'], section_registry
+                    pdata['prior'], global_token_registry
                 )
 
         config = cls()
         for line_data in d['lines']:
-            profile = (
-                profile_from_dict(line_data['profile'])
-                if 'profile' in line_data
-                else Gaussian()
-            )
+            profile = profile_from_dict(line_data['profile'])
             param_kwargs = {
                 pn: section_tokens[pn][tok_name]
                 for pn, tok_name in line_data['params'].items()

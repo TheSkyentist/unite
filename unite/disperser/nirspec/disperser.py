@@ -84,7 +84,7 @@ RSource = Literal['uniform', 'point']
 # ---------------------------------------------------------------------------
 
 _GRATING_CLASS_NAMES: dict[str, str] = {
-    'prism': 'Prism',
+    'prism': 'PRISM',
     'g140m': 'G140M',
     'g140h': 'G140H',
     'g235m': 'G235M',
