@@ -14,20 +14,8 @@ from unite.line.profiles import Profile, profile_from_dict, resolve_profile
 from unite.prior import Parameter, Prior, Uniform, prior_from_dict
 
 # ------------------------------------------------------------------
-# Alphabet-based auto-naming
+# Parameter token classes
 # ------------------------------------------------------------------
-
-_LETTERS = 'abcdefghijklmnopqrstuvwxyz'
-
-
-def _alpha_name(n: int) -> str:
-    """Return Excel-style column name for index *n* (0 → 'a', 25 → 'z', 26 → 'aa', …)."""
-    result = ''
-    n += 1
-    while n > 0:
-        n, r = divmod(n - 1, 26)
-        result = _LETTERS[r] + result
-    return result
 
 
 class Redshift(Parameter):
@@ -84,6 +72,23 @@ class Flux(Parameter):
         if prior is None:
             prior = Uniform(-3, 3)
         super().__init__(name, prior=prior)
+
+
+# ------------------------------------------------------------------
+# Alphabet-based auto-naming
+# ------------------------------------------------------------------
+
+_LETTERS = 'abcdefghijklmnopqrstuvwxyz'
+
+
+def _alpha_name(n: int) -> str:
+    """Return Excel-style column name for index *n* (0 → 'a', 25 → 'z', 26 → 'aa', …)."""
+    result = ''
+    n += 1
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        result = _LETTERS[r] + result
+    return result
 
 
 # ------------------------------------------------------------------
@@ -329,79 +334,6 @@ def _slot_matrix(
     for j, tok in tok_pairs:
         mat[seen[id(tok)], j] = 1.0
     return [t.name for t in unique], jnp.array(mat)
-
-
-def _build_matrices(entries: list[_LineEntry]) -> ConfigMatrices:
-    """Construct :class:`ConfigMatrices` from a list of line entries.
-
-    Parameters
-    ----------
-    entries : list of _LineEntry
-
-    Returns
-    -------
-    ConfigMatrices
-    """
-    n = len(entries)
-
-    wavelengths = jnp.array([float(e.wavelength.value) for e in entries])
-    strengths = jnp.array([float(e.strength) for e in entries])
-    profile_codes = jnp.array([e.profile.code for e in entries], dtype=int)
-
-    flux_names, flux_matrix = _token_matrix(entries, lambda e: e.flux, n)
-    z_names, z_matrix = _token_matrix(entries, lambda e: e.redshift, n)
-
-    # Assign profile params to slots based on each profile's param_names() order.
-    # Slot 0: first param (always a velocity FWHM, name starts with 'fwhm').
-    # Slot 1: second param — velocity FWHM (→ p1v) or dimensionless (→ p1d).
-    # Slot 2: third param (always dimensionless, only h4 currently).
-    p0_pairs: list[tuple[int, object]] = []
-    p1v_pairs: list[tuple[int, object]] = []
-    p1d_pairs: list[tuple[int, object]] = []
-    p2_pairs: list[tuple[int, object]] = []
-
-    for j, entry in enumerate(entries):
-        pnames = entry.profile.param_names()
-        if len(pnames) >= 1:
-            p0_pairs.append((j, entry.fwhms[pnames[0]]))
-        if len(pnames) >= 2:
-            pn1, tok1 = pnames[1], entry.fwhms[pnames[1]]
-            (p1v_pairs if pn1.startswith('fwhm') else p1d_pairs).append((j, tok1))
-        if len(pnames) >= 3:
-            p2_pairs.append((j, entry.fwhms[pnames[2]]))
-
-    p0_names, p0_matrix = _slot_matrix(p0_pairs, n)
-    p1v_names, p1v_matrix = _slot_matrix(p1v_pairs, n)
-    p1d_names, p1d_matrix = _slot_matrix(p1d_pairs, n)
-    p2_names, p2_matrix = _slot_matrix(p2_pairs, n)
-
-    # Collect priors from all unique tokens.
-    priors: dict[str, Prior] = {}
-    seen_ids: set[int] = set()
-    for entry in entries:
-        for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
-            if id(tok) not in seen_ids:
-                seen_ids.add(id(tok))
-                priors[tok.name] = tok.prior
-
-    return ConfigMatrices(
-        wavelengths=wavelengths,
-        strengths=strengths,
-        profile_codes=profile_codes,
-        flux_names=flux_names,
-        flux_matrix=flux_matrix,
-        z_names=z_names,
-        z_matrix=z_matrix,
-        p0_names=p0_names,
-        p0_matrix=p0_matrix,
-        p1v_names=p1v_names,
-        p1v_matrix=p1v_matrix,
-        p1d_names=p1d_names,
-        p1d_matrix=p1d_matrix,
-        p2_names=p2_names,
-        p2_matrix=p2_matrix,
-        priors=priors,
-    )
 
 
 # ------------------------------------------------------------------
@@ -697,7 +629,76 @@ class LineConfiguration:
         ConfigMatrices
             Parameter-to-line mapping matrices and line metadata.
         """
-        return _build_matrices(self._entries)
+        """Construct :class:`ConfigMatrices` from a list of line entries.
+
+        Parameters
+        ----------
+        entries : list of _LineEntry
+
+        Returns
+        -------
+        ConfigMatrices
+        """
+        n = len(self)
+
+        wavelengths = jnp.array([float(e.wavelength.value) for e in self])
+        strengths = jnp.array([float(e.strength) for e in self])
+        profile_codes = jnp.array([e.profile.code for e in self], dtype=int)
+
+        flux_names, flux_matrix = _token_matrix(self._entries, lambda e: e.flux, n)
+        z_names, z_matrix = _token_matrix(self._entries, lambda e: e.redshift, n)
+
+        # Assign profile params to slots based on each profile's param_names() order.
+        # Slot 0: first param (always a velocity FWHM, name starts with 'fwhm').
+        # Slot 1: second param — velocity FWHM (→ p1v) or dimensionless (→ p1d).
+        # Slot 2: third param (always dimensionless, only h4 currently).
+        p0_pairs: list[tuple[int, object]] = []
+        p1v_pairs: list[tuple[int, object]] = []
+        p1d_pairs: list[tuple[int, object]] = []
+        p2_pairs: list[tuple[int, object]] = []
+
+        for j, entry in enumerate(self):
+            pnames = entry.profile.param_names()
+            if len(pnames) >= 1:
+                p0_pairs.append((j, entry.fwhms[pnames[0]]))
+            if len(pnames) >= 2:
+                pn1, tok1 = pnames[1], entry.fwhms[pnames[1]]
+                (p1v_pairs if pn1.startswith('fwhm') else p1d_pairs).append((j, tok1))
+            if len(pnames) >= 3:
+                p2_pairs.append((j, entry.fwhms[pnames[2]]))
+
+        p0_names, p0_matrix = _slot_matrix(p0_pairs, n)
+        p1v_names, p1v_matrix = _slot_matrix(p1v_pairs, n)
+        p1d_names, p1d_matrix = _slot_matrix(p1d_pairs, n)
+        p2_names, p2_matrix = _slot_matrix(p2_pairs, n)
+
+        # Collect priors from all unique tokens.
+        priors: dict[str, Prior] = {}
+        seen_ids: set[int] = set()
+        for entry in self:
+            for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
+                if id(tok) not in seen_ids:
+                    seen_ids.add(id(tok))
+                    priors[tok.name] = tok.prior
+
+        return ConfigMatrices(
+            wavelengths=wavelengths,
+            strengths=strengths,
+            profile_codes=profile_codes,
+            flux_names=flux_names,
+            flux_matrix=flux_matrix,
+            z_names=z_names,
+            z_matrix=z_matrix,
+            p0_names=p0_names,
+            p0_matrix=p0_matrix,
+            p1v_names=p1v_names,
+            p1v_matrix=p1v_matrix,
+            p1d_names=p1d_names,
+            p1d_matrix=p1d_matrix,
+            p2_names=p2_names,
+            p2_matrix=p2_matrix,
+            priors=priors,
+        )
 
     # ------------------------------------------------------------------
     # Serialization
@@ -837,6 +838,9 @@ class LineConfiguration:
 
     def __len__(self) -> int:
         return len(self._entries)
+
+    def __iter__(self):
+        return iter(self._entries)
 
     def __repr__(self) -> str:
         if not self._entries:
