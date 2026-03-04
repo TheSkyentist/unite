@@ -185,7 +185,7 @@ def evaluate_model(
                     for pn, tok in args.cont_resolved_params[k].items():
                         val = _get_scalar(context, tok.name, s)
                         if pn == 'normalization_wavelength':
-                            val = val * (1.0 + z_sys)
+                            val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
                         cont_params[pn] = val
                     region_cont = region.form.evaluate(wavelength, obs_center, cont_params)
                     region_cont = jnp.where(in_region, region_cont, 0.0)

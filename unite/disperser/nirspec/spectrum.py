@@ -143,10 +143,6 @@ class NIRSpecSpectrum:
 
         # Apply mask
         mask = ~spec['flux'].mask
-        mask = mask & np.logical_or(
-            np.logical_and(λ > 21002.4366 * u.AA, λ < 23910.4278 * u.AA),
-            np.logical_and(λ > 28356.0978 * u.AA, λ < 31340.9502 * u.AA),
-        )
         low = low[mask]
         high = high[mask]
         fλ = fλ[mask]

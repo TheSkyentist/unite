@@ -68,6 +68,8 @@ class ModelArgs:
     cont_low: list[float] | None
     cont_high: list[float] | None
     cont_center: list[float] | None
+    # --- Unit conversion factors: region._unit → canonical unit, per region ---
+    cont_nw_conv: list[float] | None
     # --- Flux normalization ---
     norm_factors: list[float]
     line_flux_scale: float
@@ -217,7 +219,7 @@ def unite_model(args: ModelArgs) -> None:
                 in_region = (wavelength >= obs_low) & (wavelength <= obs_high)
                 cont_params = {
                     pn: (
-                        context[tok.name] * (1.0 + z_sys)
+                        context[tok.name] * args.cont_nw_conv[k] * (1.0 + z_sys)
                         if pn == 'normalization_wavelength'
                         else context[tok.name]
                     )
@@ -399,15 +401,18 @@ class ModelBuilder:
             cont_low = []
             cont_high = []
             cont_center = []
+            cont_nw_conv = []
             for region in self._cont_config:
                 conv = _wavelength_conversion_factor(region._unit, self._canonical_unit)
                 cont_low.append(region.low * conv)
                 cont_high.append(region.high * conv)
                 cont_center.append(region.center * conv)
+                cont_nw_conv.append(conv)
         else:
             cont_low = None
             cont_high = None
             cont_center = None
+            cont_nw_conv = None
 
         args = ModelArgs(
             matrices=self._matrices,
@@ -426,6 +431,7 @@ class ModelBuilder:
             cont_low=cont_low,
             cont_high=cont_high,
             cont_center=cont_center,
+            cont_nw_conv=cont_nw_conv,
             norm_factors=norm_factors,
             line_flux_scale=line_flux_scale,
         )
