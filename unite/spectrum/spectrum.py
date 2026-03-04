@@ -13,7 +13,7 @@ from unite._utils import C_KMS, _ensure_flux_density, _ensure_wavelength
 from unite.disperser.base import Disperser
 
 if TYPE_CHECKING:
-    from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
+    from unite.continuum.config import ContinuumConfiguration
     from unite.line.config import LineConfiguration
 
 
@@ -345,11 +345,11 @@ class Spectra:
         max_line_scale = 0.0
         for spectrum in self._spectra:
             mid_wl = float(jnp.median(spectrum.wavelength))
-            R = spectrum.disperser.R(mid_wl)
+            resolving_power = spectrum.disperser.R(mid_wl)
             # Intrinsic FWHM in wavelength units.
             intrinsic_fwhm = mid_wl * max_fwhm_kms / C_KMS
             # LSF FWHM.
-            lsf_fwhm = mid_wl / R
+            lsf_fwhm = mid_wl / resolving_power
             # Total FWHM (quadrature sum).
             total_fwhm = jnp.sqrt(intrinsic_fwhm**2 + lsf_fwhm**2)
             # Peak flux density.
@@ -432,7 +432,7 @@ class Spectra:
 
         if drop_empty_regions and filtered_cont is not None and len(filtered_lines) > 0:
 
-            kept: list[ContinuumRegion] = []
+            kept = []
             for region in filtered_cont:
                 # Check if any filtered line falls in this region (rest frame).
                 has_line = False
@@ -519,7 +519,7 @@ class Spectra:
 
         # --- filter continuum regions ---
         if continuum_config is not None:
-            kept: list[ContinuumRegion] = []
+            kept = []
             for region in continuum_config:
                 # Convert region bounds (stored as bare floats in region._unit)
                 # to each spectrum's disperser unit before checking coverage.
@@ -620,13 +620,13 @@ class Spectra:
 
                 # Build Vandermonde-like matrix up to degree n_params-1.
                 degree = min(n_params - 1, 3)  # cap at cubic
-                A = jnp.stack([x**k for k in range(degree + 1)], axis=-1)
-                Aw = A * weights[:, None]
+                design = jnp.stack([x**k for k in range(degree + 1)], axis=-1)
+                design_w = design * weights[:, None]
                 bw = flux_good * weights
 
                 # Solve via lstsq.
-                coeffs, _, _, _ = jnp.linalg.lstsq(Aw, bw)
-                model_vals = A @ coeffs
+                coeffs, _, _, _ = jnp.linalg.lstsq(design_w, bw)
+                model_vals = design @ coeffs
                 residuals = (flux_good - model_vals) / err_good
                 dof = n_good - (degree + 1)
                 if dof > 0:

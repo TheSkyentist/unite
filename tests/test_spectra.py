@@ -174,7 +174,7 @@ class TestPrepare:
             ContinuumRegion(6600.0 * u.AA, 6700.0 * u.AA, Linear()),
         ])
         spectra = Spectra([spectrum], redshift=0.0)
-        fl, fc = spectra.prepare(lc, cont, drop_empty_regions=True)
+        _fl, fc = spectra.prepare(lc, cont, drop_empty_regions=True)
         # Only the region containing Ha should remain
         assert fc is not None
         assert len(fc) == 1
@@ -190,7 +190,7 @@ class TestPrepare:
             ContinuumRegion(6600.0 * u.AA, 6700.0 * u.AA, Linear()),
         ])
         spectra = Spectra([spectrum], redshift=0.0)
-        fl, fc = spectra.prepare(lc, cont, drop_empty_regions=False)
+        _fl, fc = spectra.prepare(lc, cont, drop_empty_regions=False)
         assert len(fc) == 2
 
 

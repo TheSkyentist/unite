@@ -85,7 +85,7 @@ def make_spectra_tables(
     predictions = evaluate_model(samples, args)
     tables: list[Table] = []
 
-    for i, (pred, spectrum) in enumerate(zip(predictions, args.spectra)):
+    for i, (pred, spectrum) in enumerate(zip(predictions, args.spectra, strict=True)):
         t = Table()
         t['wavelength'] = pred.wavelength
 

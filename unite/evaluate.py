@@ -99,7 +99,6 @@ def evaluate_model(
         disp = spectrum.disperser
         wl_scale = args.spec_to_canonical[i]
         inv_wl_scale = 1.0 / wl_scale
-        norm = args.norm_factors[i]
         wl_out = np.asarray(spectrum.wavelength)
 
         all_totals = []
