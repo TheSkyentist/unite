@@ -6,6 +6,8 @@
 
 ```bash
 pip install unite
+uv pip install unite
+pixi add unite --pypi
 ```
 
 ### From source (development)
