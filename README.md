@@ -1,7 +1,65 @@
-# unite: Uniform NIRSpec Inference (Turbo) Engine
-### By Raphael Erik Hviding
----
+# unite — Unified Numerical Integration Tool for spEctroscopy
 
-Fast/efficient Bayesian inference of emission lines from multiple NIRSpec spectra at the same time.
+[![PyPI](https://img.shields.io/pypi/v/unite)](https://pypi.org/project/unite/)
+[![Python](https://img.shields.io/pypi/pyversions/unite)](https://pypi.org/project/unite/)
+[![License: GPL v2](https://img.shields.io/badge/License-GPLv2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
+[![Tests](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml/badge.svg)](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml)
+[![Documentation](https://img.shields.io/badge/docs-readthedocs-blue)](https://unite.readthedocs.io/)
 
-## Under Construction! Version 1.0.0 soon, watch this repo for updates! 
+`unite` is a Python package for fast, Bayesian inference of emission lines from astronomical spectra. It is built on [JAX](https://jax.readthedocs.io/), [NumPyro](https://num.pyro.ai/), and [Astropy](https://www.astropy.org/), and supports fitting multiple spectra simultaneously with shared kinematics, calibration tokens, and flexible priors.
+
+Originally designed for JWST/NIRSpec but extensible to any spectrograph.
+
+## What it does
+
+- **Exact pixel integration** of line profiles — fast, memory-efficient, and correct even for undersampled data
+- **Simultaneous multi-spectrum fitting** across gratings and instruments with shared kinematic parameters (redshift, FWHM)
+- **Multiple line profiles**: Gaussian, Voigt, Cauchy, Pseudo-Voigt, Laplace, Gauss-Hermite, Split-Normal
+- **Flexible continuum models**: Linear, Power-Law, Polynomial — auto-generated from line configurations
+- **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
+- **YAML serialization** for reproducible, human-editable configurations
+- **User-controlled sampler** — `ModelBuilder` returns `(model_fn, model_args)` for use with any NumPyro backend (NUTS, SVI, nested sampling, ...)
+- **Instrument support** for JWST/NIRSpec (all gratings + PRISM) and generic spectrographs
+
+## Installation
+
+```bash
+pip install unite
+```
+
+Or with [Pixi](https://pixi.sh/):
+
+```bash
+pixi add unite
+```
+
+## Quick Start
+
+```python
+from unite.line import LineConfiguration, Redshift, FWHM, Flux
+from unite.continuum import ContinuumConfiguration
+from unite.spectrum import Spectrum, Spectra
+from unite.model import ModelBuilder
+
+# Configure lines with shared kinematics
+line_config = LineConfiguration(...)
+continuum_config = ContinuumConfiguration.from_line_config(line_config)
+
+# Load spectra and build the numpyro model
+spectra = Spectra([Spectrum(...)])
+model_fn, model_args = ModelBuilder(line_config, continuum_config, spectra).build()
+
+# Run with any NumPyro sampler
+import numpyro
+from numpyro.infer import MCMC, NUTS
+mcmc = MCMC(NUTS(model_fn), num_warmup=500, num_samples=1000)
+mcmc.run(jax.random.PRNGKey(0), *model_args)
+```
+
+## Documentation
+
+Full documentation, tutorials, and API reference at **[unite.readthedocs.io](https://unite.readthedocs.io/)**.
+
+## License
+
+GPL v2 or later. See [LICENSE](LICENSE) for details.
