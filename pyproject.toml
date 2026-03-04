@@ -71,6 +71,9 @@ lint-fix = "ruff check --fix unite tests"
 [tool.pixi.dependencies]
 python = ">=3.13.3,<3.15"
 ruff = ">=0.15.2,<0.16"
+pytest = ">=9.0.2,<10"
+matplotlib = ">=3.10.8,<4"
+vulture = ">=2.14,<3"
 
 [tool.pixi.activation]
 env = {"JAX_ENABLE_X64" = "1", "JAX_LOGGING_LEVEL" = "ERROR"}
