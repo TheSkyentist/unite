@@ -1,4 +1,4 @@
-# unite — Unified Numerical Integration Tool for spEctroscopy
+# unite — Unified liNe Integration Turbo Engine
 
 [![PyPI](https://img.shields.io/pypi/v/unite)](https://pypi.org/project/unite/)
 [![Python](https://img.shields.io/pypi/pyversions/unite)](https://pypi.org/project/unite/)
