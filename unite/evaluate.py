@@ -44,8 +44,7 @@ def _get_scalar(context: dict, name: str, sample_idx: int) -> float:
 
 
 def evaluate_model(
-    samples: dict[str, np.ndarray],
-    args: ModelArgs,
+    samples: dict[str, np.ndarray], args: ModelArgs
 ) -> list[SpectrumPrediction]:
     """Evaluate the model for each posterior sample and decompose contributions.
 
@@ -134,9 +133,21 @@ def evaluate_model(
                 p2 = jnp.zeros(n_lines)
 
             # Calibration values.
-            r_scale = _get_scalar(context, disp.r_scale.name, s) if disp.r_scale is not None else 1.0
-            flux_scale_val = _get_scalar(context, disp.flux_scale.name, s) if disp.flux_scale is not None else 1.0
-            pix_offset = _get_scalar(context, disp.pix_offset.name, s) if disp.pix_offset is not None else 0.0
+            r_scale = (
+                _get_scalar(context, disp.r_scale.name, s)
+                if disp.r_scale is not None
+                else 1.0
+            )
+            flux_scale_val = (
+                _get_scalar(context, disp.flux_scale.name, s)
+                if disp.flux_scale is not None
+                else 1.0
+            )
+            pix_offset = (
+                _get_scalar(context, disp.pix_offset.name, s)
+                if disp.pix_offset is not None
+                else 0.0
+            )
 
             # Pixel edges in canonical wavelength unit.
             low = spectrum.low * wl_scale
@@ -178,9 +189,13 @@ def evaluate_model(
                         if pn == 'normalization_wavelength':
                             val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
                         cont_params[pn] = val
-                    region_cont = region.form.evaluate(wavelength, obs_center, cont_params)
+                    region_cont = region.form.evaluate(
+                        wavelength, obs_center, cont_params
+                    )
                     region_cont = jnp.where(in_region, region_cont, 0.0)
-                    cont_contribs_s[f'cont_{k}'] = np.asarray(region_cont * flux_scale_val)
+                    cont_contribs_s[f'cont_{k}'] = np.asarray(
+                        region_cont * flux_scale_val
+                    )
                     continuum_total = continuum_total + region_cont
 
             total = flux_scale_val * (line_contribs.sum(axis=0) + continuum_total)
@@ -198,11 +213,13 @@ def evaluate_model(
             key: np.stack(vals) for key, vals in all_cont_contribs.items()
         }
 
-        results.append(SpectrumPrediction(
-            wavelength=wl_out,
-            total=total_arr,
-            lines=lines_dict,
-            continuum_regions=cont_dict,
-        ))
+        results.append(
+            SpectrumPrediction(
+                wavelength=wl_out,
+                total=total_arr,
+                lines=lines_dict,
+                continuum_regions=cont_dict,
+            )
+        )
 
     return results

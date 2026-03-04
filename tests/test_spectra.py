@@ -10,14 +10,22 @@ from unite.disperser.generic import SimpleDisperser
 from unite.spectrum import Spectra, Spectrum
 
 
-def _make_spectrum(center_wl=6563.0, fwhm_wl=5.0, peak=100.0, noise_std=2.0,
-                   npix=100, wl_range=(6500, 6600), continuum_level=10.0,
-                   *, name='test', unit=u.AA, R=3000.0):  # noqa: N803
+def _make_spectrum(
+    center_wl=6563.0,
+    fwhm_wl=5.0,
+    peak=100.0,
+    noise_std=2.0,
+    npix=100,
+    wl_range=(6500, 6600),
+    continuum_level=10.0,
+    *,
+    name='test',
+    unit=u.AA,
+    R=3000.0,
+):  # noqa: N803
     """Create a test spectrum with a Gaussian line and linear continuum."""
     wl = np.linspace(*wl_range, npix) * unit
-    disperser = SimpleDisperser(
-        wavelength=wl.value, unit=unit, R=R, name=name,
-    )
+    disperser = SimpleDisperser(wavelength=wl.value, unit=unit, R=R, name=name)
     low = wl - 0.5 * np.gradient(wl)
     high = wl + 0.5 * np.gradient(wl)
 
@@ -29,8 +37,7 @@ def _make_spectrum(center_wl=6563.0, fwhm_wl=5.0, peak=100.0, noise_std=2.0,
     error = np.full(npix, noise_std)
 
     return Spectrum(
-        low=low, high=high, flux=flux, error=error,
-        disperser=disperser, name=name,
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
     )
 
 
@@ -38,7 +45,8 @@ def _make_line_config():
     """Create a minimal line config with one H-alpha line."""
     lc = line.LineConfiguration()
     lc.add_line(
-        'H_alpha', 6563.0 * u.AA,
+        'H_alpha',
+        6563.0 * u.AA,
         redshift=line.Redshift(prior=prior.Uniform(-0.01, 0.01)),
         fwhm_gauss=line.FWHM(prior=prior.Uniform(1.0, 10.0)),
         flux=line.Flux(prior=prior.Uniform(0, 5)),
@@ -101,9 +109,7 @@ class TestComputeScales:
     def test_continuum_scale_with_config(self):
         spectrum = _make_spectrum()
         lc = _make_line_config()
-        cont = ContinuumConfiguration.from_lines(
-            lc.centers, pad=0.05, form=Linear()
-        )
+        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.compute_scales(lc, cont)
         assert spectra.line_scale is not None
@@ -169,10 +175,13 @@ class TestPrepare:
         lc.add_line('Ha', 6563.0 * u.AA)
         # Create two continuum regions: one around Ha, one far away
         from unite.continuum.config import ContinuumRegion
-        cont = ContinuumConfiguration([
-            ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),
-            ContinuumRegion(6600.0 * u.AA, 6700.0 * u.AA, Linear()),
-        ])
+
+        cont = ContinuumConfiguration(
+            [
+                ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),
+                ContinuumRegion(6600.0 * u.AA, 6700.0 * u.AA, Linear()),
+            ]
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         _fl, fc = spectra.prepare(lc, cont, drop_empty_regions=True)
         # Only the region containing Ha should remain
@@ -185,10 +194,13 @@ class TestPrepare:
         lc = line.LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
         from unite.continuum.config import ContinuumRegion
-        cont = ContinuumConfiguration([
-            ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),
-            ContinuumRegion(6600.0 * u.AA, 6700.0 * u.AA, Linear()),
-        ])
+
+        cont = ContinuumConfiguration(
+            [
+                ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),
+                ContinuumRegion(6600.0 * u.AA, 6700.0 * u.AA, Linear()),
+            ]
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         _fl, fc = spectra.prepare(lc, cont, drop_empty_regions=False)
         assert len(fc) == 2
@@ -214,9 +226,7 @@ class TestResizeErrors:
         """resize_errors should set error_scale >= 1."""
         spectrum = _make_spectrum(noise_std=2.0, continuum_level=10.0)
         lc = _make_line_config()
-        cont = ContinuumConfiguration.from_lines(
-            lc.centers, pad=0.05, form=Linear()
-        )
+        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.resize_errors(lc, cont)
         # error_scale should be >= 1.0 (clamped)

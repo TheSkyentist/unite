@@ -17,7 +17,7 @@ def _setup():
     """Create model and get predictive samples."""
     wavelength = np.linspace(6500, 6600, 60) * u.AA
     disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='test',
+        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='test'
     )
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
@@ -29,13 +29,18 @@ def _setup():
     error = np.full(len(wavelength), 1.0)
 
     spectrum = Spectrum(
-        low=low, high=high, flux=flux, error=error,
-        disperser=disperser, name='test_spec',
+        low=low,
+        high=high,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        name='test_spec',
     )
 
     lc = line.LineConfiguration()
     lc.add_line(
-        'Ha', 6563.0 * u.AA,
+        'Ha',
+        6563.0 * u.AA,
         redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
         fwhm_gauss=line.FWHM(prior=prior.Uniform(2.0, 8.0)),
         flux=line.Flux(prior=prior.Uniform(0, 5)),

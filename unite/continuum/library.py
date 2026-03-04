@@ -302,7 +302,11 @@ class Polynomial(ContinuumForm):
     def param_names(self) -> tuple[str, ...]:
         if self._degree == 0:
             return ('scale', 'normalization_wavelength')
-        return ('scale', *(f'c{i}' for i in range(1, self._degree + 1)), 'normalization_wavelength')
+        return (
+            'scale',
+            *(f'c{i}' for i in range(1, self._degree + 1)),
+            'normalization_wavelength',
+        )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
@@ -403,7 +407,11 @@ class Chebyshev(ContinuumForm):
     def param_names(self) -> tuple[str, ...]:
         if self._order == 0:
             return ('scale', 'normalization_wavelength')
-        return ('scale', *(f'c{i}' for i in range(1, self._order + 1)), 'normalization_wavelength')
+        return (
+            'scale',
+            *(f'c{i}' for i in range(1, self._order + 1)),
+            'normalization_wavelength',
+        )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
@@ -687,7 +695,11 @@ class BSpline(ContinuumForm):
     def param_names(self) -> tuple[str, ...]:
         if self._n_basis == 1:
             return ('scale', 'normalization_wavelength')
-        return ('scale', *(f'coeff_{i}' for i in range(1, self._n_basis)), 'normalization_wavelength')
+        return (
+            'scale',
+            *(f'coeff_{i}' for i in range(1, self._n_basis)),
+            'normalization_wavelength',
+        )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
@@ -782,7 +794,11 @@ class Bernstein(ContinuumForm):
     def param_names(self) -> tuple[str, ...]:
         if self._degree == 0:
             return ('scale', 'normalization_wavelength')
-        return ('scale', *(f'coeff_{i}' for i in range(1, self._degree + 1)), 'normalization_wavelength')
+        return (
+            'scale',
+            *(f'coeff_{i}' for i in range(1, self._degree + 1)),
+            'normalization_wavelength',
+        )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 10)}

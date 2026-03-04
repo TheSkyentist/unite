@@ -21,10 +21,7 @@ def create_simple_spectrum():
 
     # Create a simple disperser with constant R=3000
     disperser = SimpleDisperser(
-        wavelength=wavelength.value,
-        unit=u.AA,
-        R=3000.0,
-        name='test_disperser'
+        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='test_disperser'
     )
 
     # Create pixel edges (low and high)
@@ -37,7 +34,7 @@ def create_simple_spectrum():
     sigma = fwhm_wl / (2 * np.sqrt(2 * np.log(2)))
 
     # Create Gaussian line flux
-    line_flux = 100 * np.exp(-0.5 * ((wavelength.value - center_wl) / sigma)**2)
+    line_flux = 100 * np.exp(-0.5 * ((wavelength.value - center_wl) / sigma) ** 2)
 
     # Add some noise
     rng = np.random.default_rng(42)
@@ -52,7 +49,7 @@ def create_simple_spectrum():
         flux=flux,
         error=error,
         disperser=disperser,
-        name='test_spectrum'
+        name='test_spectrum',
     )
 
     return spectrum
@@ -69,7 +66,7 @@ def create_minimal_config():
         center=6563.0 * u.AA,
         redshift=line.Redshift(prior=prior.Uniform(-0.01, 0.01)),
         fwhm_gauss=line.FWHM(prior=prior.Uniform(1.0, 10.0)),
-        flux=line.Flux(prior=prior.Uniform(50.0, 150.0))
+        flux=line.Flux(prior=prior.Uniform(50.0, 150.0)),
     )
 
     return line_config
@@ -78,14 +75,9 @@ def create_minimal_config():
 def _prepare_and_build(line_config, cont_config, spectra):
     """Helper: prepare spectra and build model (no warnings)."""
     spectra.prepare(line_config, cont_config)
-    spectra.compute_scales(
-        spectra.prepared_line_config,
-        spectra.prepared_cont_config,
-    )
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
     return model.ModelBuilder(
-        spectra.prepared_line_config,
-        spectra.prepared_cont_config,
-        spectra,
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
     ).build()
 
 
@@ -129,9 +121,9 @@ class TestMinimalModel:
         z_params = [k for k in actual_params if k.endswith('-z')]
         fwhm_params = [k for k in actual_params if 'fwhm' in k]
 
-        assert len(flux_params) >= 1, f"No flux parameters found in {actual_params}"
-        assert len(z_params) >= 1, f"No z parameters found in {actual_params}"
-        assert len(fwhm_params) >= 1, f"No fwhm parameters found in {actual_params}"
+        assert len(flux_params) >= 1, f'No flux parameters found in {actual_params}'
+        assert len(z_params) >= 1, f'No z parameters found in {actual_params}'
+        assert len(fwhm_params) >= 1, f'No fwhm parameters found in {actual_params}'
 
         # Check shapes
         for param in flux_params + z_params + fwhm_params:
@@ -146,17 +138,13 @@ class TestMinimalModel:
 
         # Create simple continuum (note: must pass Quantity with units)
         cont_config = ContinuumConfiguration.from_lines(
-            [6563.0] * u.AA,
-            pad=0.1,
-            form=Linear(),
+            [6563.0] * u.AA, pad=0.1, form=Linear()
         )
 
         spectra = Spectra([spectrum], redshift=0.0)
 
         # Build model with continuum
-        unite_model, unite_args = _prepare_and_build(
-            line_config, cont_config, spectra
-        )
+        unite_model, unite_args = _prepare_and_build(line_config, cont_config, spectra)
 
         # Check that continuum configuration is included
         assert unite_args.cont_config is not None
@@ -343,7 +331,7 @@ class TestWavelengthUnitConsistency:
         wl_aa = np.linspace(6500, 6600, 100) * u.AA
         wl = wl_aa.to(unit)
         disperser = SimpleDisperser(
-            wavelength=wl.value, unit=unit, R=3000.0, name=name or str(unit),
+            wavelength=wl.value, unit=unit, R=3000.0, name=name or str(unit)
         )
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
@@ -356,8 +344,14 @@ class TestWavelengthUnitConsistency:
         noise = rng.normal(0, 2, len(wl))
         flux = line_flux + noise
         error = np.full_like(flux, 2.0)
-        return Spectrum(low=low, high=high, flux=flux, error=error,
-                        disperser=disperser, name=name or str(unit))
+        return Spectrum(
+            low=low,
+            high=high,
+            flux=flux,
+            error=error,
+            disperser=disperser,
+            name=name or str(unit),
+        )
 
     def test_cross_unit_identical_results(self):
         """Same physical spectrum in AA and um should give identical model output."""
@@ -387,15 +381,21 @@ class TestWavelengthUnitConsistency:
         """Spectrum with flux ~1e-17 should have norm_factor ~1e-17."""
         wl = np.linspace(6500, 6600, 50) * u.AA
         disperser = SimpleDisperser(
-            wavelength=wl.value, unit=u.AA, R=3000.0, name='faint',
+            wavelength=wl.value, unit=u.AA, R=3000.0, name='faint'
         )
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
         flux = np.full(50, 1.5e-17)
         error = np.full(50, 3e-18)
 
-        spectrum = Spectrum(low=low, high=high, flux=flux, error=error,
-                            disperser=disperser, name='faint')
+        spectrum = Spectrum(
+            low=low,
+            high=high,
+            flux=flux,
+            error=error,
+            disperser=disperser,
+            name='faint',
+        )
 
         spectra = Spectra([spectrum], redshift=0.0)
         lc = line.LineConfiguration()
@@ -451,9 +451,9 @@ class TestWavelengthUnitConsistency:
         lc.add_line('Ha', 6563.0 * u.AA)
 
         # Continuum regions in microns.
-        cont = ContinuumConfiguration([
-            ContinuumRegion(0.65 * u.um, 0.66 * u.um, Linear()),
-        ])
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(0.65 * u.um, 0.66 * u.um, Linear())]
+        )
 
         _, args = _prepare_and_build(lc, cont, spectra)
 
@@ -475,7 +475,10 @@ class TestFluxUnitValidation:
         error = np.ones(10)
 
         spectrum = Spectrum(
-            low=low, high=high, flux=flux, error=error,
+            low=low,
+            high=high,
+            flux=flux,
+            error=error,
             disperser=disperser,
             flux_unit=u.erg / u.s / u.cm**2 / u.AA,
         )
@@ -492,8 +495,12 @@ class TestFluxUnitValidation:
 
         with pytest.raises(ValueError, match='spectral flux density'):
             Spectrum(
-                low=low, high=high, flux=flux, error=error,
-                disperser=disperser, flux_unit=u.Jy,
+                low=low,
+                high=high,
+                flux=flux,
+                error=error,
+                disperser=disperser,
+                flux_unit=u.Jy,
             )
 
     def test_no_flux_unit_is_none(self):
@@ -506,6 +513,6 @@ class TestFluxUnitValidation:
         error = np.ones(10)
 
         spectrum = Spectrum(
-            low=low, high=high, flux=flux, error=error, disperser=disperser,
+            low=low, high=high, flux=flux, error=error, disperser=disperser
         )
         assert spectrum.flux_unit is None

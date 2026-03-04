@@ -431,7 +431,6 @@ class Spectra:
         )
 
         if drop_empty_regions and filtered_cont is not None and len(filtered_lines) > 0:
-
             kept = []
             for region in filtered_cont:
                 # Check if any filtered line falls in this region (rest frame).
@@ -636,6 +635,7 @@ class Spectra:
             if all_chi2_reds:
                 # Use the median chi2_red across regions.
                 import numpy as np
+
                 median_chi2 = float(np.median(all_chi2_reds))
                 spectrum.error_scale = float(jnp.sqrt(jnp.maximum(median_chi2, 1.0)))
 

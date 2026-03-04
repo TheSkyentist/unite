@@ -67,20 +67,26 @@ class TestContinuumScale:
 
     def test_wrong_slot_raises(self):
         tok = ContinuumScale('s')
-        region = ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), params={'slope': tok})
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, Linear(), params={'slope': tok}
+        )
         with pytest.raises(ValueError, match=r'ContinuumScale.*"scale"'):
             ContinuumConfiguration([region])
 
     def test_correct_slot_ok(self):
         tok = ContinuumScale('s', prior=Uniform(0, 5))
-        region = ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), params={'scale': tok})
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, Linear(), params={'scale': tok}
+        )
         config = ContinuumConfiguration([region])
         assert config.resolved_params[0]['scale'] is tok
 
     def test_scale_slot_accepts_generic_continuum_param(self):
         # Generic Parameter is allowed in any slot including 'scale'.
         tok = Parameter('generic', prior=Uniform(0, 5))
-        region = ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), params={'scale': tok})
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, Linear(), params={'scale': tok}
+        )
         config = ContinuumConfiguration([region])
         assert config.resolved_params[0]['scale'] is tok
 
@@ -108,20 +114,29 @@ class TestContinuumNormalizationWavelength:
 
     def test_wrong_slot_raises(self):
         tok = ContinuumNormalizationWavelength('nw', prior=Fixed(1.5))
-        region = ContinuumRegion(1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'scale': tok})
-        with pytest.raises(ValueError, match=r'ContinuumNormalizationWavelength.*"normalization_wavelength"'):
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'scale': tok}
+        )
+        with pytest.raises(
+            ValueError,
+            match=r'ContinuumNormalizationWavelength.*"normalization_wavelength"',
+        ):
             ContinuumConfiguration([region])
 
     def test_correct_slot_ok(self):
         tok = ContinuumNormalizationWavelength('nw', prior=Fixed(1.5))
-        region = ContinuumRegion(1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'normalization_wavelength': tok})
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'normalization_wavelength': tok}
+        )
         config = ContinuumConfiguration([region])
         assert config.resolved_params[0]['normalization_wavelength'] is tok
 
     def test_normalization_wavelength_slot_accepts_generic_continuum_param(self):
         # Generic Parameter is allowed in any slot.
         tok = Parameter('generic', prior=Fixed(1.5))
-        region = ContinuumRegion(1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'normalization_wavelength': tok})
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'normalization_wavelength': tok}
+        )
         config = ContinuumConfiguration([region])
         assert config.resolved_params[0]['normalization_wavelength'] is tok
 
@@ -218,7 +233,9 @@ class TestContinuumConfigurationConstruction:
         assert len(config) == 2
 
     def test_iter_and_getitem(self):
-        regions = [ContinuumRegion(float(i) * u.um, (float(i) + 0.5) * u.um) for i in range(3)]
+        regions = [
+            ContinuumRegion(float(i) * u.um, (float(i) + 0.5) * u.um) for i in range(3)
+        ]
         config = ContinuumConfiguration(regions)
         assert list(config) == list(regions)
         assert config[1].low == pytest.approx(1.0)
@@ -231,25 +248,34 @@ class TestContinuumConfigurationConstruction:
 
 class TestResolvedParams:
     def test_resolved_params_length_matches_regions(self):
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear()),
-            ContinuumRegion(3.0 * u.um, 4.0 * u.um, Linear()),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear()),
+                ContinuumRegion(3.0 * u.um, 4.0 * u.um, Linear()),
+            ]
+        )
         assert len(config.resolved_params) == 2
 
     def test_auto_names_use_form_type_and_index(self):
-        config = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
+        )
         resolved = config.resolved_params[0]
         assert 'scale' in resolved
         assert resolved['scale'].name == 'cont_linear_0_scale'
         assert resolved['slope'].name == 'cont_linear_0_slope'
-        assert resolved['normalization_wavelength'].name == 'cont_linear_0_normalization_wavelength'
+        assert (
+            resolved['normalization_wavelength'].name
+            == 'cont_linear_0_normalization_wavelength'
+        )
 
     def test_two_same_type_regions_get_different_indices(self):
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear()),
-            ContinuumRegion(3.0 * u.um, 4.0 * u.um, Linear()),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear()),
+                ContinuumRegion(3.0 * u.um, 4.0 * u.um, Linear()),
+            ]
+        )
         r0 = config.resolved_params[0]
         r1 = config.resolved_params[1]
         assert r0['scale'].name == 'cont_linear_0_scale'
@@ -258,21 +284,30 @@ class TestResolvedParams:
         assert r0['scale'] is not r1['scale']
 
     def test_normalization_wavelength_default_fixed_at_region_center(self):
-        config = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
+        )
         nw_tok = config.resolved_params[0]['normalization_wavelength']
         assert isinstance(nw_tok.prior, Fixed)
         assert nw_tok.prior.value == pytest.approx(1.5)  # center of [1, 2] um
 
     def test_explicit_token_used_as_is(self):
         scale = Parameter('my_scale', prior=Uniform(0, 5))
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'scale': scale}),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'scale': scale}
+                )
+            ]
+        )
         resolved = config.resolved_params[0]
         assert resolved['scale'] is scale
         # beta and normalization_wavelength should be auto-created.
         assert resolved['beta'].name == 'cont_powerlaw_0_beta'
-        assert resolved['normalization_wavelength'].name == 'cont_powerlaw_0_normalization_wavelength'
+        assert (
+            resolved['normalization_wavelength'].name
+            == 'cont_powerlaw_0_normalization_wavelength'
+        )
         # normalization_wavelength default is Fixed at region center.
         assert isinstance(resolved['normalization_wavelength'].prior, Fixed)
         assert resolved['normalization_wavelength'].prior.value == pytest.approx(1.5)
@@ -282,10 +317,30 @@ class TestResolvedParams:
         beta = Parameter('pl_beta', prior=Uniform(-5, 5))
         nw = Parameter('pl_nw', prior=Fixed(2.5))
         pl = PowerLaw()
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 2.0 * u.um, pl, params={'scale': scale, 'beta': beta, 'normalization_wavelength': nw}),
-            ContinuumRegion(3.0 * u.um, 4.0 * u.um, pl, params={'scale': scale, 'beta': beta, 'normalization_wavelength': nw}),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    1.0 * u.um,
+                    2.0 * u.um,
+                    pl,
+                    params={
+                        'scale': scale,
+                        'beta': beta,
+                        'normalization_wavelength': nw,
+                    },
+                ),
+                ContinuumRegion(
+                    3.0 * u.um,
+                    4.0 * u.um,
+                    pl,
+                    params={
+                        'scale': scale,
+                        'beta': beta,
+                        'normalization_wavelength': nw,
+                    },
+                ),
+            ]
+        )
         r0 = config.resolved_params[0]
         r1 = config.resolved_params[1]
         assert r0['scale'] is r1['scale']
@@ -297,15 +352,37 @@ class TestResolvedParams:
         beta = Parameter('pl_beta', prior=Uniform(-5, 5))
         nw = Parameter('pl_nw', prior=Fixed(2.5))
         pl = PowerLaw()
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 2.0 * u.um, pl, params={'scale': scale, 'beta': beta, 'normalization_wavelength': nw}),
-            ContinuumRegion(3.0 * u.um, 4.0 * u.um, pl, params={'scale': scale, 'beta': beta, 'normalization_wavelength': nw}),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    1.0 * u.um,
+                    2.0 * u.um,
+                    pl,
+                    params={
+                        'scale': scale,
+                        'beta': beta,
+                        'normalization_wavelength': nw,
+                    },
+                ),
+                ContinuumRegion(
+                    3.0 * u.um,
+                    4.0 * u.um,
+                    pl,
+                    params={
+                        'scale': scale,
+                        'beta': beta,
+                        'normalization_wavelength': nw,
+                    },
+                ),
+            ]
+        )
         # 3 shared tokens → repr says 3 parameters, not 6.
         assert '3 parameter(s)' in repr(config)
 
     def test_resolved_params_is_copy(self):
-        config = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
+        )
         rp1 = config.resolved_params
         rp2 = config.resolved_params
         assert rp1 is not rp2  # New list each time.
@@ -370,7 +447,9 @@ class TestFromLines:
 
 class TestSerializationRoundTrip:
     def test_linear_region(self):
-        config = ContinuumConfiguration([ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())]
+        )
         d = config.to_dict()
         config2 = ContinuumConfiguration.from_dict(d)
         assert len(config2) == 1
@@ -378,19 +457,25 @@ class TestSerializationRoundTrip:
         assert config2[0].low == pytest.approx(4600.0)
 
     def test_dict_has_params_forms_regions_keys(self):
-        config = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
+        )
         d = config.to_dict()
         assert 'params' in d
         assert 'forms' in d
         assert 'regions' in d
 
     def test_dict_regions_have_wavelength_unit(self):
-        config = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
+        )
         d = config.to_dict()
         assert 'wavelength_unit' in d['regions'][0]
 
     def test_auto_param_names_roundtrip(self):
-        config = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
+        )
         d = config.to_dict()
         config2 = ContinuumConfiguration.from_dict(d)
         resolved = config2.resolved_params[0]
@@ -401,11 +486,13 @@ class TestSerializationRoundTrip:
         # Regions sharing the same form Python object should still share it
         # after serialization (forms are de-duplicated in the forms section).
         pl = PowerLaw()
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 1.5 * u.um, pl),
-            ContinuumRegion(2.0 * u.um, 2.5 * u.um, pl),
-            ContinuumRegion(3.0 * u.um, 3.5 * u.um, pl),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 1.5 * u.um, pl),
+                ContinuumRegion(2.0 * u.um, 2.5 * u.um, pl),
+                ContinuumRegion(3.0 * u.um, 3.5 * u.um, pl),
+            ]
+        )
         d = config.to_dict()
         assert len(d['forms']) == 1  # one form entry for all three regions.
         config2 = ContinuumConfiguration.from_dict(d)
@@ -413,10 +500,12 @@ class TestSerializationRoundTrip:
         assert config2[1].form is config2[2].form
 
     def test_distinct_forms_serialized_separately(self):
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 1.5 * u.um, Linear()),
-            ContinuumRegion(2.0 * u.um, 2.5 * u.um, PowerLaw()),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 1.5 * u.um, Linear()),
+                ContinuumRegion(2.0 * u.um, 2.5 * u.um, PowerLaw()),
+            ]
+        )
         d = config.to_dict()
         assert len(d['forms']) == 2
 
@@ -436,10 +525,30 @@ class TestSerializationRoundTrip:
         beta = Parameter('pl_beta', prior=Uniform(-5, 5))
         nw = Parameter('pl_nw', prior=Fixed(2.5))
         pl = PowerLaw()
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 2.0 * u.um, pl, params={'scale': scale, 'beta': beta, 'normalization_wavelength': nw}),
-            ContinuumRegion(3.0 * u.um, 4.0 * u.um, pl, params={'scale': scale, 'beta': beta, 'normalization_wavelength': nw}),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    1.0 * u.um,
+                    2.0 * u.um,
+                    pl,
+                    params={
+                        'scale': scale,
+                        'beta': beta,
+                        'normalization_wavelength': nw,
+                    },
+                ),
+                ContinuumRegion(
+                    3.0 * u.um,
+                    4.0 * u.um,
+                    pl,
+                    params={
+                        'scale': scale,
+                        'beta': beta,
+                        'normalization_wavelength': nw,
+                    },
+                ),
+            ]
+        )
         d = config.to_dict()
         # Three shared tokens → three param entries.
         assert len(d['params']) == 3
@@ -454,7 +563,9 @@ class TestSerializationRoundTrip:
         assert r0['normalization_wavelength'].prior.value == pytest.approx(2.5)
 
     def test_polynomial_degree_preserved(self):
-        config = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um, Polynomial(degree=3))])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Polynomial(degree=3))]
+        )
         d = config.to_dict()
         config2 = ContinuumConfiguration.from_dict(d)
         assert config2[0].form.degree == 3
@@ -465,10 +576,15 @@ class TestSerializationRoundTrip:
         config2 = ContinuumConfiguration.from_dict(d)
         assert len(config2) == len(config)
         # Params are independent after round-trip.
-        assert config2.resolved_params[0]['scale'] is not config2.resolved_params[1]['scale']
+        assert (
+            config2.resolved_params[0]['scale']
+            is not config2.resolved_params[1]['scale']
+        )
 
     def test_wavelength_unit_preserved_in_roundtrip(self):
-        config = ContinuumConfiguration([ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())])
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())]
+        )
         d = config.to_dict()
         assert d['regions'][0]['wavelength_unit'] == str(u.AA)
         config2 = ContinuumConfiguration.from_dict(d)
@@ -477,9 +593,16 @@ class TestSerializationRoundTrip:
 
     def test_powerlaw_normalization_wavelength_param_roundtrip(self):
         nw = Parameter('my_nw', prior=Fixed(3.5))
-        config = ContinuumConfiguration([
-            ContinuumRegion(1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'normalization_wavelength': nw}),
-        ])
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    1.0 * u.um,
+                    2.0 * u.um,
+                    PowerLaw(),
+                    params={'normalization_wavelength': nw},
+                )
+            ]
+        )
         d = config.to_dict()
         config2 = ContinuumConfiguration.from_dict(d)
         resolved = config2.resolved_params[0]
@@ -534,7 +657,11 @@ class TestLinear:
         assert Linear().n_params == 3
 
     def test_default_priors_keys(self):
-        assert set(Linear().default_priors()) == {'scale', 'slope', 'normalization_wavelength'}
+        assert set(Linear().default_priors()) == {
+            'scale',
+            'slope',
+            'normalization_wavelength',
+        }
 
     def test_default_priors_normalization_wavelength_uses_region_center(self):
         priors = Linear().default_priors(region_center=2.5)
@@ -643,13 +770,25 @@ class TestPowerLaw:
 
 class TestPolynomial:
     def test_param_names_degree0(self):
-        assert Polynomial(degree=0).param_names() == ('scale', 'normalization_wavelength')
+        assert Polynomial(degree=0).param_names() == (
+            'scale',
+            'normalization_wavelength',
+        )
 
     def test_param_names_degree1(self):
-        assert Polynomial(degree=1).param_names() == ('scale', 'c1', 'normalization_wavelength')
+        assert Polynomial(degree=1).param_names() == (
+            'scale',
+            'c1',
+            'normalization_wavelength',
+        )
 
     def test_param_names_degree2(self):
-        assert Polynomial(degree=2).param_names() == ('scale', 'c1', 'c2', 'normalization_wavelength')
+        assert Polynomial(degree=2).param_names() == (
+            'scale',
+            'c1',
+            'c2',
+            'normalization_wavelength',
+        )
 
     def test_negative_degree_raises(self):
         with pytest.raises(ValueError, match='>= 0'):
@@ -690,7 +829,12 @@ class TestChebyshev:
         assert Chebyshev(order=0).param_names() == ('scale', 'normalization_wavelength')
 
     def test_param_names_order2(self):
-        assert Chebyshev(order=2).param_names() == ('scale', 'c1', 'c2', 'normalization_wavelength')
+        assert Chebyshev(order=2).param_names() == (
+            'scale',
+            'c1',
+            'c2',
+            'normalization_wavelength',
+        )
 
     def test_negative_order_raises(self):
         with pytest.raises(ValueError, match='>= 0'):
@@ -716,7 +860,11 @@ class TestChebyshev:
 
 class TestBlackbody:
     def test_param_names(self):
-        assert set(Blackbody().param_names()) == {'scale', 'temperature', 'normalization_wavelength'}
+        assert set(Blackbody().param_names()) == {
+            'scale',
+            'temperature',
+            'normalization_wavelength',
+        }
 
     def test_default_priors_normalization_wavelength_uses_region_center(self):
         priors = Blackbody().default_priors(region_center=2.0)
@@ -833,7 +981,14 @@ class TestBSpline:
 
     def test_param_names(self, cubic_knots):
         b = BSpline(cubic_knots, degree=3)
-        expected = ('scale', 'coeff_1', 'coeff_2', 'coeff_3', 'coeff_4', 'normalization_wavelength')
+        expected = (
+            'scale',
+            'coeff_1',
+            'coeff_2',
+            'coeff_3',
+            'coeff_4',
+            'normalization_wavelength',
+        )
         assert b.param_names() == expected
 
     def test_evaluate_shape(self, cubic_knots):
@@ -855,7 +1010,13 @@ class TestBernstein:
         return Bernstein(degree=3, wavelength_min=0.9, wavelength_max=1.1)
 
     def test_param_names(self, bernstein):
-        expected = ('scale', 'coeff_1', 'coeff_2', 'coeff_3', 'normalization_wavelength')
+        expected = (
+            'scale',
+            'coeff_1',
+            'coeff_2',
+            'coeff_3',
+            'normalization_wavelength',
+        )
         assert bernstein.param_names() == expected
 
     def test_evaluate_shape(self, bernstein):

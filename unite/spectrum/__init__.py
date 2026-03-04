@@ -12,7 +12,4 @@ Typical usage::
 
 from unite.spectrum.spectrum import Spectra, Spectrum
 
-__all__ = [
-    'Spectra',
-    'Spectrum',
-]
+__all__ = ['Spectra', 'Spectrum']

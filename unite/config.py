@@ -194,7 +194,9 @@ class Configuration:
 
     def __repr__(self) -> str:
         cont_repr = repr(self.continuum) if self.continuum is not None else 'None'
-        dispersers_repr = repr(self.dispersers) if self.dispersers is not None else 'None'
+        dispersers_repr = (
+            repr(self.dispersers) if self.dispersers is not None else 'None'
+        )
         return (
             f'Configuration(\n'
             f'  lines={self.lines!r},\n'

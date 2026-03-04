@@ -308,10 +308,12 @@ class ModelBuilder:
         # Convert line wavelengths to canonical unit.
         # Each line may have a different Quantity unit, so convert per-line.
         if len(line_config) > 0:
-            canon_wls = jnp.array([
-                float(e.wavelength.to(self._canonical_unit).value)
-                for e in line_config._entries
-            ])
+            canon_wls = jnp.array(
+                [
+                    float(e.wavelength.to(self._canonical_unit).value)
+                    for e in line_config._entries
+                ]
+            )
             self._matrices.wavelengths = canon_wls
 
         # --- Collect all unique parameter tokens for prior / topo-sort ---

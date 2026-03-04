@@ -16,10 +16,7 @@ from unite.prior import Fixed
 
 
 def make_parameter_table(
-    samples: dict[str, np.ndarray],
-    args: ModelArgs,
-    *,
-    summary: bool = False,
+    samples: dict[str, np.ndarray], args: ModelArgs, *, summary: bool = False
 ) -> Table:
     """Build an Astropy table of posterior parameter samples.
 
@@ -220,11 +217,13 @@ def _get_n_samples(samples: dict[str, np.ndarray]) -> int:
 
 def _summarize(arr: np.ndarray) -> np.ndarray:
     """Collapse (n_samples, n_pixels) to (3, n_pixels): [median, p16, p84]."""
-    return np.array([
-        np.median(arr, axis=0),
-        np.percentile(arr, 16, axis=0),
-        np.percentile(arr, 84, axis=0),
-    ])
+    return np.array(
+        [
+            np.median(arr, axis=0),
+            np.percentile(arr, 16, axis=0),
+            np.percentile(arr, 84, axis=0),
+        ]
+    )
 
 
 def _insert_nan_between_regions(

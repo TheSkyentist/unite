@@ -145,10 +145,14 @@ class Disperser(ABC):
             msg = f'r_scale must be an RScale token, got {type(r_scale).__name__}'
             raise TypeError(msg)
         if flux_scale is not None and not isinstance(flux_scale, FluxScale):
-            msg = f'flux_scale must be a FluxScale token, got {type(flux_scale).__name__}'
+            msg = (
+                f'flux_scale must be a FluxScale token, got {type(flux_scale).__name__}'
+            )
             raise TypeError(msg)
         if pix_offset is not None and not isinstance(pix_offset, PixOffset):
-            msg = f'pix_offset must be a PixOffset token, got {type(pix_offset).__name__}'
+            msg = (
+                f'pix_offset must be a PixOffset token, got {type(pix_offset).__name__}'
+            )
             raise TypeError(msg)
         self.unit = unit
         self.name = name
@@ -189,4 +193,6 @@ class Disperser(ABC):
     @property
     def has_calibration_params(self) -> bool:
         """``True`` if any calibration token is attached."""
-        return any(x is not None for x in (self.r_scale, self.flux_scale, self.pix_offset))
+        return any(
+            x is not None for x in (self.r_scale, self.flux_scale, self.pix_offset)
+        )
