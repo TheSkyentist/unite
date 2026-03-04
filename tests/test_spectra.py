@@ -21,8 +21,8 @@ def _make_spectrum(
     *,
     name='test',
     unit=u.AA,
-    R=3000.0,
-):  # noqa: N803
+    R=3000.0,  # noqa: N803
+):
     """Create a test spectrum with a Gaussian line and linear continuum."""
     wl = np.linspace(*wl_range, npix) * unit
     disperser = SimpleDisperser(wavelength=wl.value, unit=unit, R=R, name=name)
