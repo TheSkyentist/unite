@@ -178,7 +178,7 @@ class TestProfileAliases:
             'voigt',
             'hermite',
             'laplace',
-            'splitnormal',
+            'split-normal',
         ],
     )
     def test_string_alias_accepted(self, alias):
@@ -258,7 +258,7 @@ class TestLineConfigurationRoundTrip:
         narrow2 = config2._entries[0].fwhms['fwhm_gauss']
         assert narrow2 in broad2.prior.dependencies()
 
-    def test_non_default_profile_roundtrip(self):
+    def test_profile_roundtrip(self):
         config = LineConfiguration()
         config.add_line('Ha', 6564.61 * u.AA, profile='voigt')
         d = config.to_dict()
@@ -266,13 +266,6 @@ class TestLineConfigurationRoundTrip:
         from unite.line.profiles import PseudoVoigt
 
         assert isinstance(config2._entries[0].profile, PseudoVoigt)
-
-    def test_gaussian_profile_omitted_from_dict(self):
-        # Default Gaussian profile is not serialized to save space.
-        config = LineConfiguration()
-        config.add_line('Ha', 6564.61 * u.AA)
-        d = config.to_dict()
-        assert 'profile' not in d['lines'][0]
 
     def test_strength_roundtrip(self):
         config = LineConfiguration()
@@ -301,10 +294,11 @@ class TestProfileNormalization:
         import jax.numpy as jnp
 
         from unite.line.functions import (
+            _integrate_cauchy,
+            _integrate_laplace,
             integrate_gaussHermite,
             integrate_gaussian,
             integrate_gaussianLaplace,
-            integrate_laplace,
             integrate_split_normal,
             integrate_voigt,
         )
@@ -323,7 +317,12 @@ class TestProfileNormalization:
         result = integrate_gaussian(low, high, center, lsf_fwhm, fwhm)
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
 
-        # Test Cauchy (Lorentzian) - now implemented as PseudoVoigt with LSF=0
+        # Test Cauchy (Lorentzian) - has heavy tails, so we expect a looser tolerance
+        fwhm = jnp.array([100.0])
+        lsf_fwhm = jnp.array([10.0])  # Small LSF (ignored for Cauchy)
+        result = _integrate_cauchy(low, high, center, lsf_fwhm, lsf_fwhm)
+        assert jnp.isclose(jnp.sum(result), 1.0, rtol=5e-3)
+
         # With our wide range (0-10000), we should get close to 1.0
         fwhm = jnp.array([100.0])
         lsf_fwhm = jnp.array([10.0])  # Small LSF (ignored for Cauchy)
@@ -333,7 +332,7 @@ class TestProfileNormalization:
         # Test Laplace - has exponential tails
         fwhm = jnp.array([100.0])
         lsf_fwhm = jnp.array([10.0])  # Small LSF
-        result = integrate_laplace(low, high, center, lsf_fwhm, fwhm)
+        result = _integrate_laplace(low, high, center, lsf_fwhm, fwhm)
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-4)
 
         # Test PseudoVoigt - has Lorentzian component with heavy tails

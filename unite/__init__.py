@@ -23,5 +23,14 @@ except PackageNotFoundError:
     __version__ = '0.0.0'
 
 from unite.config import Configuration
+from unite.evaluate import SpectrumPrediction, evaluate_model
+from unite.results import make_hdul, make_parameter_table, make_spectra_tables
 
-__all__ = ['Configuration']
+__all__ = [
+    'Configuration',
+    'SpectrumPrediction',
+    'evaluate_model',
+    'make_hdul',
+    'make_parameter_table',
+    'make_spectra_tables',
+]

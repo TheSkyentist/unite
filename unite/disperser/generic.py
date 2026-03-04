@@ -5,13 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import jax.numpy as jnp
-from astropy import constants, units as u
+from astropy import units as u
 from jax.typing import ArrayLike
 
+from unite._utils import C_KMS
 from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
-
-_C_KMS: float = constants.c.to('km/s').value
-"""Speed of light in km/s."""
 
 
 class GenericDisperser(Disperser):
@@ -63,7 +61,13 @@ class GenericDisperser(Disperser):
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
     ) -> None:
-        super().__init__(unit, name=name, r_scale=r_scale, flux_scale=flux_scale, pix_offset=pix_offset)
+        super().__init__(
+            unit,
+            name=name,
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
         self._R_func = R_func
         self._dlam_dpix_func = dlam_dpix_func
 
@@ -142,7 +146,13 @@ class SimpleDisperser(Disperser):
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
     ) -> None:
-        super().__init__(unit, name=name, r_scale=r_scale, flux_scale=flux_scale, pix_offset=pix_offset)
+        super().__init__(
+            unit,
+            name=name,
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
 
         n_specified = sum(x is not None for x in (R, dlam, dvel))
         if n_specified != 1:
@@ -165,7 +175,7 @@ class SimpleDisperser(Disperser):
             self._R_grid = self._wavelength / dlam_arr
         else:
             dvel_arr = self._validated_input(dvel, 'dvel')
-            self._R_grid = _C_KMS / dvel_arr
+            self._R_grid = C_KMS / dvel_arr
 
     def _validated_input(self, value: ArrayLike, name: str) -> jnp.ndarray:
         """Convert *value* to a grid-shaped array.

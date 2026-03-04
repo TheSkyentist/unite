@@ -2,13 +2,84 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 import numpy as np
+from astropy import units as u
 
+from unite._utils import _ensure_wavelength
 from unite.continuum.library import ContinuumForm, Linear, form_from_dict
-from unite.prior import Prior, prior_from_dict
+from unite.prior import Fixed, Parameter, Prior, Uniform, prior_from_dict
+
+# ------------------------------------------------------------------
+# Parameter token classes
+# ------------------------------------------------------------------
+
+
+class ContinuumScale(Parameter):
+    """Typed token for the ``'scale'`` parameter slot.
+
+    ``scale`` is the continuum flux at ``normalization_wavelength``.  When
+    the same :class:`ContinuumScale` instance is placed in the ``'scale'``
+    slot of multiple :class:`ContinuumRegion` objects, those regions share a
+    single sampled amplitude in the model.
+
+    Placing a :class:`ContinuumScale` token in any slot **other** than
+    ``'scale'`` raises a :exc:`ValueError` at
+    :class:`ContinuumConfiguration` construction time.
+
+    Parameters
+    ----------
+    name : str, optional
+        Human-readable label used as the numpyro site name.
+    prior : Prior, optional
+        Prior distribution.  Defaults to ``Uniform(0, 10)``.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Uniform(0, 10)
+        super().__init__(name, prior=prior)
+
+
+class ContinuumNormalizationWavelength(Parameter):
+    """Typed token for the ``'normalization_wavelength'`` parameter slot.
+
+    ``normalization_wavelength`` is the rest-frame reference wavelength at
+    which the continuum equals ``scale``.  The model automatically applies
+    the systemic redshift before evaluating the continuum form.
+
+    Sharing the same :class:`ContinuumNormalizationWavelength` instance
+    across multiple regions ties them to a single consistent reference
+    wavelength — essential for globally-normalised forms such as
+    :class:`~unite.continuum.library.PowerLaw` and
+    :class:`~unite.continuum.library.Blackbody`.
+
+    Placing a :class:`ContinuumNormalizationWavelength` token in any slot
+    **other** than ``'normalization_wavelength'`` raises a :exc:`ValueError`
+    at :class:`ContinuumConfiguration` construction time.
+
+    Parameters
+    ----------
+    name : str, optional
+        Human-readable label used as the numpyro site name.
+    prior : Prior, optional
+        Prior distribution.  Defaults to ``Fixed(1.0)``.  In practice,
+        use ``Fixed(value)`` with your chosen rest-frame reference
+        wavelength.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Fixed(1.0)
+        super().__init__(name, prior=prior)
+
+
+# ------------------------------------------------------------------
+# ContinuumRegion
+# ------------------------------------------------------------------
 
 
 @dataclass
@@ -17,29 +88,37 @@ class ContinuumRegion:
 
     Parameters
     ----------
-    low : float
-        Lower wavelength bound.
-    high : float
-        Upper wavelength bound.
+    low : astropy.units.Quantity
+        Lower wavelength bound (must have length units).
+    high : astropy.units.Quantity
+        Upper wavelength bound (must have length units).
     form : ContinuumForm
         Functional form for the continuum in this region.
-    priors : dict of str to Prior
-        Per-region priors for the form's parameters, keyed by
+    params : dict of str to Parameter, optional
+        Parameter tokens for the form's parameters, keyed by
         :meth:`ContinuumForm.param_names`.  Parameters not listed here
-        use the form's :meth:`~ContinuumForm.default_priors`.
+        receive auto-created tokens when the region is added to a
+        :class:`ContinuumConfiguration`.
 
     Raises
     ------
+    TypeError
+        If ``low`` or ``high`` are not astropy Quantities with length units.
     ValueError
         If ``low >= high``.
     """
 
-    low: float
-    high: float
+    low: u.Quantity
+    high: u.Quantity
     form: ContinuumForm = field(default_factory=Linear)
-    priors: dict[str, Prior] = field(default_factory=dict)
+    params: dict[str, Parameter] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        low_q = _ensure_wavelength(self.low, 'low')
+        high_q = _ensure_wavelength(self.high, 'high')
+        self._unit: u.UnitBase = low_q.unit
+        self.low: float = float(low_q.value)
+        self.high: float = float(high_q.to(low_q.unit).value)
         if self.low >= self.high:
             msg = (
                 f'ContinuumRegion low must be < high, '
@@ -91,11 +170,11 @@ class ContinuumConfiguration:
     """Collection of continuum regions for spectral fitting.
 
     Regions are sorted by wavelength at construction time and must not
-    overlap.  A single :class:`ContinuumForm` instance may be shared
-    across multiple regions to express a global continuum component (e.g.
-    a power-law or blackbody that spans the whole spectrum) evaluated only
-    where data exist.  Shared form identity is preserved through
-    serialization round-trips.
+    overlap.  Parameters for each region are represented as
+    :class:`Parameter` tokens.  Sharing the **same** token instance
+    across multiple regions ties those parameters to a single sampled
+    value in the model — analogous to how :class:`~unite.line.config.FWHM`
+    and :class:`~unite.line.config.Flux` tokens work for emission lines.
 
     Parameters
     ----------
@@ -109,7 +188,7 @@ class ContinuumConfiguration:
 
     Examples
     --------
-    Auto-generate from line wavelengths:
+    Auto-generate from line wavelengths (independent local continua):
 
     >>> from unite.continuum import ContinuumConfiguration
     >>> cont = ContinuumConfiguration.from_lines(
@@ -117,13 +196,17 @@ class ContinuumConfiguration:
     >>> len(cont)
     2
 
-    Manual construction with a shared power-law:
+    Manual construction with a global power-law (shared parameters):
 
-    >>> from unite.continuum import ContinuumConfiguration, ContinuumRegion, PowerLaw
-    >>> pl = PowerLaw()
+    >>> from unite.continuum import (
+    ...     ContinuumConfiguration, Parameter, ContinuumRegion, PowerLaw)
+    >>> from unite.prior import Uniform
+    >>> pl = PowerLaw(pivot=2.5)
+    >>> amp = Parameter('pl_amp', prior=Uniform(0, 10))
+    >>> beta = Parameter('pl_beta', prior=Uniform(-5, 5))
     >>> cont = ContinuumConfiguration([
-    ...     ContinuumRegion(4600, 5100, pl),
-    ...     ContinuumRegion(6200, 6900, pl),
+    ...     ContinuumRegion(4600, 5100, pl, params={'amplitude': amp, 'beta': beta}),
+    ...     ContinuumRegion(6200, 6900, pl, params={'amplitude': amp, 'beta': beta}),
     ... ])
     """
 
@@ -132,34 +215,101 @@ class ContinuumConfiguration:
             list(regions) if regions else [], key=lambda r: r.low
         )
         self._check_overlaps()
+        self._resolved_params: list[dict[str, Parameter]] = self._resolve_params()
 
     def _check_overlaps(self) -> None:
-        for i in range(len(self._regions) - 1):
-            a, b = self._regions[i], self._regions[i + 1]
-            if a.high > b.low:
-                msg = (
-                    f'Continuum regions overlap: '
-                    f'[{a.low}, {a.high}] and [{b.low}, {b.high}]'
+        """Warn if any two regions overlap; overlapping contributions are summed."""
+        for i, a in enumerate(self._regions):
+            for b in self._regions[i + 1 :]:
+                if a.high <= b.low:
+                    break  # sorted, no further overlap possible
+                warnings.warn(
+                    f'Continuum regions [{a.low}, {a.high}] and '
+                    f'[{b.low}, {b.high}] overlap; their contributions '
+                    f'will be summed in the model.',
+                    UserWarning,
+                    stacklevel=3,
                 )
-                raise ValueError(msg)
+
+    def _resolve_params(self) -> list[dict[str, Parameter]]:
+        """Assign auto-created tokens to any unspecified params.
+
+        Each region receives independently named auto-created tokens for
+        every parameter not provided in ``ContinuumRegion.params``.
+        Naming follows ``cont_{form_type}_{region_idx}_{param_name}``
+        where *region_idx* counts instances of each form type in sorted
+        order.  Explicitly provided tokens are used as-is.
+
+        Raises
+        ------
+        ValueError
+            If a :class:`ContinuumScale` token is placed in a slot other
+            than ``'scale'``, or a
+            :class:`ContinuumNormalizationWavelength` token is placed in a
+            slot other than ``'normalization_wavelength'``.
+        """
+        type_counts: dict[str, int] = {}
+        resolved_list: list[dict[str, Parameter]] = []
+        for region in self._regions:
+            # Validate typed tokens before resolving.
+            for pn, tok in region.params.items():
+                if isinstance(tok, ContinuumScale) and pn != 'scale':
+                    msg = (
+                        f'ContinuumScale token can only be placed in the '
+                        f'"scale" slot, got "{pn}"'
+                    )
+                    raise ValueError(msg)
+                if (
+                    isinstance(tok, ContinuumNormalizationWavelength)
+                    and pn != 'normalization_wavelength'
+                ):
+                    msg = (
+                        f'ContinuumNormalizationWavelength token can only be placed '
+                        f'in the "normalization_wavelength" slot, got "{pn}"'
+                    )
+                    raise ValueError(msg)
+
+            tk = type(region.form).__name__.lower()
+            idx = type_counts.get(tk, 0)
+            type_counts[tk] = idx + 1
+            default_priors = region.form.default_priors(region_center=region.center)
+            resolved: dict[str, Parameter] = {}
+            for pn in region.form.param_names():
+                if pn in region.params:
+                    resolved[pn] = region.params[pn]
+                else:
+                    auto_name = f'cont_{tk}_{idx}_{pn}'
+                    resolved[pn] = Parameter(auto_name, prior=default_priors[pn])
+            resolved_list.append(resolved)
+        return resolved_list
+
+    @property
+    def resolved_params(self) -> list[dict[str, Parameter]]:
+        """Resolved parameter tokens for each region (read-only copy).
+
+        Index *i* contains the full ``{param_name: Parameter}`` mapping
+        for ``self.regions[i]``, including auto-created tokens for any
+        parameters the user did not explicitly provide.
+        """
+        return [dict(d) for d in self._resolved_params]
 
     @classmethod
     def from_lines(
         cls,
-        wavelengths: Sequence[float],
+        wavelengths: u.Quantity,
         pad: float = 0.05,
         form: ContinuumForm | None = None,
     ) -> ContinuumConfiguration:
         """Auto-generate continuum regions from line wavelengths.
 
         Each line is padded by a fractional amount in wavelength space,
-        and overlapping regions are merged.  All generated regions share
-        the same ``form`` instance.
+        and overlapping regions are merged.  All generated regions are
+        independent: each receives its own auto-created parameter tokens.
 
         Parameters
         ----------
-        wavelengths : sequence of float
-            Rest-frame wavelengths of spectral lines.
+        wavelengths : astropy.units.Quantity
+            Rest-frame wavelengths of spectral lines (must have length units).
         pad : float
             Fractional wavelength padding (dimensionless, delta-z
             equivalent).  Default ``0.05`` corresponds to ~15,000 km/s.
@@ -173,10 +323,13 @@ class ContinuumConfiguration:
 
         Raises
         ------
+        TypeError
+            If *wavelengths* is not an astropy Quantity with length units.
         ValueError
             If *wavelengths* is empty.
         """
-        wl = np.asarray(wavelengths, dtype=float)
+        wl_q = _ensure_wavelength(wavelengths, 'wavelengths')
+        wl = np.asarray(wl_q.value, dtype=float)
         if wl.size == 0:
             msg = 'wavelengths must not be empty.'
             raise ValueError(msg)
@@ -188,7 +341,10 @@ class ContinuumConfiguration:
             (float(w * (1.0 - pad)), float(w * (1.0 + pad))) for w in wl
         )
         merged = _merge_intervals(intervals)
-        regions = [ContinuumRegion(low=lo, high=hi, form=form) for lo, hi in merged]
+        regions = [
+            ContinuumRegion(low=lo * wl_q.unit, high=hi * wl_q.unit, form=form)
+            for lo, hi in merged
+        ]
         return cls(regions)
 
     # ------------------------------------------------------------------
@@ -199,21 +355,20 @@ class ContinuumConfiguration:
         """Serialize to a YAML-safe dictionary.
 
         Unique :class:`ContinuumForm` instances are collected into a
-        top-level ``'forms'`` section keyed by auto-generated names
-        (e.g. ``'powerlaw_0'``, ``'linear_0'``).  Each region entry
-        references its form by name, so shared form objects round-trip
-        correctly.
+        ``'forms'`` section keyed by auto-generated names.  Unique
+        :class:`Parameter` tokens are collected into a ``'params'``
+        section keyed by their names.  Each region references its form
+        and params by name, so shared token objects round-trip correctly.
 
         Returns
         -------
         dict
-            Keys: ``'forms'``, ``'regions'``.
+            Keys: ``'params'``, ``'forms'``, ``'regions'``.
         """
-        # Collect unique form objects in first-appearance order and auto-name them.
-        form_names: dict[int, str] = {}  # id(form) -> assigned name
+        # 1. Assign names to unique form objects.
+        form_names: dict[int, str] = {}
         type_counts: dict[str, int] = {}
         forms_section: dict[str, dict] = {}
-
         for region in self._regions:
             fid = id(region.form)
             if fid not in form_names:
@@ -224,18 +379,39 @@ class ContinuumConfiguration:
                 form_names[fid] = name
                 forms_section[name] = region.form.to_dict()
 
+        # 2. Collect unique Parameter tokens in first-appearance order.
+        #    Build param_namer first so dependent priors can reference other tokens.
+        param_namer: dict[object, str] = {}
+        params_order: list[tuple[str, Parameter]] = []
+        seen_tok_ids: set[int] = set()
+        for resolved in self._resolved_params:
+            for tok in resolved.values():
+                if id(tok) not in seen_tok_ids:
+                    seen_tok_ids.add(id(tok))
+                    param_namer[tok] = tok.name
+                    params_order.append((tok.name, tok))
+
+        params_section: dict[str, dict] = {
+            name: tok.prior.to_dict(param_namer) for name, tok in params_order
+        }
+
+        # 3. Serialize regions.
         regions_section = []
-        for region in self._regions:
+        for region, resolved in zip(self._regions, self._resolved_params, strict=True):
             rd: dict = {
                 'low': region.low,
                 'high': region.high,
+                'wavelength_unit': str(region._unit),
                 'form': form_names[id(region.form)],
+                'params': {pn: tok.name for pn, tok in resolved.items()},
             }
-            if region.priors:
-                rd['priors'] = {k: v.to_dict() for k, v in region.priors.items()}
             regions_section.append(rd)
 
-        return {'forms': forms_section, 'regions': regions_section}
+        return {
+            'params': params_section,
+            'forms': forms_section,
+            'regions': regions_section,
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> ContinuumConfiguration:
@@ -244,25 +420,39 @@ class ContinuumConfiguration:
         Parameters
         ----------
         d : dict
-            As produced by :meth:`to_dict`.  Must contain ``'forms'``
-            and ``'regions'`` keys.
+            As produced by :meth:`to_dict`.
 
         Returns
         -------
         ContinuumConfiguration
         """
+        # 1. Reconstruct form objects.
         form_objects: dict[str, ContinuumForm] = {
             name: form_from_dict(fd) for name, fd in d['forms'].items()
         }
+
+        # 2. Reconstruct Parameter tokens (two passes for dependent priors).
+        # Pass 1: create tokens with placeholder priors to build the registry.
+        token_registry: dict[str, Parameter] = {
+            name: Parameter(name, prior=Uniform(0, 1)) for name in d['params']
+        }
+        # Pass 2: overwrite with real priors (may reference tokens in registry).
+        for name, pd in d['params'].items():
+            token_registry[name].prior = prior_from_dict(
+                pd, token_registry=token_registry
+            )
+
+        # 3. Reconstruct regions.
         regions = []
         for rd in d['regions']:
-            priors = {k: prior_from_dict(v) for k, v in rd.get('priors', {}).items()}
+            params = {pn: token_registry[tn] for pn, tn in rd['params'].items()}
+            wl_unit = u.Unit(rd.get('wavelength_unit', 'um'))
             regions.append(
                 ContinuumRegion(
-                    low=rd['low'],
-                    high=rd['high'],
+                    low=rd['low'] * wl_unit,
+                    high=rd['high'] * wl_unit,
                     form=form_objects[rd['form']],
-                    priors=priors,
+                    params=params,
                 )
             )
         return cls(regions)
@@ -289,30 +479,26 @@ class ContinuumConfiguration:
         if not self._regions:
             return 'ContinuumConfiguration: empty'
 
-        # Collect unique forms
-        seen: dict[int, str] = {}
-        type_counts: dict[str, int] = {}
-        for r in self._regions:
-            fid = id(r.form)
-            if fid not in seen:
-                tk = type(r.form).__name__.lower()
-                idx = type_counts.get(tk, 0)
-                seen[fid] = f'{type(r.form).__name__}_{idx}'
-                type_counts[tk] = idx + 1
+        # Count unique param tokens.
+        seen_tok_ids: set[int] = set()
+        for resolved in self._resolved_params:
+            for tok in resolved.values():
+                seen_tok_ids.add(id(tok))
 
         header = (
-            f'ContinuumConfiguration: {len(self._regions)} regions, '
-            f'{len(seen)} unique form(s)'
+            f'ContinuumConfiguration: {len(self._regions)} region(s), '
+            f'{len(seen_tok_ids)} parameter(s)'
         )
 
+        # Build table.
         rows = []
-        for r in self._regions:
-            form_name = seen[id(r.form)]
-            # Show prior names in the table (only explicitly set ones)
-            prior_names = ', '.join(r.priors.keys()) if r.priors else '—'
-            rows.append((f'[{r.low}, {r.high}]', form_name, prior_names))
+        for region, resolved in zip(self._regions, self._resolved_params, strict=True):
+            range_str = f'[{region.low}, {region.high}]'
+            form_str = repr(region.form)
+            params_str = ', '.join(tok.name for tok in resolved.values())
+            rows.append((range_str, form_str, params_str))
 
-        col_headers = ('Range', 'Form', 'Priors')
+        col_headers = ('Range', 'Form', 'Parameters')
         widths = [len(h) for h in col_headers]
         for row in rows:
             for i, cell in enumerate(row):
@@ -324,32 +510,20 @@ class ContinuumConfiguration:
         for row in rows:
             lines.append('  ' + fmt.format(*row))
 
-        # Add prior details section (like Line config)
-        # Show all priors (both explicit and default) for all regions
-        
-        # Collect all unique priors across all regions
-        seen_priors: dict[int, tuple[str, object, str]] = {}  # (name, prior, region_info)
-        for r in self._regions:
-            # Add explicit priors
-            for name, prior in r.priors.items():
-                prior_id = id(prior)
-                if prior_id not in seen_priors:
-                    seen_priors[prior_id] = (name, prior, f'region [{r.low}, {r.high}]')
-            
-            # Add default priors that are not overridden
-            default_priors = r.form.default_priors()
-            for name, prior in default_priors.items():
-                if name not in r.priors:  # Only show if not explicitly set
-                    prior_id = id(prior)
-                    if prior_id not in seen_priors:
-                        seen_priors[prior_id] = (name, prior, f'region [{r.low}, {r.high}]')
-        
-        # Format priors section
-        if seen_priors:
+        # Parameters section: unique tokens in first-appearance order.
+        seen_tok_ids2: set[int] = set()
+        unique_toks: list[tuple[str, Parameter]] = []
+        for resolved in self._resolved_params:
+            for tok in resolved.values():
+                if id(tok) not in seen_tok_ids2:
+                    seen_tok_ids2.add(id(tok))
+                    unique_toks.append((tok.name, tok))
+
+        if unique_toks:
             lines.append('')
-            lines.append('  Priors:')
-            name_width = max(len(name) for name, _, _ in seen_priors.values())
-            for name, prior, region_info in seen_priors.values():
-                lines.append(f'    {name:<{name_width}}  {prior!r}  # {region_info}')
+            lines.append('  Parameters:')
+            name_width = max(len(n) for n, _ in unique_toks)
+            for name, tok in unique_toks:
+                lines.append(f'    {name:<{name_width}}  {tok.prior!r}')
 
         return '\n'.join(lines)

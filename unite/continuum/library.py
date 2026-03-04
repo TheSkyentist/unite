@@ -9,13 +9,14 @@ import jax.numpy as jnp
 from jax import Array
 from jax.typing import ArrayLike
 
+from unite._utils import _make_register
 from unite.continuum.functions import (
     bernstein_eval,
     bspline_eval,
     chebval,
     planck_function,
 )
-from unite.prior import Prior, Uniform
+from unite.prior import Fixed, Prior, Uniform
 
 if TYPE_CHECKING:
     pass
@@ -25,12 +26,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _FORM_REGISTRY: dict[str, type[ContinuumForm]] = {}
-
-
-def _register(cls: type[ContinuumForm]) -> type[ContinuumForm]:
-    """Register a ContinuumForm subclass for deserialization."""
-    _FORM_REGISTRY[cls.__name__] = cls
-    return cls
+_register = _make_register(_FORM_REGISTRY)
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +42,16 @@ class ContinuumForm(ABC):
     only static configuration like polynomial degree) and are fully
     serialisable for YAML round-trip.
 
+    All forms share a unified parameter interface:
+
+    * ``scale`` — the continuum flux at ``normalization_wavelength``.
+    * ``normalization_wavelength`` — rest-frame reference wavelength where
+      the continuum equals ``scale``.  Default prior is
+      ``Fixed(region_center)``, pinning it to the region midpoint.  Pass an
+      explicit :class:`~unite.continuum.config.ContinuumNormalizationWavelength`
+      token with ``Fixed(value)`` to share a consistent reference wavelength
+      across multiple regions.
+
     Subclasses must implement :meth:`param_names`, :meth:`default_priors`,
     :meth:`evaluate`, :meth:`to_dict`, and :meth:`from_dict`.
     """
@@ -57,14 +63,21 @@ class ContinuumForm(ABC):
         Returns
         -------
         tuple of str
-            Parameter names (e.g. ``('angle', 'offset')``).
+            Parameter names.  Always includes ``'scale'`` and
+            ``'normalization_wavelength'``.
         """
 
     @abstractmethod
-    def default_priors(self) -> dict[str, Prior]:
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         """Return sensible default priors for each parameter.
 
         The keys must match :meth:`param_names`.
+
+        Parameters
+        ----------
+        region_center : float
+            Midpoint of the continuum region, used as the default
+            ``Fixed`` value for ``normalization_wavelength``.
 
         Returns
         -------
@@ -73,7 +86,7 @@ class ContinuumForm(ABC):
 
     @property
     def n_params(self) -> int:
-        """Number of free parameters."""
+        """Number of free parameters (including Fixed reference parameters)."""
         return len(self.param_names())
 
     @abstractmethod
@@ -88,12 +101,15 @@ class ContinuumForm(ABC):
         Parameters
         ----------
         wavelength : ArrayLike
-            Wavelength array.
+            Wavelength array (observed frame).
         center : float
-            Reference wavelength (typically the midpoint of the
-            continuum region).
+            Region midpoint in observed frame (passed for convenience;
+            forms use ``params['normalization_wavelength']`` instead).
         params : dict of str to ArrayLike
             Parameter values keyed by :meth:`param_names`.
+            ``params['normalization_wavelength']`` is already in observed
+            frame (the model applies the systemic redshift before calling
+            this method).
 
         Returns
         -------
@@ -158,29 +174,37 @@ def form_from_dict(d: dict) -> ContinuumForm:
 
 @_register
 class Linear(ContinuumForm):
-    """Linear continuum: ``tan(angle) * (wavelength - center) + offset``.
-
-    Uses an angle parameterisation for the slope, which is better behaved
-    for sampling than a raw slope coefficient.
+    """Linear continuum: ``scale + slope * (wavelength - normalization_wavelength)``.
 
     Parameters (sampled)
     --------------------
-    angle : float
-        Slope angle in radians.
-    offset : float
-        Intercept at the region centre.
+    scale : float
+        Continuum level at ``normalization_wavelength``.
+    slope : float
+        Continuum slope in flux per wavelength unit.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Reference wavelength where the continuum equals ``scale``.
+        Default: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
-        return ('angle', 'offset')
+        return ('scale', 'slope', 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
-        return {'angle': Uniform(-jnp.pi / 2, jnp.pi / 2), 'offset': Uniform(0, 1)}
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        return {
+            'scale': Uniform(0, 10),
+            'slope': Uniform(-10, 10),
+            'normalization_wavelength': Fixed(region_center),
+        }
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        return jnp.tan(params['angle']) * (wavelength - center) + params['offset']
+        nw = params['normalization_wavelength']
+        return params['scale'] + params['slope'] * (wavelength - nw)
 
     def to_dict(self) -> dict:
         return {'type': 'Linear'}
@@ -192,26 +216,44 @@ class Linear(ContinuumForm):
 
 @_register
 class PowerLaw(ContinuumForm):
-    """Power-law continuum: ``amplitude * (wavelength / center) ** beta``.
+    """Power-law continuum: ``scale * (wavelength / normalization_wavelength) ** beta``.
+
+    The reference wavelength ``normalization_wavelength`` is a named
+    parameter with a default ``Fixed(region_center)`` prior — pinned to the
+    region midpoint when not explicitly set.  To share a consistent
+    reference across multiple regions (required for physically meaningful
+    parameter sharing), pass a
+    :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
+    ``Fixed(value)`` carrying your chosen reference wavelength.
 
     Parameters (sampled)
     --------------------
-    amplitude : float
-        Normalisation at the region centre.
+    scale : float
+        Continuum level at ``normalization_wavelength``.
     beta : float
         Power-law index.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Reference wavelength.  Default: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
-        return ('amplitude', 'beta')
+        return ('scale', 'beta', 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
-        return {'amplitude': Uniform(0, 10), 'beta': Uniform(-5, 5)}
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        return {
+            'scale': Uniform(0, 10),
+            'beta': Uniform(-5, 5),
+            'normalization_wavelength': Fixed(region_center),
+        }
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        return params['amplitude'] * (wavelength / center) ** params['beta']
+        nw = params['normalization_wavelength']
+        return params['scale'] * (wavelength / nw) ** params['beta']
 
     def to_dict(self) -> dict:
         return {'type': 'PowerLaw'}
@@ -225,13 +267,25 @@ class PowerLaw(ContinuumForm):
 class Polynomial(ContinuumForm):
     """Polynomial continuum of configurable degree.
 
-    Evaluates ``c0 + c1 * x + c2 * x**2 + ...`` where
-    ``x = wavelength - center``.
+    Evaluates ``scale + c1*x + c2*x**2 + ...`` where
+    ``x = wavelength - normalization_wavelength``.
 
     Parameters
     ----------
     degree : int
         Polynomial degree (default 1).
+
+    Parameters (sampled)
+    --------------------
+    scale : float
+        Continuum level at ``normalization_wavelength``.
+    c1, c2, ... : float
+        Higher-order polynomial coefficients.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Reference wavelength.  Default: ``Fixed(region_center)``.
     """
 
     def __init__(self, degree: int = 1) -> None:
@@ -246,17 +300,24 @@ class Polynomial(ContinuumForm):
         return self._degree
 
     def param_names(self) -> tuple[str, ...]:
-        return tuple(f'c{i}' for i in range(self._degree + 1))
+        if self._degree == 0:
+            return ('scale', 'normalization_wavelength')
+        return ('scale', *(f'c{i}' for i in range(1, self._degree + 1)), 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
-        return {f'c{i}': Uniform(-10, 10) for i in range(self._degree + 1)}
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        for i in range(1, self._degree + 1):
+            priors[f'c{i}'] = Uniform(-10, 10)
+        priors['normalization_wavelength'] = Fixed(region_center)
+        return priors
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        x = wavelength - center
-        result = jnp.zeros_like(x, dtype=float)
-        for i in range(self._degree + 1):
+        nw = params['normalization_wavelength']
+        x = wavelength - nw
+        result = jnp.full_like(x, params['scale'], dtype=float)
+        for i in range(1, self._degree + 1):
             result = result + params[f'c{i}'] * x**i
         return result
 
@@ -287,9 +348,16 @@ class Chebyshev(ContinuumForm):
     within the continuum region.  Numerically more stable than a standard
     polynomial basis for higher orders.
 
-    The x-coordinate is ``(wavelength - center) / half_width`` where
-    *half_width* should be set to the half-width of the region for proper
-    orthogonality.  Defaults to ``1.0`` (identity normalization).
+    The x-coordinate is ``(wavelength - normalization_wavelength) / half_width``
+    where *half_width* should be set to the half-width of the region for
+    proper orthogonality.  Defaults to ``1.0`` (identity normalization).
+
+    .. note::
+        ``scale`` is the T₀ (constant) Chebyshev coefficient, which equals
+        the mean value of the series over the interval.  For order ≥ 2, the
+        actual value at ``normalization_wavelength`` may differ from
+        ``scale`` by contributions from even-order terms.  For most smooth
+        continua this difference is small.
 
     Parameters
     ----------
@@ -299,6 +367,20 @@ class Chebyshev(ContinuumForm):
         Half-width of the continuum region in the same units as wavelength.
         Set to ``(high - low) / 2`` of the :class:`ContinuumRegion`.
         Default ``1.0``.
+
+    Parameters (sampled)
+    --------------------
+    scale : float
+        DC (T₀) coefficient — approximately the continuum level at
+        ``normalization_wavelength``.
+    c1, c2, ... : float
+        Higher-order Chebyshev coefficients.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Reference wavelength defining ``x = 0``.
+        Default: ``Fixed(region_center)``.
     """
 
     def __init__(self, order: int = 2, half_width: float = 1.0) -> None:
@@ -319,16 +401,25 @@ class Chebyshev(ContinuumForm):
         return self._half_width
 
     def param_names(self) -> tuple[str, ...]:
-        return tuple(f'c{i}' for i in range(self._order + 1))
+        if self._order == 0:
+            return ('scale', 'normalization_wavelength')
+        return ('scale', *(f'c{i}' for i in range(1, self._order + 1)), 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
-        return {f'c{i}': Uniform(-10, 10) for i in range(self._order + 1)}
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        for i in range(1, self._order + 1):
+            priors[f'c{i}'] = Uniform(-10, 10)
+        priors['normalization_wavelength'] = Fixed(region_center)
+        return priors
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        x = (wavelength - center) / self._half_width
-        coeffs = [params[f'c{i}'] for i in range(self._order + 1)]
+        nw = params['normalization_wavelength']
+        x = (wavelength - nw) / self._half_width
+        coeffs = [params['scale']] + [
+            params[f'c{i}'] for i in range(1, self._order + 1)
+        ]
         return chebval(x, coeffs)
 
     def to_dict(self) -> dict:
@@ -361,170 +452,148 @@ class Chebyshev(ContinuumForm):
 
 @_register
 class Blackbody(ContinuumForm):
-    """Planck blackbody continuum normalized at a pivot wavelength.
+    """Planck blackbody continuum normalized at a reference wavelength.
 
-    Evaluates ``amplitude * B_λ(T) / B_λ(pivot, T)`` so that *amplitude*
-    directly represents the continuum flux at *pivot_micron*.
+    Evaluates ``scale * B_λ(T) / B_λ(normalization_wavelength, T)`` so that
+    *scale* directly represents the continuum flux at
+    ``normalization_wavelength``.
 
-    Parameters
-    ----------
-    pivot_micron : float
-        Normalization wavelength in microns (default ``1.0``).
-
-    Parameters (sampled)
-    --------------------
-    amplitude : float
-        Continuum flux at the pivot wavelength.
-    temperature : float
-        Blackbody temperature in Kelvin.
-    """
-
-    def __init__(self, pivot_micron: float = 1.0) -> None:
-        self._pivot_micron = pivot_micron
-
-    @property
-    def pivot_micron(self) -> float:
-        """Pivot wavelength in microns."""
-        return self._pivot_micron
-
-    def param_names(self) -> tuple[str, ...]:
-        return ('amplitude', 'temperature')
-
-    def default_priors(self) -> dict[str, Prior]:
-        return {'amplitude': Uniform(0, 10), 'temperature': Uniform(100, 50000)}
-
-    def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
-    ) -> Array:
-        bb = planck_function(wavelength, params['temperature'], self._pivot_micron)
-        return params['amplitude'] * bb
-
-    def to_dict(self) -> dict:
-        return {'type': 'Blackbody', 'pivot_micron': self._pivot_micron}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> Blackbody:
-        return cls(pivot_micron=d.get('pivot_micron', 1.0))
-
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        return self._pivot_micron == other._pivot_micron  # type: ignore[attr-defined]
-
-    def __hash__(self) -> int:
-        return hash(('Blackbody', self._pivot_micron))
-
-    def __repr__(self) -> str:
-        return f'Blackbody(pivot_micron={self._pivot_micron})'
-
-
-@_register
-class ModifiedBlackbody(ContinuumForm):
-    """Modified blackbody: ``amplitude * B_λ(T) * (λ / pivot)^beta``.
-
-    The power-law modifier *beta* broadens (beta > 0) or narrows (beta < 0)
-    the SED relative to a pure blackbody.  *beta = 0* recovers
-    :class:`Blackbody`.
-
-    Parameters
-    ----------
-    pivot_micron : float
-        Normalization wavelength in microns (default ``1.0``).
+    ``normalization_wavelength`` is a named parameter with a default
+    ``Fixed(region_center)`` prior.  Pass an explicit
+    :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
+    ``Fixed(value)`` to pin it to a specific wavelength across multiple
+    regions.
 
     Parameters (sampled)
     --------------------
-    amplitude : float
-        Continuum flux at the pivot wavelength.
+    scale : float
+        Continuum flux at ``normalization_wavelength``.
     temperature : float
         Blackbody temperature in Kelvin.
-    beta : float
-        Power-law modifier index.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Reference wavelength in microns.  Default: ``Fixed(region_center)``.
     """
 
-    def __init__(self, pivot_micron: float = 1.0) -> None:
-        self._pivot_micron = pivot_micron
-
-    @property
-    def pivot_micron(self) -> float:
-        """Pivot wavelength in microns."""
-        return self._pivot_micron
-
     def param_names(self) -> tuple[str, ...]:
-        return ('amplitude', 'temperature', 'beta')
+        return ('scale', 'temperature', 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
-            'amplitude': Uniform(0, 10),
+            'scale': Uniform(0, 10),
             'temperature': Uniform(100, 50000),
-            'beta': Uniform(-4, 4),
+            'normalization_wavelength': Fixed(region_center),
         }
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        bb = planck_function(wavelength, params['temperature'], self._pivot_micron)
-        modifier = (wavelength / self._pivot_micron) ** params['beta']
-        return params['amplitude'] * bb * modifier
+        nw = params['normalization_wavelength']
+        bb = planck_function(wavelength, params['temperature'], nw)
+        return params['scale'] * bb
 
     def to_dict(self) -> dict:
-        return {'type': 'ModifiedBlackbody', 'pivot_micron': self._pivot_micron}
+        return {'type': 'Blackbody'}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Blackbody:
+        return cls()
+
+
+@_register
+class ModifiedBlackbody(ContinuumForm):
+    """Modified blackbody: ``scale * B_λ(T) * (λ / normalization_wavelength)^beta / B_λ(nw, T)``.
+
+    The power-law modifier *beta* broadens (beta > 0) or narrows (beta < 0)
+    the SED relative to a pure blackbody.  *beta = 0* recovers
+    :class:`Blackbody`.
+
+    ``normalization_wavelength`` is a named parameter with a default
+    ``Fixed(region_center)`` prior.
+
+    Parameters (sampled)
+    --------------------
+    scale : float
+        Continuum flux at ``normalization_wavelength``.
+    temperature : float
+        Blackbody temperature in Kelvin.
+    beta : float
+        Power-law modifier index.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Reference wavelength in microns.  Default: ``Fixed(region_center)``.
+    """
+
+    def param_names(self) -> tuple[str, ...]:
+        return ('scale', 'temperature', 'beta', 'normalization_wavelength')
+
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        return {
+            'scale': Uniform(0, 10),
+            'temperature': Uniform(100, 50000),
+            'beta': Uniform(-4, 4),
+            'normalization_wavelength': Fixed(region_center),
+        }
+
+    def evaluate(
+        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+    ) -> Array:
+        nw = params['normalization_wavelength']
+        bb = planck_function(wavelength, params['temperature'], nw)
+        modifier = (wavelength / nw) ** params['beta']
+        return params['scale'] * bb * modifier
+
+    def to_dict(self) -> dict:
+        return {'type': 'ModifiedBlackbody'}
 
     @classmethod
     def from_dict(cls, d: dict) -> ModifiedBlackbody:
-        return cls(pivot_micron=d.get('pivot_micron', 1.0))
-
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        return self._pivot_micron == other._pivot_micron  # type: ignore[attr-defined]
-
-    def __hash__(self) -> int:
-        return hash(('ModifiedBlackbody', self._pivot_micron))
-
-    def __repr__(self) -> str:
-        return f'ModifiedBlackbody(pivot_micron={self._pivot_micron})'
+        return cls()
 
 
 @_register
 class AttenuatedBlackbody(ContinuumForm):
     """Dust-attenuated blackbody continuum.
 
-    Evaluates ``amplitude * B_λ(T) * exp(-tau_v * [(λ/lambda_v)^alpha - (pivot/lambda_v)^alpha])``.
+    Evaluates
+    ``scale * B_λ(T) / B_λ(nw,T) * exp(-tau_v * [(λ/lambda_v)^alpha - (nw/lambda_v)^alpha])``.
 
-    Extinction is normalized at the pivot wavelength so that *amplitude*
+    Extinction is normalized at ``normalization_wavelength`` so that *scale*
     represents the **observed** (attenuated) flux there.  Negative *alpha*
     gives steeper extinction at short wavelengths (typical dust law).
 
+    ``normalization_wavelength`` is a named parameter with a default
+    ``Fixed(region_center)`` prior.
+
     Parameters
     ----------
-    pivot_micron : float
-        Normalization wavelength in microns (default ``1.0``).
     lambda_v_micron : float
         Reference wavelength for the extinction law in microns
         (default ``0.55``, corresponding to optical V band).
 
     Parameters (sampled)
     --------------------
-    amplitude : float
-        Observed continuum flux at the pivot wavelength.
+    scale : float
+        Observed continuum flux at ``normalization_wavelength``.
     temperature : float
         Blackbody temperature in Kelvin.
     tau_v : float
-        Optical depth at *lambda_v_micron*.
+        Optical depth at ``lambda_v_micron``.
     alpha : float
         Dust extinction power-law index (negative = steeper at short λ).
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Reference wavelength in microns.  Default: ``Fixed(region_center)``.
     """
 
-    def __init__(
-        self, pivot_micron: float = 1.0, lambda_v_micron: float = 0.55
-    ) -> None:
-        self._pivot_micron = pivot_micron
+    def __init__(self, lambda_v_micron: float = 0.55) -> None:
         self._lambda_v_micron = lambda_v_micron
-
-    @property
-    def pivot_micron(self) -> float:
-        """Pivot wavelength in microns."""
-        return self._pivot_micron
 
     @property
     def lambda_v_micron(self) -> float:
@@ -532,55 +601,44 @@ class AttenuatedBlackbody(ContinuumForm):
         return self._lambda_v_micron
 
     def param_names(self) -> tuple[str, ...]:
-        return ('amplitude', 'temperature', 'tau_v', 'alpha')
+        return ('scale', 'temperature', 'tau_v', 'alpha', 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
-            'amplitude': Uniform(0, 10),
+            'scale': Uniform(0, 10),
             'temperature': Uniform(100, 50000),
             'tau_v': Uniform(0, 5),
             'alpha': Uniform(-2, 0),
+            'normalization_wavelength': Fixed(region_center),
         }
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        bb = planck_function(wavelength, params['temperature'], self._pivot_micron)
+        nw = params['normalization_wavelength']
+        bb = planck_function(wavelength, params['temperature'], nw)
         ext_data = (wavelength / self._lambda_v_micron) ** params['alpha']
-        ext_pivot = (self._pivot_micron / self._lambda_v_micron) ** params['alpha']
+        ext_pivot = (nw / self._lambda_v_micron) ** params['alpha']
         extinction = jnp.exp(-params['tau_v'] * (ext_data - ext_pivot))
-        return params['amplitude'] * bb * extinction
+        return params['scale'] * bb * extinction
 
     def to_dict(self) -> dict:
-        return {
-            'type': 'AttenuatedBlackbody',
-            'pivot_micron': self._pivot_micron,
-            'lambda_v_micron': self._lambda_v_micron,
-        }
+        return {'type': 'AttenuatedBlackbody', 'lambda_v_micron': self._lambda_v_micron}
 
     @classmethod
     def from_dict(cls, d: dict) -> AttenuatedBlackbody:
-        return cls(
-            pivot_micron=d.get('pivot_micron', 1.0),
-            lambda_v_micron=d.get('lambda_v_micron', 0.55),
-        )
+        return cls(lambda_v_micron=d.get('lambda_v_micron', 0.55))
 
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return (  # type: ignore[attr-defined]
-            self._pivot_micron == other._pivot_micron
-            and self._lambda_v_micron == other._lambda_v_micron
-        )
+        return self._lambda_v_micron == other._lambda_v_micron  # type: ignore[attr-defined]
 
     def __hash__(self) -> int:
-        return hash(('AttenuatedBlackbody', self._pivot_micron, self._lambda_v_micron))
+        return hash(('AttenuatedBlackbody', self._lambda_v_micron))
 
     def __repr__(self) -> str:
-        return (
-            f'AttenuatedBlackbody(pivot_micron={self._pivot_micron}, '
-            f'lambda_v_micron={self._lambda_v_micron})'
-        )
+        return f'AttenuatedBlackbody(lambda_v_micron={self._lambda_v_micron})'
 
 
 @_register
@@ -589,6 +647,9 @@ class BSpline(ContinuumForm):
 
     The knot vector must be set via *knots* at construction time (typically
     derived from the wavelength coverage of the spectrum).
+
+    The first coefficient is named ``scale`` (overall amplitude level);
+    remaining coefficients are named ``coeff_1, coeff_2, ...``.
 
     Parameters
     ----------
@@ -600,8 +661,17 @@ class BSpline(ContinuumForm):
 
     Parameters (sampled)
     --------------------
-    coeff_0, coeff_1, …, coeff_{n_basis-1} : float
-        B-spline coefficients.
+    scale : float
+        First B-spline coefficient (overall amplitude level).
+    coeff_1, coeff_2, … : float
+        Remaining B-spline coefficients.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Included for API consistency; does not alter BSpline evaluation
+        (the wavelength mapping is defined by the knot vector).
+        Default: ``Fixed(region_center)``.
     """
 
     def __init__(self, knots, degree: int = 3) -> None:
@@ -615,15 +685,23 @@ class BSpline(ContinuumForm):
         return self._n_basis
 
     def param_names(self) -> tuple[str, ...]:
-        return tuple(f'coeff_{i}' for i in range(self._n_basis))
+        if self._n_basis == 1:
+            return ('scale', 'normalization_wavelength')
+        return ('scale', *(f'coeff_{i}' for i in range(1, self._n_basis)), 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
-        return {f'coeff_{i}': Uniform(-10, 10) for i in range(self._n_basis)}
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        for i in range(1, self._n_basis):
+            priors[f'coeff_{i}'] = Uniform(-10, 10)
+        priors['normalization_wavelength'] = Fixed(region_center)
+        return priors
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        coeffs = jnp.stack([params[f'coeff_{i}'] for i in range(self._n_basis)])
+        coeffs = jnp.stack(
+            [params['scale']] + [params[f'coeff_{i}'] for i in range(1, self._n_basis)]
+        )
         return bspline_eval(wavelength, coeffs, self._knots, self._degree)
 
     def to_dict(self) -> dict:
@@ -659,6 +737,9 @@ class Bernstein(ContinuumForm):
     Bernstein basis polynomials are non-negative on ``[0, 1]``, so fitting
     with positive coefficients guarantees a positive continuum everywhere.
 
+    The first coefficient is named ``scale``; remaining coefficients are
+    named ``coeff_1, coeff_2, ...``.
+
     Parameters
     ----------
     degree : int
@@ -668,8 +749,17 @@ class Bernstein(ContinuumForm):
 
     Parameters (sampled)
     --------------------
-    coeff_0, coeff_1, …, coeff_{degree} : float
-        Bernstein coefficients (positive values give positive continuum).
+    scale : float
+        First Bernstein coefficient (positive values give positive continuum).
+    coeff_1, coeff_2, … : float
+        Remaining Bernstein coefficients.
+
+    Parameters (Fixed by default)
+    ------------------------------
+    normalization_wavelength : float
+        Included for API consistency; does not alter Bernstein evaluation
+        (the wavelength mapping is defined by ``wavelength_min/max``).
+        Default: ``Fixed(region_center)``.
     """
 
     def __init__(
@@ -690,15 +780,24 @@ class Bernstein(ContinuumForm):
         return self._degree
 
     def param_names(self) -> tuple[str, ...]:
-        return tuple(f'coeff_{i}' for i in range(self._degree + 1))
+        if self._degree == 0:
+            return ('scale', 'normalization_wavelength')
+        return ('scale', *(f'coeff_{i}' for i in range(1, self._degree + 1)), 'normalization_wavelength')
 
-    def default_priors(self) -> dict[str, Prior]:
-        return {f'coeff_{i}': Uniform(0, 10) for i in range(self._degree + 1)}
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        for i in range(1, self._degree + 1):
+            priors[f'coeff_{i}'] = Uniform(0, 10)
+        priors['normalization_wavelength'] = Fixed(region_center)
+        return priors
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
-        coeffs = jnp.stack([params[f'coeff_{i}'] for i in range(self._degree + 1)])
+        coeffs = jnp.stack(
+            [params['scale']]
+            + [params[f'coeff_{i}'] for i in range(1, self._degree + 1)]
+        )
         return bernstein_eval(
             wavelength, coeffs, self._wavelength_min, self._wavelength_max, self._binom
         )

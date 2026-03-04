@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 from astropy import units as u
 
+from unite._utils import _alpha_name, _broadcast, _ensure_wavelength
 from unite.line.profiles import Profile, profile_from_dict, resolve_profile
 from unite.prior import Parameter, Prior, Uniform, prior_from_dict
 
@@ -78,33 +79,10 @@ class Flux(Parameter):
 # Alphabet-based auto-naming
 # ------------------------------------------------------------------
 
-_LETTERS = 'abcdefghijklmnopqrstuvwxyz'
-
-
-def _alpha_name(n: int) -> str:
-    """Return Excel-style column name for index *n* (0 → 'a', 25 → 'z', 26 → 'aa', …)."""
-    result = ''
-    n += 1
-    while n > 0:
-        n, r = divmod(n - 1, 26)
-        result = _LETTERS[r] + result
-    return result
-
 
 # ------------------------------------------------------------------
 # Wavelength extraction
 # ------------------------------------------------------------------
-
-
-def _ensure_wavelength(center: u.Quantity):
-    """Ensure that the center wavelength is a Quantity in Angstrom."""
-    if not isinstance(center, u.Quantity):
-        raise TypeError(f'center wavelength must be a Quantity, got {type(center)}')
-    if not center.unit.is_equivalent(u.AA):
-        raise ValueError(
-            f'center wavelength must have units of length, got {center.unit}'
-        )
-    return center
 
 
 # ------------------------------------------------------------------
@@ -536,22 +514,10 @@ class LineConfiguration:
         if n == 0:
             raise ValueError("'centers' must be non-empty.")
 
-        def _broadcast(val, arg_name: str) -> list:
-            if isinstance(val, list | tuple):
-                if len(val) == 1:
-                    return list(val) * n
-                if len(val) != n:
-                    raise ValueError(
-                        f"'{arg_name}' has {len(val)} entries; "
-                        f'expected 1 or {n} (len(centers)).'
-                    )
-                return list(val)
-            return [val] * n
-
-        redshifts = _broadcast(redshift, 'redshift')
-        fluxes = _broadcast(flux, 'flux')
-        strengths = _broadcast(strength, 'strength')
-        broadcasted_kwargs = {k: _broadcast(v, k) for k, v in param_kwargs.items()}
+        redshifts = _broadcast(redshift, 'redshift', n)
+        fluxes = _broadcast(flux, 'flux', n)
+        strengths = _broadcast(strength, 'strength', n)
+        broadcasted_kwargs = {k: _broadcast(v, k, n) for k, v in param_kwargs.items()}
 
         for i, center in enumerate(centers):
             kw = {k: v[i] for k, v in broadcasted_kwargs.items()}
@@ -765,6 +731,43 @@ class LineConfiguration:
 
         result['lines'] = lines
         return result
+
+    @property
+    def wavelengths(self) -> list[u.Quantity]:
+        """Rest-frame wavelengths as a list of Quantity values (one per line)."""
+        return [e.wavelength for e in self._entries]
+
+    @property
+    def centers(self) -> u.Quantity:
+        """Rest-frame wavelengths of all lines in this configuration."""
+        return u.Quantity([e.wavelength for e in self._entries])
+
+    def _filter(self, mask: list[bool]) -> LineConfiguration:
+        """Return a new configuration keeping only entries where *mask* is True.
+
+        Parameters
+        ----------
+        mask : list of bool
+            Boolean mask with one entry per line.
+
+        Returns
+        -------
+        LineConfiguration
+            Filtered copy (tokens are shared, not duplicated).
+        """
+        new = LineConfiguration()
+        for keep, entry in zip(mask, self._entries, strict=True):
+            if keep:
+                new.add_line(
+                    entry.name,
+                    entry.wavelength,
+                    profile=entry.profile,
+                    redshift=entry.redshift,
+                    flux=entry.flux,
+                    strength=entry.strength,
+                    **entry.fwhms,
+                )
+        return new
 
     @classmethod
     def from_dict(cls, d: dict) -> LineConfiguration:

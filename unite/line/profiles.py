@@ -8,6 +8,7 @@ import jax
 from jax import Array
 from jax.typing import ArrayLike
 
+from unite._utils import _make_register
 from unite.line.functions import (
     integrate_gaussHermite,
     integrate_gaussian,
@@ -126,12 +127,7 @@ class Profile(ABC):
 # -------------------------------------------------------------------
 
 _PROFILE_REGISTRY: dict[str, type[Profile]] = {}
-
-
-def _register(cls: type[Profile]) -> type[Profile]:
-    """Register a profile class for deserialization."""
-    _PROFILE_REGISTRY[cls.__name__] = cls
-    return cls
+_register = _make_register(_PROFILE_REGISTRY)
 
 
 def profile_from_dict(d: dict) -> Profile:

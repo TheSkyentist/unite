@@ -1,6 +1,11 @@
 """Continuum configuration and functional forms."""
 
-from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
+from unite.continuum.config import (
+    ContinuumConfiguration,
+    ContinuumNormalizationWavelength,
+    ContinuumRegion,
+    ContinuumScale,
+)
 from unite.continuum.library import (
     AttenuatedBlackbody,
     Bernstein,
@@ -23,7 +28,9 @@ __all__ = [
     'Chebyshev',
     'ContinuumConfiguration',
     'ContinuumForm',
+    'ContinuumNormalizationWavelength',
     'ContinuumRegion',
+    'ContinuumScale',
     'Linear',
     'ModifiedBlackbody',
     'Polynomial',

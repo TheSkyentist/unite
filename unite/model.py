@@ -8,23 +8,20 @@ function that can be passed to any numpyro inference algorithm (NUTS, SVI, etc.)
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpyro
-from astropy import constants
 from numpyro import deterministic as determ, distributions as dist
 
+from unite._utils import C_KMS, _wavelength_conversion_factor
 from unite.continuum.config import ContinuumConfiguration
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.line.profiles import integrate_lines
-from unite.prior import Fixed, Prior, topological_sort
+from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum.spectrum import Spectra, Spectrum
-
-_C_KMS: float = constants.c.to('km/s').value
-"""Speed of light in km/s."""
-
 
 # ------------------------------------------------------------------
 # ModelArgs — data bundle for the numpyro model function
@@ -48,6 +45,9 @@ class ModelArgs:
         Systemic redshift.
     cont_config : ContinuumConfiguration or None
         Continuum configuration.
+    cont_resolved_params : list of dict or None
+        Resolved ``{param_name: ContinuumParam}`` mappings, one per region,
+        as returned by :attr:`ContinuumConfiguration.resolved_params`.
     all_priors : dict of str to Prior
         All parameters with their priors (line, calibration, continuum).
     dependency_order : list of str
@@ -58,9 +58,19 @@ class ModelArgs:
     spectra: list[Spectrum]
     redshift: float
     cont_config: ContinuumConfiguration | None
+    cont_resolved_params: list[dict[str, Parameter]] | None
     all_priors: dict[str, Prior]
     dependency_order: list[str]
     name_to_token: dict[str, object]
+    # --- Wavelength unit conversion ---
+    spec_to_canonical: list[float]
+    # --- Pre-converted continuum bounds (rest-frame, canonical unit) ---
+    cont_low: list[float] | None
+    cont_high: list[float] | None
+    cont_center: list[float] | None
+    # --- Flux normalization ---
+    norm_factors: list[float]
+    line_flux_scale: float
 
 
 # ------------------------------------------------------------------
@@ -76,15 +86,14 @@ def unite_model(args: ModelArgs) -> None:
     Parameter broadcasting from unique tokens to per-line arrays is done
     with precomputed indicator matrices.
 
+    Wavelength unit conversion is handled via pre-computed scalar factors
+    stored in ``args.spec_to_canonical`` (one per spectrum).  Flux is
+    normalized per spectrum so that the likelihood operates on O(1) values.
+
     Parameters
     ----------
     args : ModelArgs
         Pre-built data bundle from :meth:`ModelBuilder.build`.
-
-    Notes
-    -----
-    All wavelengths (line centers and spectrum pixel edges) must be in
-    consistent units.  No unit conversion is performed at runtime.
     """
     cm = args.matrices
     z_sys = args.redshift
@@ -118,16 +127,16 @@ def unite_model(args: ModelArgs) -> None:
     z_vec = jnp.stack([context[n] for n in cm.z_names])
     z_per_line = z_vec @ cm.z_matrix  # (n_lines,)
 
-    # Observed-frame centers.
+    # Observed-frame centers (in canonical wavelength unit).
     centers = cm.wavelengths * (1.0 + z_sys + z_per_line)  # (n_lines,)
 
-    # Slot 0: primary velocity FWHM → wavelength units.
+    # Slot 0: primary velocity FWHM → canonical wavelength units.
     if cm.p0_names:
         p0_vec = jnp.stack([context[n] for n in cm.p0_names])
         p0_kms = p0_vec @ cm.p0_matrix  # (n_lines,)
     else:
         p0_kms = jnp.zeros(n_lines)
-    p0 = centers * p0_kms / _C_KMS  # wavelength units
+    p0 = centers * p0_kms / C_KMS  # canonical wavelength units
 
     # Slot 1: velocity FWHMs (p1v) + dimensionless params (p1d), summed.
     if cm.p1v_names:
@@ -135,7 +144,7 @@ def unite_model(args: ModelArgs) -> None:
         p1v_kms = p1v_vec @ cm.p1v_matrix  # (n_lines,)
     else:
         p1v_kms = jnp.zeros(n_lines)
-    p1v = centers * p1v_kms / _C_KMS
+    p1v = centers * p1v_kms / C_KMS
 
     if cm.p1d_names:
         p1d_vec = jnp.stack([context[n] for n in cm.p1d_names])
@@ -151,9 +160,16 @@ def unite_model(args: ModelArgs) -> None:
     else:
         p2 = jnp.zeros(n_lines)
 
+    # Expose normalization metadata as deterministics for back-conversion.
+    determ('line_flux_scale', jnp.asarray(args.line_flux_scale))
+    determ('norm_factors', jnp.asarray(args.norm_factors))
+
     # --- 3. Per-spectrum likelihood ---
     for i, spectrum in enumerate(args.spectra):
         disp = spectrum.disperser
+        wl_scale = args.spec_to_canonical[i]
+        inv_wl_scale = 1.0 / wl_scale
+        norm = args.norm_factors[i]
 
         # Calibration values (fall back to identity when no token is attached).
         r_scale = context[disp.r_scale.name] if disp.r_scale is not None else 1.0
@@ -164,45 +180,63 @@ def unite_model(args: ModelArgs) -> None:
             context[disp.pix_offset.name] if disp.pix_offset is not None else 0.0
         )
 
-        # Apply pixel offset: shift edges by offset * dlam_dpix.
-        low = spectrum.low
-        high = spectrum.high
+        # Pixel edges in canonical wavelength unit.
+        low = spectrum.low * wl_scale
+        high = spectrum.high * wl_scale
         if disp.pix_offset is not None:
-            shift = pix_offset * disp.dlam_dpix((low + high) / 2.0)
+            mid_disp = (spectrum.low + spectrum.high) / 2.0  # disperser unit
+            shift = pix_offset * disp.dlam_dpix(mid_disp) * wl_scale
             low = low + shift
             high = high + shift
 
         wavelength = (low + high) / 2.0
 
-        # LSF FWHM at each line centre (n_lines,), in wavelength units.
-        lsf_fwhm = centers / (disp.R(centers) * r_scale)
+        # LSF FWHM at each line centre (n_lines,).
+        # R() expects disperser-unit wavelengths, result is in canonical unit.
+        lsf_fwhm = centers / (disp.R(centers * inv_wl_scale) * r_scale)
 
-        # Integrate all lines simultaneously and divide by pixel width to get average flux density in pixel.
+        # Integrate all lines simultaneously and divide by pixel width
+        # to get average flux density per pixel.
         pixints = integrate_lines(
             low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
         ) / (high - low)
 
-        # Sum over lines weighted by flux.
-        line_model = (flux_per_line[:, None] * pixints).sum(axis=0)  # (n_pixels,)
+        # Sum over lines weighted by flux, scaled by line_flux_scale and
+        # divided by norm to bring to the normalized O(1) space.
+        line_model = (
+            (flux_per_line * args.line_flux_scale / norm)[:, None] * pixints
+        ).sum(axis=0)  # (n_pixels,)
 
-        # Continuum.
+        # Continuum (evaluated in canonical-unit wavelengths, then normalized).
         continuum = jnp.zeros(spectrum.npix)
         if args.cont_config is not None:
             for k, region in enumerate(args.cont_config):
-                obs_low = region.low * (1.0 + z_sys)
-                obs_high = region.high * (1.0 + z_sys)
-                obs_center = region.center * (1.0 + z_sys)
+                obs_low = args.cont_low[k] * (1.0 + z_sys)
+                obs_high = args.cont_high[k] * (1.0 + z_sys)
+                obs_center = args.cont_center[k] * (1.0 + z_sys)
                 in_region = (wavelength >= obs_low) & (wavelength <= obs_high)
                 cont_params = {
-                    pn: context[f'cont_{pn}_{k}'] for pn in region.form.param_names()
+                    pn: (
+                        context[tok.name] * (1.0 + z_sys)
+                        if pn == 'normalization_wavelength'
+                        else context[tok.name]
+                    )
+                    for pn, tok in args.cont_resolved_params[k].items()
                 }
                 region_cont = region.form.evaluate(wavelength, obs_center, cont_params)
                 continuum = continuum + jnp.where(in_region, region_cont, 0.0)
 
-        # Likelihood.
-        model = flux_scale * determ(f'{spectrum.name}_model', (line_model + continuum))
+        # Likelihood (normalized flux space).
+        model = flux_scale * determ(
+            f'{spectrum.name}_model', line_model + continuum / norm
+        )
+        determ(f'{spectrum.name}_norm', jnp.asarray(norm))
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
-        numpyro.sample(obs_name, dist.Normal(model, spectrum.error), obs=spectrum.flux)
+        numpyro.sample(
+            obs_name,
+            dist.Normal(model, spectrum.scaled_error / norm),
+            obs=spectrum.flux / norm,
+        )
 
 
 # ------------------------------------------------------------------
@@ -241,12 +275,53 @@ class ModelBuilder:
         continuum_config: ContinuumConfiguration | None,
         spectra: Spectra,
     ) -> None:
+        self._spectra = spectra
+
+        # --- Auto-prepare if needed ---
+        if not spectra.is_prepared:
+            warnings.warn(
+                'Spectra not prepared; calling spectra.prepare() with defaults. '
+                'Call spectra.prepare(line_config, continuum_config) explicitly '
+                'for full control.',
+                UserWarning,
+                stacklevel=2,
+            )
+            line_config, continuum_config = spectra.prepare(
+                line_config, continuum_config
+            )
+        else:
+            # Use the prepared configs.
+            line_config = spectra.prepared_line_config
+            continuum_config = spectra.prepared_cont_config
+
+        # --- Auto-compute scales if needed ---
+        if spectra.line_scale is None:
+            warnings.warn(
+                'Line scale not set; calling spectra.compute_scales() with '
+                'defaults. Call spectra.compute_scales(line_config, '
+                'continuum_config) explicitly for full control.',
+                UserWarning,
+                stacklevel=2,
+            )
+            spectra.compute_scales(line_config, continuum_config)
+
         self._line_config = line_config
         self._cont_config = continuum_config
-        self._spectra = spectra
+
+        # --- Canonical wavelength unit: use the first spectrum's disperser unit ---
+        self._canonical_unit = spectra[0].unit
 
         # Build precomputed matrices from line entries.
         self._matrices = line_config.build_matrices()
+
+        # Convert line wavelengths to canonical unit.
+        # Each line may have a different Quantity unit, so convert per-line.
+        if len(line_config) > 0:
+            canon_wls = jnp.array([
+                float(e.wavelength.to(self._canonical_unit).value)
+                for e in line_config._entries
+            ])
+            self._matrices.wavelengths = canon_wls
 
         # --- Collect all unique parameter tokens for prior / topo-sort ---
         all_priors: dict[str, Prior] = dict(self._matrices.priors)
@@ -271,14 +346,16 @@ class ModelBuilder:
                         all_priors[tok.name] = tok.prior
                         param_to_name[tok] = tok.name
 
-        # Continuum parameters (no token objects; keyed by site name directly).
+        # Continuum parameters: collect unique ContinuumParam tokens by identity.
+        # Shared tokens (same object in multiple regions) produce one numpyro site.
         if continuum_config is not None:
-            for k, region in enumerate(continuum_config):
-                default_priors = region.form.default_priors()
-                for pn in region.form.param_names():
-                    all_priors[f'cont_{pn}_{k}'] = region.priors.get(
-                        pn, default_priors[pn]
-                    )
+            seen_cont_ids: set[int] = set()
+            for resolved in continuum_config.resolved_params:
+                for tok in resolved.values():
+                    if id(tok) not in seen_cont_ids:
+                        seen_cont_ids.add(id(tok))
+                        all_priors[tok.name] = tok.prior
+                        param_to_name[tok] = tok.name
 
         self._all_priors = all_priors
         self._dep_order = (
@@ -305,13 +382,120 @@ class ModelBuilder:
         model_args : ModelArgs
             Pre-built data bundle to pass to the model function.
         """
+        # Per-spectrum wavelength conversion factors.
+        spec_to_canonical = [
+            _wavelength_conversion_factor(s.unit, self._canonical_unit)
+            for s in self._spectra
+        ]
+
+        # Per-spectrum flux normalization.
+        norm_factors = [_compute_norm_factor(s) for s in self._spectra]
+
+        # Line flux scale (from Spectra.compute_scales).
+        line_flux_scale = self._spectra.line_scale
+
+        # Pre-convert continuum region bounds to canonical unit.
+        if self._cont_config is not None:
+            cont_low = []
+            cont_high = []
+            cont_center = []
+            for region in self._cont_config:
+                conv = _wavelength_conversion_factor(region._unit, self._canonical_unit)
+                cont_low.append(region.low * conv)
+                cont_high.append(region.high * conv)
+                cont_center.append(region.center * conv)
+        else:
+            cont_low = None
+            cont_high = None
+            cont_center = None
+
         args = ModelArgs(
             matrices=self._matrices,
             spectra=list(self._spectra),
             redshift=self._spectra.redshift,
             cont_config=self._cont_config,
+            cont_resolved_params=(
+                self._cont_config.resolved_params
+                if self._cont_config is not None
+                else None
+            ),
             all_priors=self._all_priors,
             dependency_order=self._dep_order,
             name_to_token=self._name_to_token,
+            spec_to_canonical=spec_to_canonical,
+            cont_low=cont_low,
+            cont_high=cont_high,
+            cont_center=cont_center,
+            norm_factors=norm_factors,
+            line_flux_scale=line_flux_scale,
         )
         return unite_model, args
+
+
+# ------------------------------------------------------------------
+# Normalization helpers
+# ------------------------------------------------------------------
+
+
+def _compute_norm_factor(spectrum: Spectrum) -> float:
+    """Robust scale factor to bring a spectrum's flux to ~O(1).
+
+    Uses the median of the absolute non-zero flux values.
+
+    Parameters
+    ----------
+    spectrum : Spectrum
+
+    Returns
+    -------
+    float
+        Positive normalization factor.
+    """
+    absflux = jnp.abs(spectrum.flux)
+    positive = absflux[absflux > 0]
+    if positive.size == 0:
+        fallback = float(jnp.max(spectrum.error))
+        return fallback if fallback > 0 else 1.0
+    return float(jnp.median(positive))
+
+
+def _compute_line_flux_scale(
+    spectra: list[Spectrum],
+    matrices: ConfigMatrices,
+    spec_to_canonical: list[float],
+    norm_factors: list[float],
+    z_sys: float,
+) -> float:
+    """Estimate a characteristic integrated line flux from the data.
+
+    The estimate is ``peak_flux_density * typical_linewidth`` where
+    the linewidth is derived from the disperser resolution at the
+    median wavelength of each spectrum.
+
+    Parameters
+    ----------
+    spectra : list of Spectrum
+    matrices : ConfigMatrices
+    spec_to_canonical : list of float
+    norm_factors : list of float
+    z_sys : float
+
+    Returns
+    -------
+    float
+        Positive scale factor for line fluxes, or 1.0 as fallback.
+    """
+    max_scale = 0.0
+    for i, spectrum in enumerate(spectra):
+        s2c = spec_to_canonical[i]
+        norm = norm_factors[i]
+        # Peak normalized flux density.
+        peak_fd = float(jnp.max(jnp.abs(spectrum.flux))) / norm
+        # Typical line width in canonical wavelength units:
+        # use the median pixel centre and disperser R to get LSF FWHM.
+        mid_wl = float(jnp.median(spectrum.wavelength))
+        lsf_fwhm = mid_wl / spectrum.disperser.R(mid_wl) * s2c
+        # Characteristic flux = peak_fd * ~3 * lsf_fwhm (a few resolution elements).
+        flux_est = peak_fd * 3.0 * lsf_fwhm
+        max_scale = max(max_scale, flux_est)
+    return max_scale if max_scale > 0 else 1.0

@@ -9,14 +9,12 @@ import jax.numpy as jnp
 from astropy import units as u
 from jax.typing import ArrayLike
 
+from unite._utils import C_KMS, _ensure_flux_density, _ensure_wavelength
 from unite.disperser.base import Disperser
 
 if TYPE_CHECKING:
     from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
     from unite.line.config import LineConfiguration
-
-_C_KMS: float = 299_792.458
-"""Speed of light in km/s."""
 
 
 class Spectrum:
@@ -66,7 +64,13 @@ class Spectrum:
         disperser: Disperser,
         *,
         name: str = '',
+        flux_unit: u.UnitBase | None = None,
     ) -> None:
+        # -- flux unit --------------------------------------------------------
+        if flux_unit is not None:
+            _ensure_flux_density(flux_unit)
+        self._flux_unit = flux_unit
+
         # -- disperser --------------------------------------------------------
         if not isinstance(disperser, Disperser):
             msg = (
@@ -77,8 +81,8 @@ class Spectrum:
         self.disperser = disperser
 
         # -- wavelength edges -------------------------------------------------
-        low = _validated_wavelength(low, 'low')
-        high = _validated_wavelength(high, 'high')
+        low = _ensure_wavelength(low, 'low', ndim=1)
+        high = _ensure_wavelength(high, 'high', ndim=1)
 
         if low.shape != high.shape:
             msg = (
@@ -109,6 +113,7 @@ class Spectrum:
 
         self._flux = flux
         self._error = error
+        self._error_scale: float = 1.0
 
         # -- metadata ---------------------------------------------------------
         self.name = name or disperser.name
@@ -149,6 +154,28 @@ class Spectrum:
     def unit(self) -> u.UnitBase:
         """Wavelength unit inherited from the disperser."""
         return self.disperser.unit
+
+    @property
+    def flux_unit(self) -> u.UnitBase | None:
+        """Flux density unit, or ``None`` if unspecified."""
+        return self._flux_unit
+
+    @property
+    def error_scale(self) -> float:
+        """Multiplicative scale factor applied to errors."""
+        return self._error_scale
+
+    @error_scale.setter
+    def error_scale(self, value: float) -> None:
+        if value <= 0:
+            msg = f'error_scale must be > 0, got {value}'
+            raise ValueError(msg)
+        self._error_scale = float(value)
+
+    @property
+    def scaled_error(self) -> jnp.ndarray:
+        """Flux uncertainty scaled by :attr:`error_scale`."""
+        return self._error * self._error_scale
 
     @property
     def wavelength_range(self) -> tuple[float, float]:
@@ -204,27 +231,6 @@ class Spectrum:
 
 
 # ---------------------------------------------------------------------------
-# Validation helper (module-private)
-# ---------------------------------------------------------------------------
-
-
-def _validated_wavelength(value: u.Quantity, name: str) -> u.Quantity:
-    """Validate that *value* is a 1-D Quantity with wavelength dimensions."""
-    if not isinstance(value, u.Quantity):
-        msg = f'{name} must be an astropy Quantity, got {type(value).__name__}.'
-        raise TypeError(msg)
-    if value.unit.physical_type != 'length':
-        msg = (
-            f'{name} must have wavelength (length) dimensions, '
-            f'got {value.unit.physical_type!r}.'
-        )
-        raise TypeError(msg)
-    if value.ndim != 1:
-        msg = f'{name} must be 1-D, got {value.ndim}-D array.'
-        raise ValueError(msg)
-    return value
-
-
 # ---------------------------------------------------------------------------
 # Spectra collection
 # ---------------------------------------------------------------------------
@@ -264,6 +270,11 @@ class Spectra:
                 raise TypeError(msg)
         self._spectra: list[Spectrum] = list(spectra)
         self._redshift: float = float(redshift)
+        self._line_scale: float | None = None
+        self._continuum_scale: float | None = None
+        self._is_prepared: bool = False
+        self._prepared_line_config: LineConfiguration | None = None
+        self._prepared_cont_config: ContinuumConfiguration | None = None
 
     # -- properties -----------------------------------------------------------
 
@@ -271,6 +282,189 @@ class Spectra:
     def redshift(self) -> float:
         """Systemic redshift estimate."""
         return self._redshift
+
+    @property
+    def line_scale(self) -> float | None:
+        """Characteristic line flux scale, or ``None`` if not yet computed."""
+        return self._line_scale
+
+    @line_scale.setter
+    def line_scale(self, value: float) -> None:
+        if value <= 0:
+            msg = f'line_scale must be > 0, got {value}'
+            raise ValueError(msg)
+        self._line_scale = float(value)
+
+    @property
+    def continuum_scale(self) -> float | None:
+        """Characteristic continuum flux scale, or ``None`` if not yet computed."""
+        return self._continuum_scale
+
+    @continuum_scale.setter
+    def continuum_scale(self, value: float) -> None:
+        if value <= 0:
+            msg = f'continuum_scale must be > 0, got {value}'
+            raise ValueError(msg)
+        self._continuum_scale = float(value)
+
+    def compute_scales(
+        self,
+        line_config: LineConfiguration,
+        continuum_config: ContinuumConfiguration | None = None,
+        *,
+        max_fwhm_kms: float = 1000.0,
+        linedet: float = 1000.0,
+    ) -> None:
+        """Estimate characteristic flux scales for lines and continuum.
+
+        The **line scale** is estimated as ``peak_flux_density * typical_line_width``
+        using *max_fwhm_kms* and the disperser's resolution.  The maximum
+        across all spectra is used.
+
+        The **continuum scale** is the maximum median ``|flux|`` across
+        continuum regions (after masking lines), divided by the per-spectrum
+        normalization factor.
+
+        Parameters
+        ----------
+        line_config : LineConfiguration
+            Line configuration.
+        continuum_config : ContinuumConfiguration, optional
+            Continuum configuration.  If ``None``, only line scale is computed.
+        max_fwhm_kms : float
+            Maximum expected intrinsic line FWHM in km/s.  Default ``1000``.
+        linedet : float
+            Half-width in km/s for masking line positions.  Default ``1000``.
+        """
+        from unite._utils import _wavelength_conversion_factor
+
+        eps = linedet / C_KMS
+        z = self._redshift
+
+        # --- Line scale ---
+        max_line_scale = 0.0
+        for spectrum in self._spectra:
+            mid_wl = float(jnp.median(spectrum.wavelength))
+            R = spectrum.disperser.R(mid_wl)
+            # Intrinsic FWHM in wavelength units.
+            intrinsic_fwhm = mid_wl * max_fwhm_kms / C_KMS
+            # LSF FWHM.
+            lsf_fwhm = mid_wl / R
+            # Total FWHM (quadrature sum).
+            total_fwhm = jnp.sqrt(intrinsic_fwhm**2 + lsf_fwhm**2)
+            # Peak flux density.
+            peak_fd = float(jnp.max(jnp.abs(spectrum.flux)))
+            # Characteristic integrated flux.
+            flux_est = peak_fd * float(total_fwhm)
+            max_line_scale = max(max_line_scale, flux_est)
+
+        self._line_scale = max_line_scale if max_line_scale > 0 else 1.0
+
+        # --- Continuum scale ---
+        if continuum_config is not None:
+            max_cont_scale = 0.0
+            for spectrum in self._spectra:
+                wl = spectrum.wavelength
+                for region in continuum_config:
+                    conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
+                    obs_low = region.low * conv * (1.0 + z)
+                    obs_high = region.high * conv * (1.0 + z)
+                    in_region = (wl >= obs_low) & (wl <= obs_high)
+                    if not jnp.any(in_region):
+                        continue
+
+                    # Build line exclusion mask.
+                    line_mask = jnp.zeros(spectrum.npix, dtype=bool)
+                    for lam_rest in line_config.wavelengths:
+                        lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
+                        line_mask = line_mask | (
+                            (wl > lam_obs * (1.0 - eps)) & (wl < lam_obs * (1.0 + eps))
+                        )
+
+                    good = in_region & ~line_mask
+                    if not jnp.any(good):
+                        continue
+
+                    median_flux = float(jnp.median(jnp.abs(spectrum.flux[good])))
+                    max_cont_scale = max(max_cont_scale, median_flux)
+
+            self._continuum_scale = max_cont_scale if max_cont_scale > 0 else 1.0
+
+    # -- preparation ----------------------------------------------------------
+
+    def prepare(
+        self,
+        line_config: LineConfiguration,
+        continuum_config: ContinuumConfiguration | None = None,
+        *,
+        linedet: float = 1000.0,
+        drop_empty_regions: bool = True,
+    ) -> tuple[LineConfiguration, ContinuumConfiguration | None]:
+        """Filter configs for coverage and optionally drop empty continuum regions.
+
+        Calls :meth:`filter_config` to remove lines and continuum regions not
+        covered by any spectrum, then optionally drops continuum regions that
+        contain no emission lines.  Stores the filtered configs on this
+        object.
+
+        Parameters
+        ----------
+        line_config : LineConfiguration
+            Line configuration.
+        continuum_config : ContinuumConfiguration, optional
+            Continuum configuration.
+        linedet : float
+            Detection half-width in km/s.  Default ``1000``.
+        drop_empty_regions : bool
+            If ``True`` (default), drop continuum regions that do not contain
+            any filtered line (in rest frame).
+
+        Returns
+        -------
+        filtered_lines : LineConfiguration
+        filtered_continuum : ContinuumConfiguration or None
+        """
+        from unite.continuum.config import ContinuumConfiguration
+
+        filtered_lines, filtered_cont = self.filter_config(
+            line_config, continuum_config, linedet=linedet
+        )
+
+        if drop_empty_regions and filtered_cont is not None and len(filtered_lines) > 0:
+
+            kept: list[ContinuumRegion] = []
+            for region in filtered_cont:
+                # Check if any filtered line falls in this region (rest frame).
+                has_line = False
+                for lam_rest in filtered_lines.wavelengths:
+                    lam_val = float(lam_rest.to(region._unit).value)
+                    if region.low <= lam_val <= region.high:
+                        has_line = True
+                        break
+                if has_line:
+                    kept.append(region)
+            filtered_cont = ContinuumConfiguration(kept) if kept else None
+
+        self._prepared_line_config = filtered_lines
+        self._prepared_cont_config = filtered_cont
+        self._is_prepared = True
+
+        return filtered_lines, filtered_cont
+
+    @property
+    def is_prepared(self) -> bool:
+        """``True`` if :meth:`prepare` has been called."""
+        return self._is_prepared
+
+    @property
+    def prepared_line_config(self) -> LineConfiguration | None:
+        """Filtered line configuration from :meth:`prepare`, or ``None``."""
+        return self._prepared_line_config
+
+    @property
+    def prepared_cont_config(self) -> ContinuumConfiguration | None:
+        """Filtered continuum configuration from :meth:`prepare`, or ``None``."""
+        return self._prepared_cont_config
 
     # -- coverage filtering ---------------------------------------------------
 
@@ -302,17 +496,22 @@ class Spectra:
         filtered_lines : LineConfiguration
         filtered_continuum : ContinuumConfiguration or None
         """
+        from unite._utils import _wavelength_conversion_factor
         from unite.continuum.config import ContinuumConfiguration
 
-        eps = linedet / _C_KMS
+        eps = linedet / C_KMS
         z = self._redshift
 
         # --- filter lines ---
         mask = []
         for wavelength in line_config.wavelengths:
+            # wavelength is a Quantity; convert to each spectrum's disperser unit
             lam_obs = wavelength * (1.0 + z)
             covered = any(
-                s.covers(lam_obs * (1.0 - eps), lam_obs * (1.0 + eps))
+                s.covers(
+                    float(lam_obs.to(s.unit).value) * (1.0 - eps),
+                    float(lam_obs.to(s.unit).value) * (1.0 + eps),
+                )
                 for s in self._spectra
             )
             mask.append(covered)
@@ -320,19 +519,125 @@ class Spectra:
 
         # --- filter continuum regions ---
         if continuum_config is not None:
-            kept: list[ContinuumRegion] = [
-                region
-                for region in continuum_config
-                if any(
-                    s.covers(region.low * (1.0 + z), region.high * (1.0 + z))
-                    for s in self._spectra
-                )
-            ]
+            kept: list[ContinuumRegion] = []
+            for region in continuum_config:
+                # Convert region bounds (stored as bare floats in region._unit)
+                # to each spectrum's disperser unit before checking coverage.
+                region_covered = False
+                for s in self._spectra:
+                    conv = _wavelength_conversion_factor(region._unit, s.unit)
+                    obs_low = region.low * conv * (1.0 + z)
+                    obs_high = region.high * conv * (1.0 + z)
+                    if s.covers(obs_low, obs_high):
+                        region_covered = True
+                        break
+                if region_covered:
+                    kept.append(region)
             filtered_cont: ContinuumConfiguration | None = ContinuumConfiguration(kept)
         else:
             filtered_cont = None
 
         return filtered_lines, filtered_cont
+
+    # -- error resizing -------------------------------------------------------
+
+    def resize_errors(
+        self,
+        line_config: LineConfiguration,
+        continuum_config: ContinuumConfiguration | None = None,
+        *,
+        linedet: float = 1000.0,
+    ) -> None:
+        """Rescale per-spectrum errors so that continuum chi-squared ~ 1.
+
+        For each spectrum, pixels near emission lines (within *linedet* km/s)
+        are masked.  The continuum form is fit to the remaining pixels via
+        least-squares, and the reduced chi-squared of the residuals determines
+        the error scale factor: ``sqrt(max(chi2_red, 1.0))``.
+
+        Parameters
+        ----------
+        line_config : LineConfiguration
+            Line configuration (used to identify line positions).
+        continuum_config : ContinuumConfiguration, optional
+            Continuum configuration with regions and forms.  If ``None``,
+            errors are not resized.
+        linedet : float
+            Half-width in km/s for masking line positions.  Default ``1000``.
+        """
+        if continuum_config is None:
+            return
+
+        from unite._utils import _wavelength_conversion_factor
+
+        eps = linedet / C_KMS
+        z = self._redshift
+
+        # Observed-frame line wavelengths (as bare floats per spectrum unit).
+        for spectrum in self._spectra:
+            wl = spectrum.wavelength
+            all_chi2_reds: list[float] = []
+
+            for region in continuum_config:
+                conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
+                obs_low = region.low * conv * (1.0 + z)
+                obs_high = region.high * conv * (1.0 + z)
+
+                # Pixels in this continuum region.
+                in_region = (wl >= obs_low) & (wl <= obs_high)
+                if not jnp.any(in_region):
+                    continue
+
+                # Build line exclusion mask.
+                line_mask = jnp.zeros(spectrum.npix, dtype=bool)
+                for lam_rest in line_config.wavelengths:
+                    lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
+                    line_mask = line_mask | (
+                        (wl > lam_obs * (1.0 - eps)) & (wl < lam_obs * (1.0 + eps))
+                    )
+
+                # Unmasked pixels within region.
+                good = in_region & ~line_mask
+                n_good = int(jnp.sum(good))
+                if n_good < 3:
+                    continue
+
+                # Fit the continuum form using least-squares (linear fit).
+                wl_good = wl[good]
+                flux_good = spectrum.flux[good]
+                err_good = spectrum.error[good]
+                center = float((obs_low + obs_high) / 2.0)
+
+                # Build design matrix for the form's parameters.
+                # For simple linear forms, use polynomial fit.
+                n_params = region.form.n_params - 1  # exclude normalization_wavelength
+                if n_params <= 0:
+                    continue
+
+                # Use polynomial least-squares as a generic approximation.
+                x = wl_good - center
+                weights = 1.0 / err_good
+
+                # Build Vandermonde-like matrix up to degree n_params-1.
+                degree = min(n_params - 1, 3)  # cap at cubic
+                A = jnp.stack([x**k for k in range(degree + 1)], axis=-1)
+                Aw = A * weights[:, None]
+                bw = flux_good * weights
+
+                # Solve via lstsq.
+                coeffs, _, _, _ = jnp.linalg.lstsq(Aw, bw)
+                model_vals = A @ coeffs
+                residuals = (flux_good - model_vals) / err_good
+                dof = n_good - (degree + 1)
+                if dof > 0:
+                    chi2_red = float(jnp.sum(residuals**2) / dof)
+                    all_chi2_reds.append(chi2_red)
+
+            if all_chi2_reds:
+                # Use the median chi2_red across regions.
+                import numpy as np
+                median_chi2 = float(np.median(all_chi2_reds))
+                spectrum.error_scale = float(jnp.sqrt(jnp.maximum(median_chi2, 1.0)))
 
     # -- container interface --------------------------------------------------
 
