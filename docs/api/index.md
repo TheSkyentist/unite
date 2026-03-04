@@ -1,10 +1,16 @@
 # API Reference
 
-This section contains auto-generated documentation for all public modules
-in the `unite` package.
+Auto-generated reference documentation for all public modules in `unite`.
 
 ```{toctree}
-:maxdepth: 2
+:maxdepth: 1
 
+config
+line
+continuum
+spectrum
+prior
+model
+results
 disperser
 ```

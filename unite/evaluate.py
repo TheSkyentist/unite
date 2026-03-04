@@ -23,24 +23,15 @@ class SpectrumPrediction:
     """Decomposed model prediction for a single spectrum.
 
     All arrays are in original (un-normalized) flux units.
-
-    Attributes
-    ----------
-    wavelength : ndarray, shape (n_pixels,)
-        Pixel-centre wavelengths in the disperser's unit.
-    total : ndarray, shape (n_samples, n_pixels)
-        Total model flux (lines + continuum).
-    lines : dict of str to ndarray
-        Per-line contributions, keyed by ``'line_{idx}'``.  Each value has
-        shape ``(n_samples, n_pixels)``.
-    continuum_regions : dict of str to ndarray
-        Per-continuum-region contributions, keyed by ``'cont_{idx}'``.
-        Each value has shape ``(n_samples, n_pixels)``.
     """
 
+    #: Pixel-centre wavelengths in the disperser's unit. Shape ``(n_pixels,)``.
     wavelength: np.ndarray
+    #: Total model flux (lines + continuum). Shape ``(n_samples, n_pixels)``.
     total: np.ndarray
+    #: Per-line contributions keyed by ``'line_{idx}'``. Shape ``(n_samples, n_pixels)`` each.
     lines: dict[str, np.ndarray]
+    #: Per-continuum-region contributions keyed by ``'cont_{idx}'``. Shape ``(n_samples, n_pixels)`` each.
     continuum_regions: dict[str, np.ndarray]
 
 

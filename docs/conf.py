@@ -26,6 +26,14 @@ extensions = [
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
+# Suppress cross-reference ambiguity warnings that arise because public classes
+# are registered at both the package level (e.g. unite.line.LineConfiguration)
+# and the submodule level (e.g. unite.line.config.LineConfiguration).
+suppress_warnings = [
+    'ref.python',        # cross-ref ambiguity: classes re-exported at package & submodule level
+    'py.duplicate-object',  # numpydoc Attributes section + autodoc dataclass field duplication
+]
+
 # Minimum Sphinx version
 needs_sphinx = '8.0'
 

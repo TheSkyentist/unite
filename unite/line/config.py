@@ -198,55 +198,43 @@ class ConfigMatrices:
       summed after appropriate unit conversion:
       ``p1 = p1v_kms * centers / C + p1d``.
     * **Slot 2** (``p2``): tertiary dimensionless parameter (``h4``), pass-through.
-
-    Attributes
-    ----------
-    wavelengths : jnp.ndarray, shape (n_lines,)
-        Rest-frame line wavelengths (raw floats; units must match spectra).
-    strengths : jnp.ndarray, shape (n_lines,)
-        Multiplet relative flux strengths.
-    profile_codes : jnp.ndarray, shape (n_lines,)
-        Integer profile codes for ``lax.switch`` dispatch.
-    flux_names : list of str
-        Numpyro site names for unique flux parameters (rows of ``flux_matrix``).
-    flux_matrix : jnp.ndarray, shape (n_flux, n_lines)
-    z_names : list of str
-        Numpyro site names for unique redshift parameters.
-    z_matrix : jnp.ndarray, shape (n_z, n_lines)
-    p0_names : list of str
-    p0_matrix : jnp.ndarray, shape (n_p0, n_lines)
-    p1v_names : list of str
-        Velocity FWHM parameters in slot 1.
-    p1v_matrix : jnp.ndarray, shape (n_p1v, n_lines)
-    p1d_names : list of str
-        Dimensionless parameters in slot 1.
-    p1d_matrix : jnp.ndarray, shape (n_p1d, n_lines)
-    p2_names : list of str
-    p2_matrix : jnp.ndarray, shape (n_p2, n_lines)
-    priors : dict of str to Prior
-        Priors for all unique line parameter tokens.
     """
 
+    #: Rest-frame line wavelengths (raw floats; units must match spectra). Shape ``(n_lines,)``.
     wavelengths: jnp.ndarray
+    #: Multiplet relative flux strengths. Shape ``(n_lines,)``.
     strengths: jnp.ndarray
+    #: Integer profile codes for ``lax.switch`` dispatch. Shape ``(n_lines,)``.
     profile_codes: jnp.ndarray
 
+    #: NumPyro site names for unique flux parameters (rows of ``flux_matrix``).
     flux_names: list[str]
+    #: Indicator matrix mapping flux parameters to lines. Shape ``(n_flux, n_lines)``.
     flux_matrix: jnp.ndarray
 
+    #: NumPyro site names for unique redshift parameters.
     z_names: list[str]
+    #: Indicator matrix mapping redshift parameters to lines. Shape ``(n_z, n_lines)``.
     z_matrix: jnp.ndarray
 
+    #: NumPyro site names for slot-0 (primary FWHM) parameters.
     p0_names: list[str]
+    #: Indicator matrix for slot-0 parameters. Shape ``(n_p0, n_lines)``.
     p0_matrix: jnp.ndarray
 
+    #: NumPyro site names for velocity FWHM parameters in slot 1.
     p1v_names: list[str]
+    #: Indicator matrix for slot-1 velocity parameters. Shape ``(n_p1v, n_lines)``.
     p1v_matrix: jnp.ndarray
 
+    #: NumPyro site names for dimensionless shape parameters in slot 1.
     p1d_names: list[str]
+    #: Indicator matrix for slot-1 dimensionless parameters. Shape ``(n_p1d, n_lines)``.
     p1d_matrix: jnp.ndarray
 
+    #: NumPyro site names for slot-2 (tertiary dimensionless) parameters.
     p2_names: list[str]
+    #: Indicator matrix for slot-2 parameters. Shape ``(n_p2, n_lines)``.
     p2_matrix: jnp.ndarray
 
     priors: dict[str, Prior]

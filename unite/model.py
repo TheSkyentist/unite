@@ -34,32 +34,21 @@ class ModelArgs:
 
     Created by :meth:`ModelBuilder.build`; not intended for direct
     construction by users.
-
-    Attributes
-    ----------
-    matrices : ConfigMatrices
-        Precomputed parameter matrices and line metadata.
-    spectra : list of Spectrum
-        Individual spectra.
-    redshift : float
-        Systemic redshift.
-    cont_config : ContinuumConfiguration or None
-        Continuum configuration.
-    cont_resolved_params : list of dict or None
-        Resolved ``{param_name: ContinuumParam}`` mappings, one per region,
-        as returned by :attr:`ContinuumConfiguration.resolved_params`.
-    all_priors : dict of str to Prior
-        All parameters with their priors (line, calibration, continuum).
-    dependency_order : list of str
-        Topological sampling order for all parameters.
     """
 
+    #: Precomputed parameter matrices and line metadata.
     matrices: ConfigMatrices
+    #: Individual spectra.
     spectra: list[Spectrum]
+    #: Systemic redshift.
     redshift: float
+    #: Continuum configuration, or ``None`` if not used.
     cont_config: ContinuumConfiguration | None
+    #: Resolved ``{param_name: ContinuumParam}`` mappings per region, from :attr:`ContinuumConfiguration.resolved_params`.
     cont_resolved_params: list[dict[str, Parameter]] | None
+    #: All parameters with their priors (line, calibration, continuum).
     all_priors: dict[str, Prior]
+    #: Topological sampling order for all parameters.
     dependency_order: list[str]
     name_to_token: dict[str, object]
     # --- Wavelength unit conversion ---
