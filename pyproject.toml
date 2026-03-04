@@ -1,6 +1,6 @@
 [project]
 name = "unite"
-description = "Unified liNe Integration Turbo Engine"
+description = "Unified liNe Intagration Turbo Engine"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
 version = "1.0.0"

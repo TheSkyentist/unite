@@ -5051,7 +5051,7 @@ packages:
 - pypi: ./
   name: unite
   version: 1.0.0
-  sha256: f70f47bec95609a1026cc969b83e20b73e20f4b397bcc3e76141ce12b78d6c8d
+  sha256: 9d773217e738e6d39940f68c74886a4c29734191988cf73b5ef2d0a014e42297
   requires_dist:
   - numpyro>=0.20.0,<0.21
   - astropy>=7.2.0,<8
