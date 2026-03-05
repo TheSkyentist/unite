@@ -47,13 +47,14 @@ def make_parameter_table(
     table = QTable()
 
     cm = args.matrices
-    flux_unit = next((fu for fu in args.flux_units if fu is not None), None)
+    # Use the first spectrum's flux unit for parameter table units.
+    flux_unit = args.flux_units[0]
     canonical_unit = args.canonical_unit
-    line_flux_unit = (
-        flux_unit * canonical_unit
-        if (flux_unit is not None and canonical_unit is not None)
-        else None
-    )
+    line_flux_unit = flux_unit * canonical_unit
+
+    # Line flux scale in the first spectrum's unit system for de-scaling.
+    line_flux_scale_0 = args.line_flux_scales[0]
+    cont_scale_0 = args.continuum_scales[0]
 
     # Classify parameter names.
     flux_names: set[str] = set(cm.flux_names)
@@ -70,22 +71,18 @@ def make_parameter_table(
     def _to_column(pname: str, arr: np.ndarray) -> np.ndarray | u.Quantity:
         """Convert a raw sample array to a physical Quantity where possible."""
         if pname in flux_names:
-            phys = arr * args.line_flux_scale
-            return u.Quantity(phys, unit=line_flux_unit) if line_flux_unit else phys
+            phys = arr * line_flux_scale_0
+            return u.Quantity(phys, unit=line_flux_unit)
         if pname in fwhm_names:
             return u.Quantity(arr, unit=u.km / u.s)
         if pname in z_names:
             return arr  # dimensionless
-        if (
-            pname in cont_param_lookup
-            and flux_unit is not None
-            and canonical_unit is not None
-        ):
+        if pname in cont_param_lookup:
             k, pn = cont_param_lookup[pname]
             region = args.cont_config[k]
             pu = region.form.param_units(flux_unit, canonical_unit)
             apply_cs, phys_unit = pu.get(pn, (False, None))
-            phys = arr * args.continuum_scale if apply_cs else arr
+            phys = arr * cont_scale_0 if apply_cs else arr
             return u.Quantity(phys, unit=phys_unit) if phys_unit is not None else phys
         return arr  # calibration or other dimensionless param
 
@@ -113,8 +110,12 @@ def make_parameter_table(
                 table[pname] = _to_column(pname, arr)
 
     # Add metadata (short keys for FITS compatibility).
-    table.meta['LFLXSCL'] = args.line_flux_scale
-    table.meta['CNTSCL'] = args.continuum_scale
+    lsq = args.line_scale_quantity
+    csq = args.continuum_scale_quantity
+    table.meta['LFLXSCL'] = float(lsq.value) if lsq is not None else None
+    table.meta['LFLXUNT'] = str(lsq.unit) if lsq is not None else None
+    table.meta['CNTSCL'] = float(csq.value) if csq is not None else None
+    table.meta['CNTUNT'] = str(csq.unit) if csq is not None else None
     table.meta['NRMFCTRS'] = list(args.norm_factors)
     table.meta['ZSYS'] = args.redshift
 
@@ -171,39 +172,39 @@ def make_spectra_tables(
 
         t = QTable()
         wl_unit = spectrum.unit
-        spec_flux_unit = args.flux_units[i] if args.flux_units else None
+        spec_flux_unit = args.flux_units[i]
 
-        def _as_wl(arr: np.ndarray, unit: object) -> np.ndarray | u.Quantity:
-            return u.Quantity(arr, unit=unit) if unit is not None else arr
-
-        def _as_flux(arr: np.ndarray, unit: object) -> np.ndarray | u.Quantity:
-            return u.Quantity(arr, unit=unit) if unit is not None else arr
-
-        t['wavelength'] = _as_wl(wl[pixel_mask], wl_unit)
+        t['wavelength'] = u.Quantity(wl[pixel_mask], unit=wl_unit)
 
         if summary:
             # _summarize returns (3, n_pixels) → trim → transpose to (n_pixels, 3)
-            t['model_total'] = _as_flux(
-                _summarize(pred.total[:, pixel_mask]).T, spec_flux_unit
+            t['model_total'] = u.Quantity(
+                _summarize(pred.total[:, pixel_mask]).T, unit=spec_flux_unit
             )
             for name, arr in pred.lines.items():
-                t[name] = _as_flux(_summarize(arr[:, pixel_mask]).T, spec_flux_unit)
+                t[name] = u.Quantity(
+                    _summarize(arr[:, pixel_mask]).T, unit=spec_flux_unit
+                )
             for name, arr in pred.continuum_regions.items():
-                t[name] = _as_flux(_summarize(arr[:, pixel_mask]).T, spec_flux_unit)
+                t[name] = u.Quantity(
+                    _summarize(arr[:, pixel_mask]).T, unit=spec_flux_unit
+                )
         else:
             # (n_samples, n_pixels) → trim → transpose to (n_pixels, n_samples)
-            t['model_total'] = _as_flux(pred.total[:, pixel_mask].T, spec_flux_unit)
+            t['model_total'] = u.Quantity(
+                pred.total[:, pixel_mask].T, unit=spec_flux_unit
+            )
             for name, arr in pred.lines.items():
-                t[name] = _as_flux(arr[:, pixel_mask].T, spec_flux_unit)
+                t[name] = u.Quantity(arr[:, pixel_mask].T, unit=spec_flux_unit)
             for name, arr in pred.continuum_regions.items():
-                t[name] = _as_flux(arr[:, pixel_mask].T, spec_flux_unit)
+                t[name] = u.Quantity(arr[:, pixel_mask].T, unit=spec_flux_unit)
 
         # Add observed data columns.
-        t['observed_flux'] = _as_flux(
-            np.asarray(spectrum.flux)[pixel_mask], spec_flux_unit
+        t['observed_flux'] = u.Quantity(
+            np.asarray(spectrum.flux)[pixel_mask], unit=spec_flux_unit
         )
-        t['observed_error'] = _as_flux(
-            np.asarray(spectrum.scaled_error)[pixel_mask], spec_flux_unit
+        t['observed_error'] = u.Quantity(
+            np.asarray(spectrum.scaled_error)[pixel_mask], unit=spec_flux_unit
         )
 
         t.meta['SPECNAME'] = spectrum.name
@@ -251,8 +252,14 @@ def make_hdul(
 
     primary = fits.PrimaryHDU()
     primary.header['ZSYS'] = (args.redshift, 'Systemic redshift')
-    primary.header['LFLXSCL'] = (args.line_flux_scale, 'Line flux scale')
-    primary.header['CNTSCL'] = (args.continuum_scale, 'Continuum flux scale')
+    lsq = args.line_scale_quantity
+    csq = args.continuum_scale_quantity
+    if lsq is not None:
+        primary.header['LFLXSCL'] = (float(lsq.value), 'Line flux scale')
+        primary.header['LFLXUNT'] = (str(lsq.unit), 'Line flux scale unit')
+    if csq is not None:
+        primary.header['CNTSCL'] = (float(csq.value), 'Continuum flux scale')
+        primary.header['CNTUNT'] = (str(csq.unit), 'Continuum flux scale unit')
     primary.header['NSPEC'] = (len(args.spectra), 'Number of spectra')
 
     hdus = [primary]

@@ -61,12 +61,17 @@ class ModelArgs:
     cont_nw_conv: list[float] | None
     # --- Flux normalization ---
     norm_factors: list[float]
-    line_flux_scale: float
-    continuum_scale: float
+    #: Per-spectrum line flux scale (in each spectrum's flux_unit * canonical_wl_unit).
+    line_flux_scales: list[float]
+    #: Per-spectrum continuum scale (in each spectrum's flux_unit).
+    continuum_scales: list[float]
     #: Wavelength unit of canonical frame (first spectrum's disperser unit).
     canonical_unit: object
-    #: Per-spectrum flux density units (``None`` when unspecified).
+    #: Per-spectrum flux density units.
     flux_units: list
+    #: The Quantity line_scale and continuum_scale from Spectra (for results output).
+    line_scale_quantity: object
+    continuum_scale_quantity: object
 
 
 # ------------------------------------------------------------------
@@ -162,6 +167,8 @@ def unite_model(args: ModelArgs) -> None:
         wl_scale = args.spec_to_canonical[i]
         inv_wl_scale = 1.0 / wl_scale
         norm = args.norm_factors[i]
+        lfs = args.line_flux_scales[i]
+        cs = args.continuum_scales[i]
 
         # Calibration values (fall back to identity when no token is attached).
         r_scale = context[disp.r_scale.name] if disp.r_scale is not None else 1.0
@@ -193,10 +200,10 @@ def unite_model(args: ModelArgs) -> None:
             low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
         ) / (high - low)
 
-        # Sum over lines weighted by flux, scaled by line_flux_scale and
-        # divided by norm to bring to the normalized O(1) space.
+        # Sum over lines weighted by flux, scaled by per-spectrum
+        # line_flux_scale and divided by norm to bring to O(1) space.
         line_model = (
-            (flux_per_line * args.line_flux_scale / norm)[:, None] * pixints
+            (flux_per_line * lfs / norm)[:, None] * pixints
         ).sum(axis=0)  # (n_pixels,)
 
         # Continuum (evaluated in canonical-unit wavelengths, then normalized).
@@ -219,9 +226,9 @@ def unite_model(args: ModelArgs) -> None:
                 continuum = continuum + jnp.where(in_region, region_cont, 0.0)
 
         # Likelihood (normalized flux space).
-        # Continuum is scaled by continuum_scale so that sampled 'scale'
-        # parameters are O(1) relative to the characteristic continuum flux.
-        model = flux_scale * (line_model + continuum * args.continuum_scale / norm)
+        # Continuum is scaled by per-spectrum continuum_scale so that
+        # sampled 'scale' parameters are O(1).
+        model = flux_scale * (line_model + continuum * cs / norm)
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(
             obs_name,
@@ -384,12 +391,29 @@ class ModelBuilder:
         # Per-spectrum flux normalization.
         norm_factors = [_compute_norm_factor(s) for s in self._spectra]
 
-        # Line flux scale (from Spectra.compute_scales).
-        line_flux_scale = self._spectra.line_scale
-        # Continuum scale (from Spectra.compute_scales; 1.0 if not set).
-        continuum_scale = self._spectra.continuum_scale or 1.0
-        # Unit metadata for post-processing.
+        # Line flux scale (Quantity from Spectra.compute_scales).
+        line_scale_qty = self._spectra.line_scale
+        # Continuum scale (Quantity from Spectra.compute_scales; fallback).
+        cont_scale_qty = self._spectra.continuum_scale
+
+        # Convert Quantity scales to per-spectrum float values.
+        # line_flux_scale needs units of [flux_density * canonical_wl_unit]
+        # for each spectrum.
+        # continuum_scale needs units of [flux_density] for each spectrum.
         canonical_unit = self._canonical_unit
+        line_flux_scales: list[float] = []
+        continuum_scales: list[float] = []
+        for s in self._spectra:
+            target_line_unit = s.flux_unit * canonical_unit
+            lfs = float(line_scale_qty.to(target_line_unit).value)
+            line_flux_scales.append(lfs)
+
+            if cont_scale_qty is not None:
+                cs = float(cont_scale_qty.to(s.flux_unit).value)
+            else:
+                cs = 1.0
+            continuum_scales.append(cs)
+
         flux_units = [s.flux_unit for s in self._spectra]
 
         # Pre-convert continuum region bounds to canonical unit.
@@ -429,10 +453,12 @@ class ModelBuilder:
             cont_center=cont_center,
             cont_nw_conv=cont_nw_conv,
             norm_factors=norm_factors,
-            line_flux_scale=line_flux_scale,
-            continuum_scale=continuum_scale,
+            line_flux_scales=line_flux_scales,
+            continuum_scales=continuum_scales,
             canonical_unit=canonical_unit,
             flux_units=flux_units,
+            line_scale_quantity=line_scale_qty,
+            continuum_scale_quantity=cont_scale_qty,
         )
         return unite_model, args
 
@@ -464,43 +490,3 @@ def _compute_norm_factor(spectrum: Spectrum) -> float:
     return float(jnp.median(positive))
 
 
-def _compute_line_flux_scale(
-    spectra: list[Spectrum],
-    matrices: ConfigMatrices,
-    spec_to_canonical: list[float],
-    norm_factors: list[float],
-    z_sys: float,
-) -> float:
-    """Estimate a characteristic integrated line flux from the data.
-
-    The estimate is ``peak_flux_density * typical_linewidth`` where
-    the linewidth is derived from the disperser resolution at the
-    median wavelength of each spectrum.
-
-    Parameters
-    ----------
-    spectra : list of Spectrum
-    matrices : ConfigMatrices
-    spec_to_canonical : list of float
-    norm_factors : list of float
-    z_sys : float
-
-    Returns
-    -------
-    float
-        Positive scale factor for line fluxes, or 1.0 as fallback.
-    """
-    max_scale = 0.0
-    for i, spectrum in enumerate(spectra):
-        s2c = spec_to_canonical[i]
-        norm = norm_factors[i]
-        # Peak normalized flux density.
-        peak_fd = float(jnp.max(jnp.abs(spectrum.flux))) / norm
-        # Typical line width in canonical wavelength units:
-        # use the median pixel centre and disperser R to get LSF FWHM.
-        mid_wl = float(jnp.median(spectrum.wavelength))
-        lsf_fwhm = mid_wl / spectrum.disperser.R(mid_wl) * s2c
-        # Characteristic flux = peak_fd * ~3 * lsf_fwhm (a few resolution elements).
-        flux_est = peak_fd * 3.0 * lsf_fwhm
-        max_scale = max(max_scale, flux_est)
-    return max_scale if max_scale > 0 else 1.0

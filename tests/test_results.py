@@ -25,8 +25,9 @@ def _setup():
     sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
     line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
     rng = np.random.default_rng(42)
-    flux = line_flux + 5.0 + rng.normal(0, 1, len(wavelength))
-    error = np.full(len(wavelength), 1.0)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
+    error = np.full(len(wavelength), 1.0) * flux_unit
 
     spectrum = Spectrum(
         low=low,

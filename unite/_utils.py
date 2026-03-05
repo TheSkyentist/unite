@@ -212,3 +212,64 @@ def _ensure_flux_density(unit: u.UnitBase) -> None:
             f'flux_unit must be a spectral flux density per wavelength '
             f'(e.g. erg/s/cm^2/Angstrom), got {unit!r}.'
         )
+
+
+def _ensure_flux_density_quantity(
+    value: u.Quantity, name: str = 'flux', *, ndim: int | None = None
+) -> u.Quantity:
+    """Validate that *value* is a Quantity with f_lambda flux density units.
+
+    Parameters
+    ----------
+    value : astropy.units.Quantity
+        Value to validate.
+    name : str, optional
+        Name used in error messages.  Defaults to ``'flux'``.
+    ndim : int, optional
+        If provided, also validates that the quantity has exactly this
+        number of dimensions.
+
+    Returns
+    -------
+    astropy.units.Quantity
+        The validated quantity (unchanged).
+
+    Raises
+    ------
+    TypeError
+        If *value* is not a :class:`~astropy.units.Quantity`.
+    ValueError
+        If *value* does not have f_lambda flux density units, or if
+        *ndim* is provided and the array has the wrong dimensionality.
+    """
+    if not isinstance(value, u.Quantity):
+        raise TypeError(
+            f'{name} must be an astropy Quantity with flux density units '
+            f'(e.g. erg/s/cm^2/Angstrom), got {type(value).__name__}.'
+        )
+    _ensure_flux_density(value.unit)
+    if ndim is not None and value.ndim != ndim:
+        raise ValueError(f'{name} must be {ndim}-D, got {value.ndim}-D array.')
+    return value
+
+
+def _flux_density_conversion_factor(
+    from_unit: u.UnitBase, to_unit: u.UnitBase
+) -> float:
+    """Return the scalar multiplier to convert f_lambda from *from_unit* to *to_unit*.
+
+    Both units must be spectral flux density per wavelength (f_lambda).
+
+    Parameters
+    ----------
+    from_unit : astropy.units.UnitBase
+        Source f_lambda unit.
+    to_unit : astropy.units.UnitBase
+        Target f_lambda unit.
+
+    Returns
+    -------
+    float
+        Multiplicative factor such that ``value_in_to = value_in_from * factor``.
+    """
+    return float((1.0 * from_unit).to(to_unit).value)

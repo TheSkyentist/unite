@@ -7,9 +7,13 @@ from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 from astropy import units as u
-from jax.typing import ArrayLike
 
-from unite._utils import C_KMS, _ensure_flux_density, _ensure_wavelength
+from unite._utils import (
+    C_KMS,
+    _ensure_flux_density_quantity,
+    _ensure_wavelength,
+    _flux_density_conversion_factor,
+)
 from unite.disperser.base import Disperser
 
 if TYPE_CHECKING:
@@ -34,11 +38,13 @@ class Spectrum:
     high : astropy.units.Quantity
         Upper wavelength edges of each pixel.  Same shape and compatible
         units as *low*.
-    flux : ArrayLike
-        Flux values per pixel.  Must be 1-D with the same length as *low*.
-    error : ArrayLike
-        Flux uncertainty per pixel.  Must be 1-D with the same length as
-        *low*.
+    flux : astropy.units.Quantity
+        Flux density values per pixel.  Must be 1-D with the same length
+        as *low* and carry spectral flux density per wavelength units
+        (f_lambda, e.g. ``erg / s / cm^2 / Angstrom``).
+    error : astropy.units.Quantity
+        Flux density uncertainty per pixel.  Must be 1-D with the same
+        length as *low* and carry units compatible with *flux*.
     disperser : Disperser
         Instrumental disperser associated with this spectrum.  Carries any
         calibration tokens (``r_scale``, ``flux_scale``, ``pix_offset``).
@@ -49,8 +55,9 @@ class Spectrum:
     Raises
     ------
     TypeError
-        If *low* / *high* are not Quantities with wavelength dimensions, or
-        if *disperser* is not a :class:`Disperser` instance.
+        If *low* / *high* are not Quantities with wavelength dimensions,
+        if *flux* / *error* are not Quantities with f_lambda dimensions,
+        or if *disperser* is not a :class:`Disperser` instance.
     ValueError
         If array shapes are inconsistent or *low* ≥ *high* for any pixel.
     """
@@ -59,17 +66,22 @@ class Spectrum:
         self,
         low: u.Quantity,
         high: u.Quantity,
-        flux: ArrayLike,
-        error: ArrayLike,
+        flux: u.Quantity,
+        error: u.Quantity,
         disperser: Disperser,
         *,
         name: str = '',
-        flux_unit: u.UnitBase | None = None,
     ) -> None:
         # -- flux unit --------------------------------------------------------
-        if flux_unit is not None:
-            _ensure_flux_density(flux_unit)
-        self._flux_unit = flux_unit
+        flux = _ensure_flux_density_quantity(flux, 'flux', ndim=1)
+        error = _ensure_flux_density_quantity(error, 'error', ndim=1)
+        if not flux.unit.is_equivalent(error.unit):
+            msg = (
+                f'flux and error must have compatible units, '
+                f'got {flux.unit!r} and {error.unit!r}.'
+            )
+            raise ValueError(msg)
+        self._flux_unit: u.UnitBase = flux.unit
 
         # -- disperser --------------------------------------------------------
         if not isinstance(disperser, Disperser):
@@ -96,14 +108,13 @@ class Spectrum:
         self._high = jnp.asarray(high.to(disperser.unit).value, dtype=float)
 
         # -- flux and error ---------------------------------------------------
-        flux = jnp.asarray(flux, dtype=float)
-        error = jnp.asarray(error, dtype=float)
+        # Convert error to the same unit as flux, then store bare values.
+        error_converted = error.to(self._flux_unit)
+        flux_arr = jnp.asarray(flux.value, dtype=float)
+        error_arr = jnp.asarray(error_converted.value, dtype=float)
         npix = self._low.shape[0]
 
-        for arr, label in ((flux, 'flux'), (error, 'error')):
-            if arr.ndim != 1:
-                msg = f'{label} must be 1-D, got {arr.ndim}-D array.'
-                raise ValueError(msg)
+        for arr, label in ((flux_arr, 'flux'), (error_arr, 'error')):
             if arr.shape[0] != npix:
                 msg = (
                     f'{label} length ({arr.shape[0]}) does not match the '
@@ -111,8 +122,8 @@ class Spectrum:
                 )
                 raise ValueError(msg)
 
-        self._flux = flux
-        self._error = error
+        self._flux = flux_arr
+        self._error = error_arr
         self._error_scale: float = 1.0
 
         # -- metadata ---------------------------------------------------------
@@ -156,8 +167,8 @@ class Spectrum:
         return self.disperser.unit
 
     @property
-    def flux_unit(self) -> u.UnitBase | None:
-        """Flux density unit, or ``None`` if unspecified."""
+    def flux_unit(self) -> u.UnitBase:
+        """Flux density unit (f_lambda)."""
         return self._flux_unit
 
     @property
@@ -270,8 +281,8 @@ class Spectra:
                 raise TypeError(msg)
         self._spectra: list[Spectrum] = list(spectra)
         self._redshift: float = float(redshift)
-        self._line_scale: float | None = None
-        self._continuum_scale: float | None = None
+        self._line_scale: u.Quantity | None = None
+        self._continuum_scale: u.Quantity | None = None
         self._is_prepared: bool = False
         self._prepared_line_config: LineConfiguration | None = None
         self._prepared_cont_config: ContinuumConfiguration | None = None
@@ -284,28 +295,55 @@ class Spectra:
         return self._redshift
 
     @property
-    def line_scale(self) -> float | None:
-        """Characteristic line flux scale, or ``None`` if not yet computed."""
+    def line_scale(self) -> u.Quantity | None:
+        """Characteristic line flux scale (integrated flux), or ``None``."""
         return self._line_scale
 
     @line_scale.setter
-    def line_scale(self, value: float) -> None:
-        if value <= 0:
+    def line_scale(self, value: u.Quantity) -> None:
+        if not isinstance(value, u.Quantity):
+            msg = (
+                f'line_scale must be an astropy Quantity with flux units '
+                f'(flux_density * wavelength), got {type(value).__name__}.'
+            )
+            raise TypeError(msg)
+        # Validate unit: must be flux_density * wavelength (integrated flux).
+        ref = u.erg / u.s / u.cm**2
+        if not value.unit.is_equivalent(ref):
+            msg = (
+                f'line_scale must have integrated flux units '
+                f'(e.g. erg/s/cm^2), got {value.unit!r}.'
+            )
+            raise u.UnitConversionError(msg)
+        if value.value <= 0:
             msg = f'line_scale must be > 0, got {value}'
             raise ValueError(msg)
-        self._line_scale = float(value)
+        self._line_scale = value
 
     @property
-    def continuum_scale(self) -> float | None:
-        """Characteristic continuum flux scale, or ``None`` if not yet computed."""
+    def continuum_scale(self) -> u.Quantity | None:
+        """Characteristic continuum flux density scale, or ``None``."""
         return self._continuum_scale
 
     @continuum_scale.setter
-    def continuum_scale(self, value: float) -> None:
-        if value <= 0:
+    def continuum_scale(self, value: u.Quantity) -> None:
+        if not isinstance(value, u.Quantity):
+            msg = (
+                f'continuum_scale must be an astropy Quantity with flux '
+                f'density units, got {type(value).__name__}.'
+            )
+            raise TypeError(msg)
+        ref = u.erg / u.s / u.cm**2 / u.AA
+        if not value.unit.is_equivalent(ref):
+            msg = (
+                f'continuum_scale must have flux density units '
+                f'(e.g. erg/s/cm^2/Angstrom), got {value.unit!r}.'
+            )
+            raise u.UnitConversionError(msg)
+        if value.value <= 0:
             msg = f'continuum_scale must be > 0, got {value}'
             raise ValueError(msg)
-        self._continuum_scale = float(value)
+        self._continuum_scale = value
 
     def compute_scales(
         self,
@@ -319,11 +357,14 @@ class Spectra:
 
         The **line scale** is estimated as ``peak_flux_density * typical_line_width``
         using *max_fwhm_kms* and the disperser's resolution.  The maximum
-        across all spectra is used.
+        across all spectra (converted to a common unit) is used.
 
         The **continuum scale** is the maximum median ``|flux|`` across
-        continuum regions (after masking lines), divided by the per-spectrum
-        normalization factor.
+        continuum regions (after masking lines), converted to a common unit.
+
+        Both scales are stored as :class:`~astropy.units.Quantity` objects
+        with physical units: integrated flux for ``line_scale`` and flux
+        density for ``continuum_scale``.
 
         Parameters
         ----------
@@ -339,6 +380,10 @@ class Spectra:
         from unite._utils import _wavelength_conversion_factor
 
         z = self._redshift
+        # Reference units: use the first spectrum's units as the common frame
+        # for comparing scale estimates across spectra.
+        ref_flux_unit = self._spectra[0].flux_unit
+        ref_wl_unit = self._spectra[0].unit
 
         # --- Line scale ---
         # For each line in each spectrum, search within an LSF-convolved window
@@ -348,6 +393,10 @@ class Spectra:
         max_line_scale = 0.0
         for spectrum in self._spectra:
             wl = spectrum.wavelength
+            flux_conv = _flux_density_conversion_factor(
+                spectrum.flux_unit, ref_flux_unit
+            )
+            wl_conv = _wavelength_conversion_factor(spectrum.unit, ref_wl_unit)
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
                 if lam_obs <= 0:
@@ -359,10 +408,12 @@ class Spectra:
                 if not jnp.any(in_window):
                     continue
                 peak_height = float(jnp.max(jnp.abs(spectrum.flux[in_window])))
-                flux_est = peak_height * total_fwhm
+                # Convert to reference units before comparing.
+                flux_est = peak_height * flux_conv * total_fwhm * wl_conv
                 max_line_scale = max(max_line_scale, flux_est)
 
-        self._line_scale = max_line_scale if max_line_scale > 0 else 1.0
+        line_scale_val = max_line_scale if max_line_scale > 0 else 1.0
+        self._line_scale = line_scale_val * ref_flux_unit * ref_wl_unit
 
         # --- Continuum scale ---
         # Line exclusion mask uses an LSF-convolved half-width so that the
@@ -371,6 +422,9 @@ class Spectra:
             max_cont_scale = 0.0
             for spectrum in self._spectra:
                 wl = spectrum.wavelength
+                flux_conv = _flux_density_conversion_factor(
+                    spectrum.flux_unit, ref_flux_unit
+                )
                 for region in continuum_config:
                     conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
                     obs_low = region.low * conv * (1.0 + z)
@@ -397,9 +451,11 @@ class Spectra:
                         continue
 
                     median_flux = float(jnp.median(jnp.abs(spectrum.flux[good])))
-                    max_cont_scale = max(max_cont_scale, median_flux)
+                    # Convert to reference flux unit before comparing.
+                    max_cont_scale = max(max_cont_scale, median_flux * flux_conv)
 
-            self._continuum_scale = max_cont_scale if max_cont_scale > 0 else 1.0
+            cont_scale_val = max_cont_scale if max_cont_scale > 0 else 1.0
+            self._continuum_scale = cont_scale_val * ref_flux_unit
 
     # -- preparation ----------------------------------------------------------
 

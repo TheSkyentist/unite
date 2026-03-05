@@ -33,8 +33,9 @@ def _make_spectrum(
     line_flux = peak * np.exp(-0.5 * ((wl.value - center_wl) / sigma) ** 2)
     continuum = np.full(npix, continuum_level)
     rng = np.random.default_rng(42)
-    flux = line_flux + continuum + rng.normal(0, noise_std, npix)
-    error = np.full(npix, noise_std)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = (line_flux + continuum + rng.normal(0, noise_std, npix)) * flux_unit
+    error = np.full(npix, noise_std) * flux_unit
 
     return Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
@@ -104,7 +105,16 @@ class TestComputeScales:
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.compute_scales(lc)
         assert spectra.line_scale is not None
-        assert spectra.line_scale > 0
+        assert spectra.line_scale.value > 0
+
+    def test_line_scale_has_flux_units(self):
+        spectrum = _make_spectrum()
+        lc = _make_line_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.compute_scales(lc)
+        # line_scale should be integrated flux (flux_density * wavelength).
+        ref = u.erg / u.s / u.cm**2
+        assert spectra.line_scale.unit.is_equivalent(ref)
 
     def test_continuum_scale_with_config(self):
         spectrum = _make_spectrum()
@@ -114,7 +124,16 @@ class TestComputeScales:
         spectra.compute_scales(lc, cont)
         assert spectra.line_scale is not None
         assert spectra.continuum_scale is not None
-        assert spectra.continuum_scale > 0
+        assert spectra.continuum_scale.value > 0
+
+    def test_continuum_scale_has_flux_density_units(self):
+        spectrum = _make_spectrum()
+        lc = _make_line_config()
+        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.compute_scales(lc, cont)
+        ref = u.erg / u.s / u.cm**2 / u.AA
+        assert spectra.continuum_scale.unit.is_equivalent(ref)
 
     def test_no_continuum_scale_without_config(self):
         spectrum = _make_spectrum()
@@ -123,15 +142,25 @@ class TestComputeScales:
         spectra.compute_scales(lc)
         assert spectra.continuum_scale is None
 
-    def test_line_scale_setter_validates(self):
+    def test_line_scale_setter_validates_type(self):
+        spectra = Spectra([_make_spectrum()], redshift=0.0)
+        with pytest.raises(TypeError, match='line_scale must be an astropy Quantity'):
+            spectra.line_scale = 1.0
+
+    def test_line_scale_setter_validates_unit(self):
+        spectra = Spectra([_make_spectrum()], redshift=0.0)
+        with pytest.raises(u.UnitConversionError):
+            spectra.line_scale = 1.0 * u.km / u.s
+
+    def test_line_scale_setter_validates_positive(self):
         spectra = Spectra([_make_spectrum()], redshift=0.0)
         with pytest.raises(ValueError, match='line_scale must be > 0'):
-            spectra.line_scale = -1.0
+            spectra.line_scale = -1.0 * u.erg / u.s / u.cm**2
 
-    def test_continuum_scale_setter_validates(self):
+    def test_continuum_scale_setter_validates_positive(self):
         spectra = Spectra([_make_spectrum()], redshift=0.0)
         with pytest.raises(ValueError, match='continuum_scale must be > 0'):
-            spectra.continuum_scale = 0.0
+            spectra.continuum_scale = 0.0 * u.erg / u.s / u.cm**2 / u.AA
 
 
 # ---------------------------------------------------------------------------

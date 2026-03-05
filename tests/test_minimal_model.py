@@ -39,8 +39,9 @@ def create_simple_spectrum():
     # Add some noise
     rng = np.random.default_rng(42)
     noise = rng.normal(0, 2, len(wavelength))
-    flux = line_flux + noise
-    error = np.full_like(flux, 2.0)  # Constant error
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = (line_flux + noise) * flux_unit
+    error = np.full(len(wavelength), 2.0) * flux_unit
 
     # Create spectrum
     spectrum = Spectrum(
@@ -336,8 +337,9 @@ class TestWavelengthUnitConsistency:
         line_flux = 100 * np.exp(-0.5 * ((wl.value - center_wl) / sigma) ** 2)
         rng = np.random.default_rng(42)
         noise = rng.normal(0, 2, len(wl))
-        flux = line_flux + noise
-        error = np.full_like(flux, 2.0)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = (line_flux + noise) * flux_unit
+        error = np.full(len(wl), 2.0) * flux_unit
         return Spectrum(
             low=low,
             high=high,
@@ -372,15 +374,16 @@ class TestWavelengthUnitConsistency:
         assert args_um.matrices.wavelengths[0] == pytest.approx(0.6563, rel=1e-6)
 
     def test_normalization_brings_flux_to_o1(self):
-        """Spectrum with flux ~1e-17 should have norm_factor ~1e-17."""
+        """Spectrum with flux ~1.5 (in 1e-17 unit) should have norm_factor ~1.5."""
         wl = np.linspace(6500, 6600, 50) * u.AA
         disperser = SimpleDisperser(
             wavelength=wl.value, unit=u.AA, R=3000.0, name='faint'
         )
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
-        flux = np.full(50, 1.5e-17)
-        error = np.full(50, 3e-18)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.full(50, 1.5) * flux_unit
+        error = np.full(50, 0.3) * flux_unit
 
         spectrum = Spectrum(
             low=low,
@@ -396,8 +399,8 @@ class TestWavelengthUnitConsistency:
         lc.add_line('Ha', 6563.0 * u.AA)
         _, args = _prepare_and_build(lc, None, spectra)
 
-        # norm_factor should be close to the median flux value.
-        assert args.norm_factors[0] == pytest.approx(1.5e-17, rel=0.1)
+        # norm_factor should be close to the median flux value (bare float in flux_unit).
+        assert args.norm_factors[0] == pytest.approx(1.5, rel=0.1)
         # After normalization, flux/norm should be ~O(1).
         assert jnp.max(jnp.abs(spectrum.flux / args.norm_factors[0])) == pytest.approx(
             1.0, rel=0.1
@@ -428,12 +431,12 @@ class TestWavelengthUnitConsistency:
         assert 'obs_spec_um' in samples
 
     def test_line_flux_scale_positive(self):
-        """line_flux_scale should always be positive."""
+        """Per-spectrum line_flux_scales should always be positive."""
         spectrum = create_simple_spectrum()
         lc = create_minimal_config()
         spectra = Spectra([spectrum], redshift=0.0)
         _, args = _prepare_and_build(lc, None, spectra)
-        assert args.line_flux_scale > 0
+        assert all(s > 0 for s in args.line_flux_scales)
 
     def test_continuum_bounds_converted(self):
         """Continuum region bounds should be pre-converted to canonical unit."""
@@ -458,26 +461,22 @@ class TestWavelengthUnitConsistency:
 
 
 class TestFluxUnitValidation:
-    """Tests for Spectrum flux_unit parameter validation."""
+    """Tests for Spectrum flux/error Quantity validation."""
 
     def test_valid_flux_unit_accepted(self):
-        """f_lambda unit should be accepted."""
+        """f_lambda Quantity should be accepted."""
         wl = np.linspace(6500, 6600, 10) * u.AA
         disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0)
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
-        flux = np.ones(10)
-        error = np.ones(10)
+        flux_unit = u.erg / u.s / u.cm**2 / u.AA
+        flux = np.ones(10) * flux_unit
+        error = np.ones(10) * flux_unit
 
         spectrum = Spectrum(
-            low=low,
-            high=high,
-            flux=flux,
-            error=error,
-            disperser=disperser,
-            flux_unit=u.erg / u.s / u.cm**2 / u.AA,
+            low=low, high=high, flux=flux, error=error, disperser=disperser
         )
-        assert spectrum.flux_unit is not None
+        assert spectrum.flux_unit == flux_unit
 
     def test_invalid_flux_unit_raises(self):
         """Non-f_lambda unit (e.g. Jy) should raise."""
@@ -485,29 +484,28 @@ class TestFluxUnitValidation:
         disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0)
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
-        flux = np.ones(10)
-        error = np.ones(10)
 
         with pytest.raises(ValueError, match='spectral flux density'):
             Spectrum(
                 low=low,
                 high=high,
-                flux=flux,
-                error=error,
+                flux=np.ones(10) * u.Jy,
+                error=np.ones(10) * u.Jy,
                 disperser=disperser,
-                flux_unit=u.Jy,
             )
 
-    def test_no_flux_unit_is_none(self):
-        """When flux_unit is not specified, it should be None."""
+    def test_bare_array_raises(self):
+        """Bare arrays (not Quantity) should raise TypeError."""
         wl = np.linspace(6500, 6600, 10) * u.AA
         disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0)
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
-        flux = np.ones(10)
-        error = np.ones(10)
 
-        spectrum = Spectrum(
-            low=low, high=high, flux=flux, error=error, disperser=disperser
-        )
-        assert spectrum.flux_unit is None
+        with pytest.raises(TypeError, match='flux must be an astropy Quantity'):
+            Spectrum(
+                low=low,
+                high=high,
+                flux=np.ones(10),
+                error=np.ones(10),
+                disperser=disperser,
+            )

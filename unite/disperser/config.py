@@ -57,7 +57,6 @@ import warnings
 from collections.abc import Iterator, Sequence
 
 from astropy import units as u
-from jax.typing import ArrayLike
 
 from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
 from unite.disperser.nirspec.disperser import (
@@ -263,8 +262,8 @@ class DispersersConfiguration:
         name: str,
         low: u.Quantity,
         high: u.Quantity,
-        flux: ArrayLike,
-        error: ArrayLike,
+        flux: u.Quantity,
+        error: u.Quantity,
     ):
         """Create a :class:`~unite.spectrum.spectrum.Spectrum` from data arrays.
 
@@ -280,10 +279,10 @@ class DispersersConfiguration:
             Lower pixel-edge wavelengths (1-D, wavelength dimensions).
         high : astropy.units.Quantity
             Upper pixel-edge wavelengths.  Same shape as *low*.
-        flux : ArrayLike
-            Flux values per pixel.
-        error : ArrayLike
-            Flux uncertainty per pixel.
+        flux : astropy.units.Quantity
+            Flux density values per pixel (f_lambda).
+        error : astropy.units.Quantity
+            Flux density uncertainty per pixel (same unit as *flux*).
 
         Returns
         -------

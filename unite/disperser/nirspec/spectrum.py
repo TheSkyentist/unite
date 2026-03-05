@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from astropy import units as u
-from jax.typing import ArrayLike
 
 if TYPE_CHECKING:
     from unite.disperser.nirspec.disperser import NIRSpecDisperser
@@ -54,8 +53,8 @@ class NIRSpecSpectrum:
         cls,
         low: u.Quantity,
         high: u.Quantity,
-        flux: ArrayLike,
-        error: ArrayLike,
+        flux: u.Quantity,
+        error: u.Quantity,
         disperser: NIRSpecDisperser,
         *,
         name: str = '',
@@ -70,10 +69,12 @@ class NIRSpecSpectrum:
         high : astropy.units.Quantity
             Upper wavelength edges of each pixel.  Same shape and compatible
             units as *low*.
-        flux : ArrayLike
-            Flux values per pixel.  Must be 1-D with the same length as *low*.
-        error : ArrayLike
-            Flux uncertainty per pixel.  Must be 1-D with the same length as *low*.
+        flux : astropy.units.Quantity
+            Flux density values per pixel (f_lambda).  Must be 1-D with the
+            same length as *low*.
+        error : astropy.units.Quantity
+            Flux density uncertainty per pixel.  Must be 1-D with the same
+            length as *low* and compatible units as *flux*.
         disperser : NIRSpecDisperser
             The NIRSpec disperser associated with this spectrum.  Carries any
             calibration tokens (``r_scale``, ``flux_scale``, ``pix_offset``).

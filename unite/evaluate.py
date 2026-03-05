@@ -104,8 +104,8 @@ def evaluate_model(
         else:
             dlam = None
 
-        line_scale = float(args.line_flux_scale)
-        cont_scale = float(args.continuum_scale)
+        line_scale = float(args.line_flux_scales[i])
+        cont_scale = float(args.continuum_scales[i])
         n_pix = spectrum.npix
 
         # Keyword-only defaults bind the per-iteration values at definition
