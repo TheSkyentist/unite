@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+type: software
+title: "unite: Unified liNe Integration Turbo Engine"
+abstract: >
+  unite is a Python package for fast, Bayesian inference of emission lines
+  from astronomical spectra. It is built on JAX, NumPyro, and Astropy, and
+  supports fitting multiple spectra simultaneously with shared kinematics,
+  calibration tokens, and flexible priors.
+authors:
+  - family-names: Hviding
+    given-names: Raphael Erik
+    email: raphael.hviding@gmail.com
+    orcid: "https://orcid.org/0000-0002-4684-9005"
+repository-code: "https://github.com/TheSkyentist/unite"
+url: "https://unite.readthedocs.io/"
+license: GPL-3.0-or-later
+doi: "10.5281/zenodo.15585034"
+keywords:
+  - astronomy
+  - spectroscopy
+  - bayesian inference
+  - emission lines
+  - jax
+  - jwst
+  - nirspec

@@ -1,6 +1,7 @@
 [project]
 name = "unite"
 description = "Unified liNe Intagration Turbo Engine"
+readme = "README.md"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
 version = "1.0.0"

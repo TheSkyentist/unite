@@ -60,6 +60,14 @@ mcmc.run(jax.random.PRNGKey(0), *model_args)
 
 Full documentation, tutorials, and API reference at **[unite.readthedocs.io](https://unite.readthedocs.io/)**.
 
+## Citing
+
+If you use `unite` in your research, please cite the Zenodo software release. Each versioned release has a unique DOI minted automatically when a GitHub release is created.
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15585034.svg)](https://doi.org/10.5281/zenodo.15585034)
+
+See [CITATION.md](CITATION.md) for BibTeX and details. The Zenodo record lists all releases — visit the link to cite a specific version. GitHub's "Cite this repository" button (top-right of the repo page) also generates citation text directly from [`CITATION.cff`](CITATION.cff).
+
 ## License
 
-GPL v2 or later. See [LICENSE](LICENSE) for details.
+GPL v3 or later. See [LICENSE](LICENSE) for details.
