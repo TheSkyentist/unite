@@ -189,9 +189,7 @@ def _wavelength_conversion_factor(from_unit: u.UnitBase, to_unit: u.UnitBase) ->
     return float((1.0 * from_unit).to(to_unit).value)
 
 
-def _ensure_velocity(
-    value: u.Quantity, name: str = 'velocity'
-) -> u.Quantity:
+def _ensure_velocity(value: u.Quantity, name: str = 'velocity') -> u.Quantity:
     """Validate that *value* is a Quantity with velocity units.
 
     Parameters

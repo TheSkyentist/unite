@@ -63,7 +63,6 @@ class Profile(ABC):
             For example, ``{'fwhm_gauss': Uniform(0, 1000)}``.
         """
 
-    @abstractmethod
     def integrate(
         self,
         low: ArrayLike,
@@ -73,6 +72,9 @@ class Profile(ABC):
         **params: ArrayLike,
     ) -> Array:
         """Integrate the profile over wavelength bins.
+
+        Delegates to :meth:`jax_branch` by mapping keyword arguments to
+        positional slots (p0, p1, p2) in :meth:`param_names` order.
 
         Parameters
         ----------
@@ -92,6 +94,11 @@ class Profile(ABC):
         Array
             Fractional flux integrated in each bin (sums to 1 over all bins).
         """
+        pnames = self.param_names()
+        p0 = params[pnames[0]] if len(pnames) > 0 else 0.0
+        p1 = params[pnames[1]] if len(pnames) > 1 else 0.0
+        p2 = params[pnames[2]] if len(pnames) > 2 else 0.0
+        return self.jax_branch()(low, high, center, lsf_fwhm, p0, p1, p2)
 
     @abstractmethod
     def jax_branch(self):
@@ -172,16 +179,6 @@ class Gaussian(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000)}
 
-    def integrate(
-        self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
-        lsf_fwhm: ArrayLike,
-        **params: ArrayLike,
-    ) -> Array:
-        return integrate_gaussian(low, high, center, lsf_fwhm, params['fwhm_gauss'])
-
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss
@@ -226,19 +223,6 @@ class Cauchy(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_lorentzian': Uniform(0, 1000)}
 
-    def integrate(
-        self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
-        lsf_fwhm: ArrayLike,
-        **params: ArrayLike,
-    ) -> Array:
-        # Implement as PseudoVoigt with LSF=0 to maintain consistency
-        # with the scientific model (all profiles should handle LSF)
-        fwhm_lorentzian = params['fwhm_lorentzian']
-        return integrate_voigt(low, high, center, lsf_fwhm, 0.0, fwhm_lorentzian)
-
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_lorentzian; pure Cauchy via PseudoVoigt with zero Gaussian width
@@ -280,18 +264,6 @@ class PseudoVoigt(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_lorentz': Uniform(0, 1000)}
 
-    def integrate(
-        self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
-        lsf_fwhm: ArrayLike,
-        **params: ArrayLike,
-    ) -> Array:
-        return integrate_voigt(
-            low, high, center, lsf_fwhm, params['fwhm_gauss'], params['fwhm_lorentz']
-        )
-
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz
@@ -331,17 +303,6 @@ class Laplace(Profile):
 
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_exp': Uniform(0, 1000)}
-
-    def integrate(
-        self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
-        lsf_fwhm: ArrayLike,
-        **params: ArrayLike,
-    ) -> Array:
-        fwhm = params['fwhm_exp']
-        return integrate_gaussianLaplace(low, high, center, lsf_fwhm, 0, fwhm)
 
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
@@ -385,18 +346,6 @@ class SEMG(Profile):
 
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_exp': Uniform(0, 1000)}
-
-    def integrate(
-        self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
-        lsf_fwhm: ArrayLike,
-        **params: ArrayLike,
-    ) -> Array:
-        return integrate_gaussianLaplace(
-            low, high, center, lsf_fwhm, params['fwhm_gauss'], params['fwhm_exp']
-        )
 
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
@@ -445,24 +394,6 @@ class GaussHermite(Profile):
             'h4': TruncatedNormal(loc=0, scale=0.1, low=-0.3, high=0.3),
         }
 
-    def integrate(
-        self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
-        lsf_fwhm: ArrayLike,
-        **params: ArrayLike,
-    ) -> Array:
-        return integrate_gaussHermite(
-            low,
-            high,
-            center,
-            lsf_fwhm,
-            params['fwhm_gauss'],
-            params['h3'],
-            params['h4'],
-        )
-
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = h3, p2 = h4
@@ -504,18 +435,6 @@ class SplitNormal(Profile):
 
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_blue': Uniform(0, 1000), 'fwhm_red': Uniform(0, 1000)}
-
-    def integrate(
-        self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
-        lsf_fwhm: ArrayLike,
-        **params: ArrayLike,
-    ) -> Array:
-        return integrate_split_normal(
-            low, high, center, lsf_fwhm, params['fwhm_blue'], params['fwhm_red']
-        )
 
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):

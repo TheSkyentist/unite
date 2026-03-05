@@ -55,7 +55,9 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 
+import yaml
 from astropy import units as u
 
 from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
@@ -68,6 +70,7 @@ from unite.disperser.nirspec.disperser import (
     G395M,
     PRISM,
 )
+from unite.disperser.sdss.disperser import SDSSDisperser
 from unite.prior import Parameter, prior_from_dict
 
 # ---------------------------------------------------------------------------
@@ -82,6 +85,7 @@ _DISPERSER_REGISTRY: dict[str, type[Disperser]] = {
     'G395H': G395H,
     'G395M': G395M,
     'PRISM': PRISM,
+    'SDSSDisperser': SDSSDisperser,
 }
 
 _CALIB_REGISTRY: dict[str, type[Parameter]] = {
@@ -118,7 +122,7 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
     Parameters
     ----------
     disperser : Disperser
-        Must be a registered NIRSpec type.
+        Must be a registered type (NIRSpec or SDSS).
 
     Returns
     -------
@@ -128,7 +132,7 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
     if cls_name not in _DISPERSER_REGISTRY:
         msg = (
             f'Cannot serialize disperser of type {cls_name!r}. '
-            f'Only built-in NIRSpec dispersers support serialization. '
+            f'Only registered dispersers support serialization. '
             f'Registered types: {sorted(_DISPERSER_REGISTRY)}.'
         )
         raise TypeError(msg)
@@ -377,6 +381,59 @@ class DispersersConfiguration:
         obj = cls.__new__(cls)
         obj._dispersers = dispersers
         return obj
+
+    # -- YAML serialization --------------------------------------------------
+
+    def to_yaml(self) -> str:
+        """Serialize to a YAML string.
+
+        Returns
+        -------
+        str
+        """
+        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+
+    @classmethod
+    def from_yaml(cls, text: str) -> DispersersConfiguration:
+        """Deserialize from a YAML string.
+
+        Parameters
+        ----------
+        text : str
+            YAML string as produced by :meth:`to_yaml`.
+
+        Returns
+        -------
+        DispersersConfiguration
+        """
+        return cls.from_dict(yaml.safe_load(text))
+
+    # -- File I/O ------------------------------------------------------------
+
+    def save(self, path: str | Path) -> None:
+        """Save to a YAML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Output file path.
+        """
+        Path(path).write_text(self.to_yaml())
+
+    @classmethod
+    def load(cls, path: str | Path) -> DispersersConfiguration:
+        """Load from a YAML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to a YAML file written by :meth:`save`.
+
+        Returns
+        -------
+        DispersersConfiguration
+        """
+        return cls.from_yaml(Path(path).read_text())
 
     # -- repr ----------------------------------------------------------------
 

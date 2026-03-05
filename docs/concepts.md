@@ -140,23 +140,17 @@ The result is two new configuration objects containing only the relevant feature
 ### 2. `Spectra.compute_scales()`
 
 ```python
-spectra.compute_scales(filtered_lines, filtered_cont)
+spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 ```
 
 Computes the median flux level of the continuum regions and uses it to set internal
 normalization constants (`line_scale`, `continuum_scale`). This makes the sampler's job
 easier by keeping parameter values near unity.
 
-### 3. `Spectra.resize_errors()` *(optional)*
+When `error_scale=True` is passed, it also estimates and applies per-spectrum error
+rescaling factors. This is useful when the pipeline uncertainties are unreliable.
 
-```python
-spectra.resize_errors(filtered_lines, filtered_cont)
-```
-
-Estimates and applies per-spectrum error rescaling factors. Useful when the pipeline
-uncertainties are unreliable.
-
-### 4. `ModelBuilder.build()`
+### 3. `ModelBuilder.build()`
 
 ```python
 builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)

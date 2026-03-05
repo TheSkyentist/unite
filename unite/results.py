@@ -104,9 +104,7 @@ def make_parameter_table(
         for pname in args.dependency_order:
             prior = args.all_priors[pname]
             if isinstance(prior, Fixed):
-                table[pname] = _to_column(
-                    pname, np.full(n_samples, float(prior.value))
-                )
+                table[pname] = _to_column(pname, np.full(n_samples, float(prior.value)))
             else:
                 arr = np.asarray(samples[pname])
                 table[pname] = _to_column(pname, arr)

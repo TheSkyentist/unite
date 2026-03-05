@@ -1,6 +1,7 @@
-"""Tests for Spectrum.error_scale, Spectra.compute_scales, prepare, resize_errors."""
+"""Tests for Spectrum.error_scale, Spectra.compute_scales, prepare."""
 
 import astropy.units as u
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -90,6 +91,25 @@ class TestErrorScale:
         spectrum = _make_spectrum()
         np.testing.assert_array_equal(spectrum.scaled_error, spectrum.error)
 
+    def test_error_scale_per_pixel_array(self):
+        spectrum = _make_spectrum()
+        scale_arr = jnp.ones(spectrum.npix) * 2.0
+        spectrum.error_scale = scale_arr
+        np.testing.assert_allclose(
+            spectrum.scaled_error, spectrum.error * 2.0, rtol=1e-10
+        )
+
+    def test_error_scale_array_wrong_shape(self):
+        spectrum = _make_spectrum()
+        with pytest.raises(ValueError, match='error_scale array must have shape'):
+            spectrum.error_scale = jnp.ones(5)
+
+    def test_error_scale_array_must_be_positive(self):
+        spectrum = _make_spectrum()
+        bad = jnp.ones(spectrum.npix).at[0].set(-1.0)
+        with pytest.raises(ValueError, match='error_scale values must all be > 0'):
+            spectrum.error_scale = bad
+
 
 # ---------------------------------------------------------------------------
 # Spectra.compute_scales
@@ -162,6 +182,26 @@ class TestComputeScales:
         with pytest.raises(ValueError, match='continuum_scale must be > 0'):
             spectra.continuum_scale = 0.0 * u.erg / u.s / u.cm**2 / u.AA
 
+    def test_error_scale_no_continuum_is_noop(self):
+        """error_scale=True with no continuum should not change error_scale."""
+        spectrum = _make_spectrum()
+        lc = _make_line_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.compute_scales(lc, error_scale=True)
+        assert spectrum.error_scale == 1.0
+
+    def test_error_scale_with_continuum(self):
+        """error_scale=True should set per-pixel error_scale >= 1."""
+        spectrum = _make_spectrum(noise_std=2.0, continuum_level=10.0)
+        lc = _make_line_config()
+        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.compute_scales(lc, cont, error_scale=True)
+        scale = spectrum.error_scale
+        # Should be an array (per-pixel) with values >= 1.0
+        assert isinstance(scale, jnp.ndarray)
+        assert bool(jnp.all(scale >= 1.0))
+
 
 # ---------------------------------------------------------------------------
 # Spectra.prepare
@@ -233,30 +273,3 @@ class TestPrepare:
         spectra = Spectra([spectrum], redshift=0.0)
         _fl, fc = spectra.prepare(lc, cont, drop_empty_regions=False)
         assert len(fc) == 2
-
-
-# ---------------------------------------------------------------------------
-# Spectra.resize_errors
-# ---------------------------------------------------------------------------
-
-
-class TestResizeErrors:
-    """Tests for Spectra.resize_errors method."""
-
-    def test_resize_errors_no_continuum(self):
-        """resize_errors with no continuum should be a no-op."""
-        spectrum = _make_spectrum()
-        lc = _make_line_config()
-        spectra = Spectra([spectrum], redshift=0.0)
-        spectra.resize_errors(lc, None)
-        assert spectrum.error_scale == 1.0
-
-    def test_resize_errors_with_continuum(self):
-        """resize_errors should set error_scale >= 1."""
-        spectrum = _make_spectrum(noise_std=2.0, continuum_level=10.0)
-        lc = _make_line_config()
-        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
-        spectra = Spectra([spectrum], redshift=0.0)
-        spectra.resize_errors(lc, cont)
-        # error_scale should be >= 1.0 (clamped)
-        assert spectrum.error_scale >= 1.0

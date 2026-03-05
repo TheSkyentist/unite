@@ -106,8 +106,7 @@ cc = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
 
 spectra = Spectra([spectrum], redshift=0.0)
 filtered_lines, filtered_cont = spectra.prepare(lc, cc)
-spectra.compute_scales(filtered_lines, filtered_cont)
-spectra.resize_errors(filtered_lines, filtered_cont)
+spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 
 # --- Sample ---
 builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)

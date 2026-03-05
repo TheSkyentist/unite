@@ -146,13 +146,10 @@ spectra = Spectra([spectrum], redshift=0.0)
 filtered_lines, filtered_cont = spectra.prepare(lc, cc)
 print(f'Filtered lines: {len(filtered_lines)}, regions: {len(filtered_cont)}')
 
-# Compute internal flux normalization
-spectra.compute_scales(filtered_lines, filtered_cont)
+# Compute internal flux normalization and estimate per-spectrum error rescaling
+spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 print(f'Line scale:      {spectra.line_scale:.4g}')
 print(f'Continuum scale: {spectra.continuum_scale:.4g}')
-
-# Optional: estimate and apply per-spectrum error rescaling
-spectra.resize_errors(filtered_lines, filtered_cont)
 for s in spectra:
     print(f'Error scale for {s.name}: {s.error_scale:.4f}')
 ```

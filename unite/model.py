@@ -202,9 +202,9 @@ def unite_model(args: ModelArgs) -> None:
 
         # Sum over lines weighted by flux, scaled by per-spectrum
         # line_flux_scale and divided by norm to bring to O(1) space.
-        line_model = (
-            (flux_per_line * lfs / norm)[:, None] * pixints
-        ).sum(axis=0)  # (n_pixels,)
+        line_model = ((flux_per_line * lfs / norm)[:, None] * pixints).sum(
+            axis=0
+        )  # (n_pixels,)
 
         # Continuum (evaluated in canonical-unit wavelengths, then normalized).
         continuum = jnp.zeros(spectrum.npix)
@@ -303,7 +303,6 @@ class ModelBuilder:
             )
             spectra.compute_scales(line_config, continuum_config)
 
-        self._line_config = line_config
         self._cont_config = continuum_config
 
         # --- Canonical wavelength unit: use Spectra's canonical_unit ---
@@ -488,5 +487,3 @@ def _compute_norm_factor(spectrum: Spectrum) -> float:
         fallback = float(jnp.max(spectrum.error))
         return fallback if fallback > 0 else 1.0
     return float(jnp.median(positive))
-
-

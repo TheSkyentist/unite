@@ -125,7 +125,7 @@ class Spectrum:
 
         self._flux = flux_arr
         self._error = error_arr
-        self._error_scale: float = 1.0
+        self._error_scale: jnp.ndarray | float = 1.0
 
         # -- metadata ---------------------------------------------------------
         self.name = name or disperser.name
@@ -173,16 +173,30 @@ class Spectrum:
         return self._flux_unit
 
     @property
-    def error_scale(self) -> float:
-        """Multiplicative scale factor applied to errors."""
+    def error_scale(self) -> jnp.ndarray | float:
+        """Multiplicative scale factor applied to errors.
+
+        Can be a scalar (applied uniformly) or a per-pixel array.
+        """
         return self._error_scale
 
     @error_scale.setter
-    def error_scale(self, value: float) -> None:
-        if value <= 0:
-            msg = f'error_scale must be > 0, got {value}'
-            raise ValueError(msg)
-        self._error_scale = float(value)
+    def error_scale(self, value: float | jnp.ndarray) -> None:
+        arr = jnp.asarray(value, dtype=float)
+        if arr.ndim == 0:
+            if float(arr) <= 0:
+                msg = f'error_scale must be > 0, got {float(arr)}'
+                raise ValueError(msg)
+        else:
+            if arr.shape != (self.npix,):
+                msg = (
+                    f'error_scale array must have shape ({self.npix},), got {arr.shape}'
+                )
+                raise ValueError(msg)
+            if bool(jnp.any(arr <= 0)):
+                msg = 'error_scale values must all be > 0'
+                raise ValueError(msg)
+        self._error_scale = arr if arr.ndim > 0 else float(arr)
 
     @property
     def scaled_error(self) -> jnp.ndarray:
@@ -384,51 +398,119 @@ class Spectra:
         continuum_config: ContinuumConfiguration | None = None,
         *,
         max_fwhm: u.Quantity = 1000.0 * u.km / u.s,
-        linedet: u.Quantity = 1000.0 * u.km / u.s,
+        line_mask_fwhm: u.Quantity = 1000.0 * u.km / u.s,
+        error_scale: bool = False,
     ) -> None:
         """Estimate characteristic flux scales for lines and continuum.
 
-        The **line scale** is estimated as ``peak_flux_density * typical_line_width``
-        using *max_fwhm* and the disperser's resolution.  The maximum
-        across all spectra (converted to a common unit) is used.
+        The algorithm:
 
-        The **continuum scale** is the maximum median ``|flux|`` across
-        continuum regions (after masking lines), converted to a common unit.
+        1. Mask pixels near emission lines (using *line_mask_fwhm*, a full
+           FWHM convolved in quadrature with the local LSF).
+        2. Fit a low-order polynomial to the unmasked pixels in each
+           continuum region.
+        3. Estimate the **line scale** as ``peak_above_continuum * line_width``
+           where the peak is measured relative to the fitted continuum.
+        4. Estimate the **continuum scale** as the maximum median ``|flux|``
+           across continuum regions (after masking lines).
+        5. Optionally compute per-region **error scale** factors
+           (``sqrt(max(chi2_red, 1.0))``) and store them as per-pixel
+           arrays on each :class:`Spectrum`.
 
-        Both scales are stored as :class:`~astropy.units.Quantity` objects
-        with physical units: integrated flux for ``line_scale`` and flux
-        density for ``continuum_scale``.
+        Both flux scales are stored as :class:`~astropy.units.Quantity`
+        objects: integrated flux for ``line_scale`` and flux density for
+        ``continuum_scale``.
 
         Parameters
         ----------
         line_config : LineConfiguration
             Line configuration.
         continuum_config : ContinuumConfiguration, optional
-            Continuum configuration.  If ``None``, only line scale is computed.
+            Continuum configuration.  If ``None``, only line scale is
+            computed (without continuum subtraction).
         max_fwhm : astropy.units.Quantity
-            Maximum expected intrinsic line FWHM.  Must have velocity units.
-            Default ``1000 km/s``.
-        linedet : astropy.units.Quantity
-            Half-width for masking line positions.  Must have velocity units.
-            Default ``1000 km/s``.
+            Maximum expected intrinsic line FWHM (full width).  Must have
+            velocity units.  Default ``1000 km/s``.
+        line_mask_fwhm : astropy.units.Quantity
+            Full FWHM used for masking lines when fitting continuum.  Must
+            have velocity units.  Default ``1000 km/s``.
+        error_scale : bool
+            If ``True``, compute per-region error scale factors from the
+            reduced chi-squared of the continuum fit residuals and store
+            them as per-pixel arrays on each :class:`Spectrum` via
+            :attr:`Spectrum.error_scale`.  Default ``False``.
         """
+        import numpy as np
+
         max_fwhm = _ensure_velocity(max_fwhm, 'max_fwhm')
-        linedet = _ensure_velocity(linedet, 'linedet')
+        line_mask_fwhm = _ensure_velocity(line_mask_fwhm, 'line_mask_fwhm')
         max_fwhm_kms = float(max_fwhm.to(u.km / u.s).value)
-        linedet_kms = float(linedet.to(u.km / u.s).value)
+        mask_fwhm_kms = float(line_mask_fwhm.to(u.km / u.s).value)
         from unite._utils import _wavelength_conversion_factor
 
         z = self._redshift
-        # Reference units: use the first spectrum's flux unit and canonical
-        # wavelength unit as the common frame for comparing scale estimates.
         ref_flux_unit = self._spectra[0].flux_unit
         ref_wl_unit = self._canonical_unit
 
-        # --- Line scale ---
-        # For each line in each spectrum, search within an LSF-convolved window
-        # centred on that line's observed wavelength.  The window half-width is
-        # the quadrature sum of the user-specified intrinsic FWHM and the LSF
-        # FWHM at that wavelength.  The flux estimate is peak_height * total_FWHM.
+        # --- Helper: build a per-pixel line exclusion mask for a spectrum ---
+        def _build_line_mask(spectrum, fwhm_kms):
+            wl = spectrum.wavelength
+            mask = jnp.zeros(spectrum.npix, dtype=bool)
+            for lam_rest in line_config.wavelengths:
+                lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
+                if lam_obs <= 0:
+                    continue
+                lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
+                user_hw = lam_obs * fwhm_kms / C_KMS / 2.0  # half of FWHM
+                half_width = float(jnp.sqrt(user_hw**2 + (lsf_fwhm / 2.0) ** 2))
+                mask = mask | (
+                    (wl > lam_obs - half_width) & (wl < lam_obs + half_width)
+                )
+            return mask
+
+        # --- Helper: fit polynomial continuum in a region ---
+        def _fit_continuum_region(wl, flux, error, obs_low, obs_high, line_mask):
+            """Fit a low-order polynomial to unmasked pixels in a region.
+
+            Returns (model_values_on_region, good_mask, chi2_red).
+            model_values_on_region covers all pixels in_region.
+            """
+            in_region = (wl >= obs_low) & (wl <= obs_high)
+            good = in_region & ~line_mask
+            n_good = int(jnp.sum(good))
+
+            if n_good < 3:
+                return None, in_region, None
+
+            center = float((obs_low + obs_high) / 2.0)
+            wl_good = wl[good]
+            flux_good = flux[good]
+            err_good = error[good]
+
+            # Polynomial degree: linear for small regions, up to cubic
+            degree = min(max(n_good // 10, 1), 3)
+            x_good = wl_good - center
+            weights = 1.0 / err_good
+
+            design = jnp.stack([x_good**k for k in range(degree + 1)], axis=-1)
+            design_w = design * weights[:, None]
+            bw = flux_good * weights
+
+            coeffs, _, _, _ = jnp.linalg.lstsq(design_w, bw)
+
+            # Evaluate on all in-region pixels
+            x_region = wl[in_region] - center
+            design_region = jnp.stack([x_region**k for k in range(degree + 1)], axis=-1)
+            model_region = design_region @ coeffs
+
+            # Chi-squared on the good (unmasked) pixels
+            residuals = (flux_good - design[..., : degree + 1] @ coeffs) / err_good
+            dof = n_good - (degree + 1)
+            chi2_red = float(jnp.sum(residuals**2) / dof) if dof > 0 else None
+
+            return model_region, in_region, chi2_red
+
+        # --- Line scale (with continuum subtraction when available) ---
         max_line_scale = 0.0
         for spectrum in self._spectra:
             wl = spectrum.wavelength
@@ -436,6 +518,23 @@ class Spectra:
                 spectrum.flux_unit, ref_flux_unit
             )
             wl_conv = _wavelength_conversion_factor(spectrum.unit, ref_wl_unit)
+            line_mask = _build_line_mask(spectrum, mask_fwhm_kms)
+
+            # Build a full-spectrum continuum estimate for subtraction.
+            continuum_est = jnp.zeros(spectrum.npix)
+            if continuum_config is not None:
+                for region in continuum_config:
+                    conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
+                    obs_low = region.low * conv * (1.0 + z)
+                    obs_high = region.high * conv * (1.0 + z)
+                    result = _fit_continuum_region(
+                        wl, spectrum.flux, spectrum.error, obs_low, obs_high, line_mask
+                    )
+                    model_region, in_region, _ = result
+                    if model_region is not None:
+                        continuum_est = continuum_est.at[in_region].set(model_region)
+
+            # Measure peak height above continuum for each line.
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
                 if lam_obs <= 0:
@@ -446,17 +545,18 @@ class Spectra:
                 in_window = (wl >= lam_obs - total_fwhm) & (wl <= lam_obs + total_fwhm)
                 if not jnp.any(in_window):
                     continue
-                peak_height = float(jnp.max(jnp.abs(spectrum.flux[in_window])))
-                # Convert to reference units before comparing.
-                flux_est = peak_height * flux_conv * total_fwhm * wl_conv
+                peak_above = float(
+                    jnp.max(
+                        jnp.abs(spectrum.flux[in_window] - continuum_est[in_window])
+                    )
+                )
+                flux_est = peak_above * flux_conv * total_fwhm * wl_conv
                 max_line_scale = max(max_line_scale, flux_est)
 
         line_scale_val = max_line_scale if max_line_scale > 0 else 1.0
         self._line_scale = line_scale_val * ref_flux_unit * ref_wl_unit
 
-        # --- Continuum scale ---
-        # Line exclusion mask uses an LSF-convolved half-width so that the
-        # masked region grows with the local resolution element.
+        # --- Continuum scale and optional error scale ---
         if continuum_config is not None:
             max_cont_scale = 0.0
             for spectrum in self._spectra:
@@ -464,34 +564,51 @@ class Spectra:
                 flux_conv = _flux_density_conversion_factor(
                     spectrum.flux_unit, ref_flux_unit
                 )
+                line_mask = _build_line_mask(spectrum, mask_fwhm_kms)
+                per_pixel_scale = jnp.ones(spectrum.npix)
+                all_chi2_reds: list[float] = []
+
                 for region in continuum_config:
                     conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
+
                     in_region = (wl >= obs_low) & (wl <= obs_high)
                     if not jnp.any(in_region):
                         continue
 
-                    # Build line exclusion mask with LSF-convolved half-widths.
-                    line_mask = jnp.zeros(spectrum.npix, dtype=bool)
-                    for lam_rest in line_config.wavelengths:
-                        lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
-                        if lam_obs <= 0:
-                            continue
-                        lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
-                        user_hw = lam_obs * linedet_kms / C_KMS
-                        half_width = float(jnp.sqrt(user_hw**2 + lsf_fwhm**2))
-                        line_mask = line_mask | (
-                            (wl > lam_obs - half_width) & (wl < lam_obs + half_width)
-                        )
-
                     good = in_region & ~line_mask
-                    if not jnp.any(good):
-                        continue
+                    if jnp.any(good):
+                        median_flux = float(jnp.median(jnp.abs(spectrum.flux[good])))
+                        max_cont_scale = max(max_cont_scale, median_flux * flux_conv)
 
-                    median_flux = float(jnp.median(jnp.abs(spectrum.flux[good])))
-                    # Convert to reference flux unit before comparing.
-                    max_cont_scale = max(max_cont_scale, median_flux * flux_conv)
+                    if error_scale:
+                        result = _fit_continuum_region(
+                            wl,
+                            spectrum.flux,
+                            spectrum.error,
+                            obs_low,
+                            obs_high,
+                            line_mask,
+                        )
+                        _, fit_region, chi2_red = result
+                        if chi2_red is not None:
+                            all_chi2_reds.append(chi2_red)
+                            region_scale = float(jnp.sqrt(jnp.maximum(chi2_red, 1.0)))
+                            per_pixel_scale = jnp.where(
+                                fit_region, region_scale, per_pixel_scale
+                            )
+
+                if error_scale and all_chi2_reds:
+                    # For pixels not in any continuum region, use the median
+                    # scale across all regions.
+                    median_chi2 = float(np.median(all_chi2_reds))
+                    fallback_scale = float(jnp.sqrt(jnp.maximum(median_chi2, 1.0)))
+                    no_region = per_pixel_scale == 1.0
+                    per_pixel_scale = jnp.where(
+                        no_region, fallback_scale, per_pixel_scale
+                    )
+                    spectrum.error_scale = per_pixel_scale
 
             cont_scale_val = max_cont_scale if max_cont_scale > 0 else 1.0
             self._continuum_scale = cont_scale_val * ref_flux_unit
@@ -646,109 +763,6 @@ class Spectra:
             filtered_cont = None
 
         return filtered_lines, filtered_cont
-
-    # -- error resizing -------------------------------------------------------
-
-    def resize_errors(
-        self,
-        line_config: LineConfiguration,
-        continuum_config: ContinuumConfiguration | None = None,
-        *,
-        linedet: u.Quantity = 1000.0 * u.km / u.s,
-    ) -> None:
-        """Rescale per-spectrum errors so that continuum chi-squared ~ 1.
-
-        For each spectrum, pixels near emission lines (within *linedet*)
-        are masked.  The continuum form is fit to the remaining pixels via
-        least-squares, and the reduced chi-squared of the residuals determines
-        the error scale factor: ``sqrt(max(chi2_red, 1.0))``.
-
-        Parameters
-        ----------
-        line_config : LineConfiguration
-            Line configuration (used to identify line positions).
-        continuum_config : ContinuumConfiguration, optional
-            Continuum configuration with regions and forms.  If ``None``,
-            errors are not resized.
-        linedet : astropy.units.Quantity
-            Half-width for masking line positions.  Must have velocity units.
-            Default ``1000 km/s``.
-        """
-        linedet = _ensure_velocity(linedet, 'linedet')
-        if continuum_config is None:
-            return
-
-        from unite._utils import _wavelength_conversion_factor
-
-        eps = float(linedet.to(u.km / u.s).value) / C_KMS
-        z = self._redshift
-
-        # Observed-frame line wavelengths (as bare floats per spectrum unit).
-        for spectrum in self._spectra:
-            wl = spectrum.wavelength
-            all_chi2_reds: list[float] = []
-
-            for region in continuum_config:
-                conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
-                obs_low = region.low * conv * (1.0 + z)
-                obs_high = region.high * conv * (1.0 + z)
-
-                # Pixels in this continuum region.
-                in_region = (wl >= obs_low) & (wl <= obs_high)
-                if not jnp.any(in_region):
-                    continue
-
-                # Build line exclusion mask.
-                line_mask = jnp.zeros(spectrum.npix, dtype=bool)
-                for lam_rest in line_config.wavelengths:
-                    lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
-                    line_mask = line_mask | (
-                        (wl > lam_obs * (1.0 - eps)) & (wl < lam_obs * (1.0 + eps))
-                    )
-
-                # Unmasked pixels within region.
-                good = in_region & ~line_mask
-                n_good = int(jnp.sum(good))
-                if n_good < 3:
-                    continue
-
-                # Fit the continuum form using least-squares (linear fit).
-                wl_good = wl[good]
-                flux_good = spectrum.flux[good]
-                err_good = spectrum.error[good]
-                center = float((obs_low + obs_high) / 2.0)
-
-                # Build design matrix for the form's parameters.
-                # For simple linear forms, use polynomial fit.
-                n_params = region.form.n_params - 1  # exclude normalization_wavelength
-                if n_params <= 0:
-                    continue
-
-                # Use polynomial least-squares as a generic approximation.
-                x = wl_good - center
-                weights = 1.0 / err_good
-
-                # Build Vandermonde-like matrix up to degree n_params-1.
-                degree = min(n_params - 1, 3)  # cap at cubic
-                design = jnp.stack([x**k for k in range(degree + 1)], axis=-1)
-                design_w = design * weights[:, None]
-                bw = flux_good * weights
-
-                # Solve via lstsq.
-                coeffs, _, _, _ = jnp.linalg.lstsq(design_w, bw)
-                model_vals = design @ coeffs
-                residuals = (flux_good - model_vals) / err_good
-                dof = n_good - (degree + 1)
-                if dof > 0:
-                    chi2_red = float(jnp.sum(residuals**2) / dof)
-                    all_chi2_reds.append(chi2_red)
-
-            if all_chi2_reds:
-                # Use the median chi2_red across regions.
-                import numpy as np
-
-                median_chi2 = float(np.median(all_chi2_reds))
-                spectrum.error_scale = float(jnp.sqrt(jnp.maximum(median_chi2, 1.0)))
 
     # -- container interface --------------------------------------------------
 

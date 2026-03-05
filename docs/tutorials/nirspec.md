@@ -148,11 +148,9 @@ spectra = Spectra([prism_spectrum, g395m_spectrum], redshift=5.2772)
 filtered_lines, filtered_cont = spectra.prepare(lc, cc)
 print(f'Lines: {len(filtered_lines)}, regions: {len(filtered_cont)}')
 
-spectra.compute_scales(filtered_lines, filtered_cont)
+spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 print(f'Line scale:      {spectra.line_scale:.4g}')
 print(f'Continuum scale: {spectra.continuum_scale:.4g}')
-
-spectra.resize_errors(filtered_lines, filtered_cont)
 for s in spectra:
     print(f'Error scale for {s.name}: {s.error_scale:.4f}')
 ```

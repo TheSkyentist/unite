@@ -401,3 +401,72 @@ class TestAddLines:
                 [5000.0 * u.AA, 5100.0 * u.AA],
                 redshift=[z, z, z],  # 3 values for 2 centers
             )
+
+
+# ---------------------------------------------------------------------------
+# Merge
+# ---------------------------------------------------------------------------
+
+
+class TestMerge:
+    def test_merge_strict_no_collision(self):
+        a = LineConfiguration()
+        a.add_line('Ha', 6563.0 * u.AA, redshift=Redshift('z_a'))
+        b = LineConfiguration()
+        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('z_b'))
+        merged = a.merge(b, strict=True)
+        assert len(merged) == 2
+
+    def test_merge_strict_collision_raises(self):
+        z = Redshift('shared_z')
+        a = LineConfiguration()
+        a.add_line('Ha', 6563.0 * u.AA, redshift=z)
+        # b uses a different Redshift instance but with the same name
+        b = LineConfiguration()
+        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('shared_z'))
+        with pytest.raises(ValueError, match='Token name collision'):
+            a.merge(b, strict=True)
+
+    def test_merge_lenient_shares_tokens(self):
+        a = LineConfiguration()
+        a.add_line('Ha', 6563.0 * u.AA, redshift=Redshift('shared_z'))
+        b = LineConfiguration()
+        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('shared_z'))
+        merged = a.merge(b, strict=False)
+        assert len(merged) == 2
+        # Both lines should share the same redshift token (from a)
+        z_ids = {id(e.redshift) for e in merged._entries}
+        assert len(z_ids) == 1
+
+    def test_add_operator(self):
+        a = LineConfiguration()
+        a.add_line('Ha', 6563.0 * u.AA, redshift=Redshift('z_a'))
+        b = LineConfiguration()
+        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('z_b'))
+        merged = a + b
+        assert len(merged) == 2
+
+
+# ---------------------------------------------------------------------------
+# Save / Load
+# ---------------------------------------------------------------------------
+
+
+class TestSaveLoad:
+    def test_yaml_roundtrip(self):
+        lc = LineConfiguration()
+        z = Redshift('nlr')
+        lc.add_line('Ha', 6563.0 * u.AA, redshift=z)
+        lc.add_line('Hb', 4861.0 * u.AA, redshift=z)
+        text = lc.to_yaml()
+        lc2 = LineConfiguration.from_yaml(text)
+        assert len(lc2) == 2
+
+    def test_file_roundtrip(self, tmp_path):
+        lc = LineConfiguration()
+        z = Redshift('nlr')
+        lc.add_line('Ha', 6563.0 * u.AA, redshift=z)
+        path = tmp_path / 'lines.yaml'
+        lc.save(path)
+        lc2 = LineConfiguration.load(path)
+        assert len(lc2) == 1

@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import count
+from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+import yaml
 from astropy import units as u
 
 from unite._utils import _alpha_name, _broadcast, _ensure_wavelength
@@ -822,6 +824,171 @@ class LineConfiguration:
             )
 
         return config
+
+    # ------------------------------------------------------------------
+    # YAML serialization
+    # ------------------------------------------------------------------
+
+    def to_yaml(self) -> str:
+        """Serialize to a YAML string.
+
+        Returns
+        -------
+        str
+        """
+        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+
+    @classmethod
+    def from_yaml(cls, text: str) -> LineConfiguration:
+        """Deserialize from a YAML string.
+
+        Parameters
+        ----------
+        text : str
+            YAML string as produced by :meth:`to_yaml`.
+
+        Returns
+        -------
+        LineConfiguration
+        """
+        return cls.from_dict(yaml.safe_load(text))
+
+    # ------------------------------------------------------------------
+    # File I/O
+    # ------------------------------------------------------------------
+
+    def save(self, path: str | Path) -> None:
+        """Save to a YAML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Output file path.
+        """
+        Path(path).write_text(self.to_yaml())
+
+    @classmethod
+    def load(cls, path: str | Path) -> LineConfiguration:
+        """Load from a YAML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to a YAML file written by :meth:`save`.
+
+        Returns
+        -------
+        LineConfiguration
+        """
+        return cls.from_yaml(Path(path).read_text())
+
+    # ------------------------------------------------------------------
+    # Merging
+    # ------------------------------------------------------------------
+
+    def merge(
+        self, other: LineConfiguration, *, strict: bool = True
+    ) -> LineConfiguration:
+        """Merge another :class:`LineConfiguration` into a new one.
+
+        Parameters
+        ----------
+        other : LineConfiguration
+            Configuration to merge.
+        strict : bool
+            If ``True`` (default), raise :exc:`ValueError` on any token
+            name collision between the two configs.  If ``False``,
+            same-named tokens of the same type are treated as shared
+            (the token from *self* is kept); same-named tokens of
+            different types still raise.
+
+        Returns
+        -------
+        LineConfiguration
+            New configuration containing lines from both *self* and *other*.
+
+        Raises
+        ------
+        ValueError
+            On name collisions (strict mode) or type mismatches.
+        """
+        if not isinstance(other, LineConfiguration):
+            return NotImplemented
+
+        # Build a mapping of token name → token from self's entries.
+        self_tokens: dict[str, Parameter] = {}
+        for entry in self._entries:
+            for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
+                if tok.name not in self_tokens:
+                    self_tokens[tok.name] = tok
+
+        # Build a mapping from other's token id → replacement token.
+        other_remap: dict[int, Parameter] = {}
+        for entry in other._entries:
+            for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
+                tid = id(tok)
+                if tid in other_remap:
+                    continue
+                if tok.name in self_tokens:
+                    existing = self_tokens[tok.name]
+                    if strict:
+                        msg = (
+                            f'Token name collision: {tok.name!r} exists in both '
+                            f'configs. Use strict=False to merge same-typed tokens.'
+                        )
+                        raise ValueError(msg)
+                    if type(existing) is not type(tok):
+                        msg = (
+                            f'Token name {tok.name!r} has type '
+                            f'{type(existing).__name__} in self but '
+                            f'{type(tok).__name__} in other.'
+                        )
+                        raise TypeError(msg)
+                    other_remap[tid] = existing
+                else:
+                    other_remap[tid] = tok
+
+        # Build new config: copy self's entries, then add other's with remapped tokens.
+        merged = LineConfiguration()
+        for entry in self._entries:
+            merged.add_line(
+                entry.name,
+                entry.wavelength,
+                profile=entry.profile,
+                redshift=entry.redshift,
+                flux=entry.flux,
+                strength=entry.strength,
+                **entry.fwhms,
+            )
+        for entry in other._entries:
+            remapped_z = other_remap[id(entry.redshift)]
+            remapped_flux = other_remap[id(entry.flux)]
+            remapped_fwhms = {k: other_remap[id(v)] for k, v in entry.fwhms.items()}
+            merged.add_line(
+                entry.name,
+                entry.wavelength,
+                profile=entry.profile,
+                redshift=remapped_z,
+                flux=remapped_flux,
+                strength=entry.strength,
+                **remapped_fwhms,
+            )
+        return merged
+
+    def __add__(self, other: LineConfiguration) -> LineConfiguration:
+        """Merge two configs (strict mode — raises on name collisions).
+
+        Parameters
+        ----------
+        other : LineConfiguration
+
+        Returns
+        -------
+        LineConfiguration
+        """
+        if not isinstance(other, LineConfiguration):
+            return NotImplemented
+        return self.merge(other, strict=True)
 
     # ------------------------------------------------------------------
     # Dunder methods

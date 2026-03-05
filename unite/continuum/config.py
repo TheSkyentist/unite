@@ -5,8 +5,10 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
+import yaml
 from astropy import units as u
 
 from unite._utils import _ensure_wavelength
@@ -456,6 +458,63 @@ class ContinuumConfiguration:
                 )
             )
         return cls(regions)
+
+    # ------------------------------------------------------------------
+    # YAML serialization
+    # ------------------------------------------------------------------
+
+    def to_yaml(self) -> str:
+        """Serialize to a YAML string.
+
+        Returns
+        -------
+        str
+        """
+        return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
+
+    @classmethod
+    def from_yaml(cls, text: str) -> ContinuumConfiguration:
+        """Deserialize from a YAML string.
+
+        Parameters
+        ----------
+        text : str
+            YAML string as produced by :meth:`to_yaml`.
+
+        Returns
+        -------
+        ContinuumConfiguration
+        """
+        return cls.from_dict(yaml.safe_load(text))
+
+    # ------------------------------------------------------------------
+    # File I/O
+    # ------------------------------------------------------------------
+
+    def save(self, path: str | Path) -> None:
+        """Save to a YAML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Output file path.
+        """
+        Path(path).write_text(self.to_yaml())
+
+    @classmethod
+    def load(cls, path: str | Path) -> ContinuumConfiguration:
+        """Load from a YAML file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Path to a YAML file written by :meth:`save`.
+
+        Returns
+        -------
+        ContinuumConfiguration
+        """
+        return cls.from_yaml(Path(path).read_text())
 
     # ------------------------------------------------------------------
     # Container interface
