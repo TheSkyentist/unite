@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -35,18 +36,14 @@ class SpectrumPrediction:
     continuum_regions: dict[str, np.ndarray]
 
 
-def _get_scalar(context: dict, name: str, sample_idx: int) -> float:
-    """Extract a scalar value from context for a given sample index."""
-    val = context[name]
-    if val.ndim == 0:
-        return val
-    return val[sample_idx]
-
-
 def evaluate_model(
     samples: dict[str, np.ndarray], args: ModelArgs
 ) -> list[SpectrumPrediction]:
     """Evaluate the model for each posterior sample and decompose contributions.
+
+    Uses :func:`jax.vmap` to evaluate all samples in a single vectorised XLA
+    kernel launch rather than a Python loop, giving a large speed-up when the
+    number of posterior samples is large.
 
     Parameters
     ----------
@@ -66,7 +63,7 @@ def evaluate_model(
     z_sys = args.redshift
     n_lines = cm.wavelengths.shape[0]
 
-    # --- Resolve all parameter values from samples ---
+    # --- Build parameter dict with a uniform (n_samples,) leading axis ---
     context: dict[str, jnp.ndarray] = {}
     n_samples = None
     for pname in args.dependency_order:
@@ -82,7 +79,14 @@ def evaluate_model(
     if n_samples is None:
         n_samples = 1
 
-    # --- Per-spectrum evaluation, looping over samples ---
+    # Broadcast Fixed (scalar) params to (n_samples,) so every leaf has the
+    # same leading axis and vmap can map uniformly over the dict pytree.
+    context = {
+        k: (jnp.broadcast_to(v, (n_samples,)) if v.ndim == 0 else v)
+        for k, v in context.items()
+    }
+
+    # --- Per-spectrum evaluation (vectorised over samples) ---
     results: list[SpectrumPrediction] = []
 
     for i, spectrum in enumerate(args.spectra):
@@ -91,133 +95,142 @@ def evaluate_model(
         inv_wl_scale = 1.0 / wl_scale
         wl_out = np.asarray(spectrum.wavelength)
 
-        all_totals = []
-        all_line_contribs: dict[int, list] = {j: [] for j in range(n_lines)}
-        all_cont_contribs: dict[str, list] = {}
+        # Static arrays: do not depend on sample values.
+        low_base = jnp.asarray(spectrum.low * wl_scale)
+        high_base = jnp.asarray(spectrum.high * wl_scale)
+        if disp.pix_offset is not None:
+            mid_disp = jnp.asarray((spectrum.low + spectrum.high) / 2.0)
+            dlam = disp.dlam_dpix(mid_disp) * wl_scale  # (n_pix,)
+        else:
+            dlam = None
 
-        for s in range(n_samples):
-            # --- Per-line parameters for this sample ---
-            flux_vec = jnp.stack([_get_scalar(context, n, s) for n in cm.flux_names])
+        line_scale = float(args.line_flux_scale)
+        cont_scale = float(args.continuum_scale)
+        n_pix = spectrum.npix
+
+        # Keyword-only defaults bind the per-iteration values at definition
+        # time, avoiding late-binding closure issues (ruff B023) while
+        # allowing jax.vmap to vmap only over the positional `params` arg.
+        def _single(
+            params,
+            *,
+            _low=low_base,
+            _high=high_base,
+            _dlam=dlam,
+            _disp=disp,
+            _inv_wl_scale=inv_wl_scale,
+            _line_scale=line_scale,
+            _cont_scale=cont_scale,
+            _n_pix=n_pix,
+        ):
+            """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
+            # --- Line parameters ---
+            flux_vec = jnp.stack([params[n] for n in cm.flux_names])
             flux_per_line = flux_vec @ cm.flux_matrix * cm.strengths
 
-            z_vec = jnp.stack([_get_scalar(context, n, s) for n in cm.z_names])
+            z_vec = jnp.stack([params[n] for n in cm.z_names])
             z_per_line = z_vec @ cm.z_matrix
-
             centers = cm.wavelengths * (1.0 + z_sys + z_per_line)
 
-            if cm.p0_names:
-                p0_vec = jnp.stack([_get_scalar(context, n, s) for n in cm.p0_names])
-                p0_kms = p0_vec @ cm.p0_matrix
-            else:
-                p0_kms = jnp.zeros(n_lines)
+            p0_kms = (
+                jnp.stack([params[n] for n in cm.p0_names]) @ cm.p0_matrix
+                if cm.p0_names
+                else jnp.zeros(n_lines)
+            )
             p0 = centers * p0_kms / C_KMS
 
-            if cm.p1v_names:
-                p1v_vec = jnp.stack([_get_scalar(context, n, s) for n in cm.p1v_names])
-                p1v_kms = p1v_vec @ cm.p1v_matrix
-            else:
-                p1v_kms = jnp.zeros(n_lines)
+            p1v_kms = (
+                jnp.stack([params[n] for n in cm.p1v_names]) @ cm.p1v_matrix
+                if cm.p1v_names
+                else jnp.zeros(n_lines)
+            )
             p1v = centers * p1v_kms / C_KMS
 
-            if cm.p1d_names:
-                p1d_vec = jnp.stack([_get_scalar(context, n, s) for n in cm.p1d_names])
-                p1d = p1d_vec @ cm.p1d_matrix
-            else:
-                p1d = jnp.zeros(n_lines)
+            p1d = (
+                jnp.stack([params[n] for n in cm.p1d_names]) @ cm.p1d_matrix
+                if cm.p1d_names
+                else jnp.zeros(n_lines)
+            )
             p1 = p1v + p1d
 
-            if cm.p2_names:
-                p2_vec = jnp.stack([_get_scalar(context, n, s) for n in cm.p2_names])
-                p2 = p2_vec @ cm.p2_matrix
-            else:
-                p2 = jnp.zeros(n_lines)
-
-            # Calibration values.
-            r_scale = (
-                _get_scalar(context, disp.r_scale.name, s)
-                if disp.r_scale is not None
-                else 1.0
+            p2 = (
+                jnp.stack([params[n] for n in cm.p2_names]) @ cm.p2_matrix
+                if cm.p2_names
+                else jnp.zeros(n_lines)
             )
+
+            # --- Calibration ---
+            r_scale = params[_disp.r_scale.name] if _disp.r_scale is not None else 1.0
             flux_scale_val = (
-                _get_scalar(context, disp.flux_scale.name, s)
-                if disp.flux_scale is not None
-                else 1.0
+                params[_disp.flux_scale.name] if _disp.flux_scale is not None else 1.0
             )
             pix_offset = (
-                _get_scalar(context, disp.pix_offset.name, s)
-                if disp.pix_offset is not None
-                else 0.0
+                params[_disp.pix_offset.name] if _disp.pix_offset is not None else 0.0
             )
 
-            # Pixel edges in canonical wavelength unit.
-            low = spectrum.low * wl_scale
-            high = spectrum.high * wl_scale
-            if disp.pix_offset is not None:
-                mid_disp = (spectrum.low + spectrum.high) / 2.0
-                shift = pix_offset * disp.dlam_dpix(mid_disp) * wl_scale
-                low = low + shift
-                high = high + shift
-
+            # --- Pixel edges (apply sub-pixel offset if present) ---
+            low = _low
+            high = _high
+            if _dlam is not None:
+                low = low + pix_offset * _dlam
+                high = high + pix_offset * _dlam
             wavelength = (low + high) / 2.0
 
-            # LSF FWHM at each line centre.
-            lsf_fwhm = centers / (disp.R(centers * inv_wl_scale) * r_scale)
-
-            # Integrate all lines.
+            # --- Line integration ---
+            lsf_fwhm = centers / (_disp.R(centers * _inv_wl_scale) * r_scale)
             pixints = integrate_lines(
                 low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
             ) / (high - low)
 
-            # Per-line contributions in original flux units.
-            # In the model: line_model = (flux * line_flux_scale / norm) * pixints
-            # Back to original: multiply by norm, so contributions = flux * line_flux_scale * pixints
-            line_contribs = (flux_per_line * args.line_flux_scale)[:, None] * pixints
+            line_contribs = (flux_per_line * _line_scale)[:, None] * pixints
             line_contribs_scaled = line_contribs * flux_scale_val
 
-            # Continuum.
-            cont_contribs_s: dict[str, np.ndarray] = {}
-            continuum_total = jnp.zeros(spectrum.npix)
+            # --- Continuum ---
+            continuum_total = jnp.zeros(_n_pix)
+            cont_contributions = []
             if args.cont_config is not None:
                 for k, region in enumerate(args.cont_config):
                     obs_low = args.cont_low[k] * (1.0 + z_sys)
                     obs_high = args.cont_high[k] * (1.0 + z_sys)
                     obs_center = args.cont_center[k] * (1.0 + z_sys)
                     in_region = (wavelength >= obs_low) & (wavelength <= obs_high)
-                    cont_params = {}
-                    for pn, tok in args.cont_resolved_params[k].items():
-                        val = _get_scalar(context, tok.name, s)
-                        if pn == 'normalization_wavelength':
-                            val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
-                        cont_params[pn] = val
+                    cont_p = {
+                        pn: (
+                            params[tok.name] * args.cont_nw_conv[k] * (1.0 + z_sys)
+                            if pn == 'normalization_wavelength'
+                            else params[tok.name]
+                        )
+                        for pn, tok in args.cont_resolved_params[k].items()
+                    }
                     region_cont = (
-                        region.form.evaluate(wavelength, obs_center, cont_params)
-                        * args.continuum_scale
+                        region.form.evaluate(wavelength, obs_center, cont_p) * _cont_scale
                     )
                     region_cont = jnp.where(in_region, region_cont, 0.0)
-                    cont_contribs_s[f'cont_{k}'] = np.asarray(
-                        region_cont * flux_scale_val
-                    )
+                    cont_contributions.append(region_cont * flux_scale_val)
                     continuum_total = continuum_total + region_cont
 
             total = flux_scale_val * (line_contribs.sum(axis=0) + continuum_total)
-            all_totals.append(np.asarray(total))
-            for j in range(n_lines):
-                all_line_contribs[j].append(np.asarray(line_contribs_scaled[j]))
-            for key, val in cont_contribs_s.items():
-                all_cont_contribs.setdefault(key, []).append(val)
+            return total, line_contribs_scaled, cont_contributions
 
-        total_arr = np.stack(all_totals)
+        # Vectorise over the leading sample axis of every parameter in context.
+        # JAX treats the dict as a pytree and maps axis 0 of each leaf.
+        total_arr, line_arr, cont_arr = jax.vmap(_single)(context)
+        # total_arr:  (n_samples, n_pix)
+        # line_arr:   (n_samples, n_lines, n_pix)
+        # cont_arr:   list of (n_samples, n_pix), one per continuum region
+
         lines_dict: dict[str, np.ndarray] = {
-            f'line_{j}': np.stack(all_line_contribs[j]) for j in range(n_lines)
+            f'line_{j}': np.asarray(line_arr[:, j, :]) for j in range(n_lines)
         }
-        cont_dict: dict[str, np.ndarray] = {
-            key: np.stack(vals) for key, vals in all_cont_contribs.items()
-        }
+        cont_dict: dict[str, np.ndarray] = {}
+        if args.cont_config is not None:
+            for k in range(len(args.cont_config)):
+                cont_dict[f'cont_{k}'] = np.asarray(cont_arr[k])
 
         results.append(
             SpectrumPrediction(
                 wavelength=wl_out,
-                total=total_arr,
+                total=np.asarray(total_arr),
                 lines=lines_dict,
                 continuum_regions=cont_dict,
             )
