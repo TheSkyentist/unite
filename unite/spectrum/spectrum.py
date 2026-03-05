@@ -338,29 +338,35 @@ class Spectra:
         """
         from unite._utils import _wavelength_conversion_factor
 
-        eps = linedet / C_KMS
         z = self._redshift
 
         # --- Line scale ---
+        # For each line in each spectrum, search within an LSF-convolved window
+        # centred on that line's observed wavelength.  The window half-width is
+        # the quadrature sum of the user-specified intrinsic FWHM and the LSF
+        # FWHM at that wavelength.  The flux estimate is peak_height * total_FWHM.
         max_line_scale = 0.0
         for spectrum in self._spectra:
-            mid_wl = float(jnp.median(spectrum.wavelength))
-            resolving_power = spectrum.disperser.R(mid_wl)
-            # Intrinsic FWHM in wavelength units.
-            intrinsic_fwhm = mid_wl * max_fwhm_kms / C_KMS
-            # LSF FWHM.
-            lsf_fwhm = mid_wl / resolving_power
-            # Total FWHM (quadrature sum).
-            total_fwhm = jnp.sqrt(intrinsic_fwhm**2 + lsf_fwhm**2)
-            # Peak flux density.
-            peak_fd = float(jnp.max(jnp.abs(spectrum.flux)))
-            # Characteristic integrated flux.
-            flux_est = peak_fd * float(total_fwhm)
-            max_line_scale = max(max_line_scale, flux_est)
+            wl = spectrum.wavelength
+            for lam_rest in line_config.wavelengths:
+                lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
+                if lam_obs <= 0:
+                    continue
+                lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
+                user_fwhm = lam_obs * max_fwhm_kms / C_KMS
+                total_fwhm = float(jnp.sqrt(user_fwhm**2 + lsf_fwhm**2))
+                in_window = (wl >= lam_obs - total_fwhm) & (wl <= lam_obs + total_fwhm)
+                if not jnp.any(in_window):
+                    continue
+                peak_height = float(jnp.max(jnp.abs(spectrum.flux[in_window])))
+                flux_est = peak_height * total_fwhm
+                max_line_scale = max(max_line_scale, flux_est)
 
         self._line_scale = max_line_scale if max_line_scale > 0 else 1.0
 
         # --- Continuum scale ---
+        # Line exclusion mask uses an LSF-convolved half-width so that the
+        # masked region grows with the local resolution element.
         if continuum_config is not None:
             max_cont_scale = 0.0
             for spectrum in self._spectra:
@@ -373,12 +379,17 @@ class Spectra:
                     if not jnp.any(in_region):
                         continue
 
-                    # Build line exclusion mask.
+                    # Build line exclusion mask with LSF-convolved half-widths.
                     line_mask = jnp.zeros(spectrum.npix, dtype=bool)
                     for lam_rest in line_config.wavelengths:
                         lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
+                        if lam_obs <= 0:
+                            continue
+                        lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
+                        user_hw = lam_obs * linedet / C_KMS
+                        half_width = float(jnp.sqrt(user_hw**2 + lsf_fwhm**2))
                         line_mask = line_mask | (
-                            (wl > lam_obs * (1.0 - eps)) & (wl < lam_obs * (1.0 + eps))
+                            (wl > lam_obs - half_width) & (wl < lam_obs + half_width)
                         )
 
                     good = in_region & ~line_mask

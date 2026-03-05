@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
+from astropy import units as u
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -118,6 +119,29 @@ class ContinuumForm(ABC):
         """
 
     @abstractmethod
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        """Physical unit mapping for each parameter.
+
+        Parameters
+        ----------
+        flux_unit : astropy.units.UnitBase
+            Flux density unit of the spectrum (e.g. ``u.Unit('erg s-1 cm-2 AA-1')``).
+        wl_unit : astropy.units.UnitBase
+            Canonical wavelength unit (e.g. ``u.um``).
+
+        Returns
+        -------
+        dict of str to (bool, unit)
+            For each parameter name: ``(apply_continuum_scale, physical_unit)``.
+            If ``apply_continuum_scale`` is ``True``, multiply the sampled value
+            by ``continuum_scale`` to recover the physical quantity.
+            ``physical_unit`` is the resulting astropy unit, or ``None`` for
+            dimensionless parameters.
+        """
+
+    @abstractmethod
     def to_dict(self) -> dict:
         """Serialize to a YAML-safe dictionary."""
 
@@ -200,6 +224,15 @@ class Linear(ContinuumForm):
             'normalization_wavelength': Fixed(region_center),
         }
 
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        return {
+            'scale': (True, flux_unit),
+            'slope': (True, flux_unit / wl_unit),
+            'normalization_wavelength': (False, wl_unit),
+        }
+
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
@@ -247,6 +280,15 @@ class PowerLaw(ContinuumForm):
             'scale': Uniform(0, 10),
             'beta': Uniform(-5, 5),
             'normalization_wavelength': Fixed(region_center),
+        }
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        return {
+            'scale': (True, flux_unit),
+            'beta': (False, None),
+            'normalization_wavelength': (False, wl_unit),
         }
 
     def evaluate(
@@ -314,6 +356,15 @@ class Polynomial(ContinuumForm):
             priors[f'c{i}'] = Uniform(-10, 10)
         priors['normalization_wavelength'] = Fixed(region_center)
         return priors
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
+        for i in range(1, self._degree + 1):
+            d[f'c{i}'] = (True, flux_unit / wl_unit**i)
+        d['normalization_wavelength'] = (False, wl_unit)
+        return d
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
@@ -420,6 +471,16 @@ class Chebyshev(ContinuumForm):
         priors['normalization_wavelength'] = Fixed(region_center)
         return priors
 
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        # x is normalised to [-1, 1], so all coefficients have unit flux_unit.
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
+        for i in range(1, self._order + 1):
+            d[f'c{i}'] = (True, flux_unit)
+        d['normalization_wavelength'] = (False, wl_unit)
+        return d
+
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
@@ -495,6 +556,15 @@ class Blackbody(ContinuumForm):
             'normalization_wavelength': Fixed(region_center),
         }
 
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        return {
+            'scale': (True, flux_unit),
+            'temperature': (False, u.K),
+            'normalization_wavelength': (False, wl_unit),
+        }
+
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
@@ -545,6 +615,16 @@ class ModifiedBlackbody(ContinuumForm):
             'temperature': Uniform(100, 50000),
             'beta': Uniform(-4, 4),
             'normalization_wavelength': Fixed(region_center),
+        }
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        return {
+            'scale': (True, flux_unit),
+            'temperature': (False, u.K),
+            'beta': (False, None),
+            'normalization_wavelength': (False, wl_unit),
         }
 
     def evaluate(
@@ -618,6 +698,17 @@ class AttenuatedBlackbody(ContinuumForm):
             'tau_v': Uniform(0, 5),
             'alpha': Uniform(-2, 0),
             'normalization_wavelength': Fixed(region_center),
+        }
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        return {
+            'scale': (True, flux_unit),
+            'temperature': (False, u.K),
+            'tau_v': (False, None),
+            'alpha': (False, None),
+            'normalization_wavelength': (False, wl_unit),
         }
 
     def evaluate(
@@ -707,6 +798,16 @@ class BSpline(ContinuumForm):
             priors[f'coeff_{i}'] = Uniform(-10, 10)
         priors['normalization_wavelength'] = Fixed(region_center)
         return priors
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        # B-spline coefficients share the same unit as the function value.
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
+        for i in range(1, self._n_basis):
+            d[f'coeff_{i}'] = (True, flux_unit)
+        d['normalization_wavelength'] = (False, wl_unit)
+        return d
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
@@ -806,6 +907,16 @@ class Bernstein(ContinuumForm):
             priors[f'coeff_{i}'] = Uniform(0, 10)
         priors['normalization_wavelength'] = Fixed(region_center)
         return priors
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        # Bernstein coefficients share the same unit as the function value.
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
+        for i in range(1, self._degree + 1):
+            d[f'coeff_{i}'] = (True, flux_unit)
+        d['normalization_wavelength'] = (False, wl_unit)
+        return d
 
     def evaluate(
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]

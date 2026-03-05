@@ -189,8 +189,9 @@ def evaluate_model(
                         if pn == 'normalization_wavelength':
                             val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
                         cont_params[pn] = val
-                    region_cont = region.form.evaluate(
-                        wavelength, obs_center, cont_params
+                    region_cont = (
+                        region.form.evaluate(wavelength, obs_center, cont_params)
+                        * args.continuum_scale
                     )
                     region_cont = jnp.where(in_region, region_cont, 0.0)
                     cont_contribs_s[f'cont_{k}'] = np.asarray(

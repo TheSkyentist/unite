@@ -252,6 +252,8 @@ class TestModelOutputValidation:
         """Test that model predictions have the correct shape."""
         from numpyro import infer
 
+        from unite.evaluate import evaluate_model
+
         spectrum = create_simple_spectrum()
         line_config = create_minimal_config()
         spectra = Spectra([spectrum], redshift=0.0)
@@ -264,25 +266,29 @@ class TestModelOutputValidation:
         mcmc = infer.MCMC(kernel, num_samples=5, num_warmup=3, progress_bar=False)
         mcmc.run(rng_key, unite_args)
 
-        # Get posterior predictions
         posterior_samples = mcmc.get_samples()
+
+        # obs sites are still in the trace.
+        obs_pred = posterior_samples.get('obs_test_spectrum')
+        # obs site is observed so it won't appear in posterior samples;
+        # use Predictive to get it.
         predictive = Predictive(unite_model, posterior_samples)
         predictions = predictive(rng_key, unite_args)
-
-        # Check prediction shapes
-        model_pred = predictions['test_spectrum_model']
         obs_pred = predictions['obs_test_spectrum']
-
-        assert model_pred.shape == (5, 100)  # 5 samples, 100 pixels
         assert obs_pred.shape == (5, 100)
-
-        # Check that predictions are finite
-        assert jnp.all(jnp.isfinite(model_pred))
         assert jnp.all(jnp.isfinite(obs_pred))
+
+        # Model predictions via evaluate_model (physical units, decomposed).
+        preds = evaluate_model(posterior_samples, unite_args)
+        assert len(preds) == 1
+        assert preds[0].total.shape == (5, 100)  # 5 samples, 100 pixels
+        assert jnp.all(jnp.isfinite(preds[0].total))
 
     def test_model_fits_data_range(self):
         """Test that model predictions are finite and not all zeros."""
         from numpyro import infer
+
+        from unite.evaluate import evaluate_model
 
         spectrum = create_simple_spectrum()
         line_config = create_minimal_config()
@@ -296,26 +302,14 @@ class TestModelOutputValidation:
         mcmc = infer.MCMC(kernel, num_samples=5, num_warmup=3, progress_bar=False)
         mcmc.run(rng_key, unite_args)
 
-        # Get posterior predictions
         posterior_samples = mcmc.get_samples()
-        predictive = Predictive(unite_model, posterior_samples)
-        predictions = predictive(rng_key, unite_args)
+        preds = evaluate_model(posterior_samples, unite_args)
+        mean_model = jnp.mean(jnp.asarray(preds[0].total), axis=0)
 
-        model_pred = predictions['test_spectrum_model']
-        mean_model = jnp.mean(model_pred, axis=0)
-
-        # Model output is now in normalized flux units (O(1) scale).
-        # Check that predictions are finite.
+        # evaluate_model returns physical flux units.
         assert jnp.all(jnp.isfinite(mean_model))
-
-        # The norm factor should bring data to ~O(1), so model output should
-        # be in a similar range. The norm_factors are exposed as deterministics.
-        norm = unite_args.norm_factors[0]
-        assert norm > 0
-
-        # Back-convert to original flux scale and check reasonable range.
-        mean_model_orig = mean_model * norm
-        assert jnp.max(jnp.abs(mean_model_orig)) > 1  # not all zeros
+        assert unite_args.norm_factors[0] > 0
+        assert jnp.max(jnp.abs(mean_model)) > 0  # not all zeros
 
 
 # ---------------------------------------------------------------------------
@@ -429,8 +423,9 @@ class TestWavelengthUnitConsistency:
         rng_key = random.PRNGKey(42)
         predictive = Predictive(unite_model, num_samples=2)
         samples = predictive(rng_key, unite_args)
-        assert 'spec_aa_model' in samples
-        assert 'spec_um_model' in samples
+        # Model predictions are now accessed via evaluate_model, not the trace.
+        assert 'obs_spec_aa' in samples
+        assert 'obs_spec_um' in samples
 
     def test_line_flux_scale_positive(self):
         """line_flux_scale should always be positive."""

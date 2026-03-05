@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpyro
-from numpyro import deterministic as determ, distributions as dist
+from numpyro import distributions as dist
 
 from unite._utils import C_KMS, _wavelength_conversion_factor
 from unite.continuum.config import ContinuumConfiguration
@@ -62,6 +62,11 @@ class ModelArgs:
     # --- Flux normalization ---
     norm_factors: list[float]
     line_flux_scale: float
+    continuum_scale: float
+    #: Wavelength unit of canonical frame (first spectrum's disperser unit).
+    canonical_unit: object
+    #: Per-spectrum flux density units (``None`` when unspecified).
+    flux_units: list
 
 
 # ------------------------------------------------------------------
@@ -151,10 +156,6 @@ def unite_model(args: ModelArgs) -> None:
     else:
         p2 = jnp.zeros(n_lines)
 
-    # Expose normalization metadata as deterministics for back-conversion.
-    determ('line_flux_scale', jnp.asarray(args.line_flux_scale))
-    determ('norm_factors', jnp.asarray(args.norm_factors))
-
     # --- 3. Per-spectrum likelihood ---
     for i, spectrum in enumerate(args.spectra):
         disp = spectrum.disperser
@@ -218,10 +219,9 @@ def unite_model(args: ModelArgs) -> None:
                 continuum = continuum + jnp.where(in_region, region_cont, 0.0)
 
         # Likelihood (normalized flux space).
-        model = flux_scale * determ(
-            f'{spectrum.name}_model', line_model + continuum / norm
-        )
-        determ(f'{spectrum.name}_norm', jnp.asarray(norm))
+        # Continuum is scaled by continuum_scale so that sampled 'scale'
+        # parameters are O(1) relative to the characteristic continuum flux.
+        model = flux_scale * (line_model + continuum * args.continuum_scale / norm)
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(
             obs_name,
@@ -386,6 +386,11 @@ class ModelBuilder:
 
         # Line flux scale (from Spectra.compute_scales).
         line_flux_scale = self._spectra.line_scale
+        # Continuum scale (from Spectra.compute_scales; 1.0 if not set).
+        continuum_scale = self._spectra.continuum_scale or 1.0
+        # Unit metadata for post-processing.
+        canonical_unit = self._canonical_unit
+        flux_units = [s.flux_unit for s in self._spectra]
 
         # Pre-convert continuum region bounds to canonical unit.
         if self._cont_config is not None:
@@ -425,6 +430,9 @@ class ModelBuilder:
             cont_nw_conv=cont_nw_conv,
             norm_factors=norm_factors,
             line_flux_scale=line_flux_scale,
+            continuum_scale=continuum_scale,
+            canonical_unit=canonical_unit,
+            flux_units=flux_units,
         )
         return unite_model, args
 

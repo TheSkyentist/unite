@@ -7,8 +7,9 @@ into user-friendly :class:`~astropy.table.Table` objects and FITS files.
 from __future__ import annotations
 
 import numpy as np
+from astropy import units as u
 from astropy.io import fits
-from astropy.table import Table
+from astropy.table import QTable, Table
 
 from unite.evaluate import evaluate_model
 from unite.model import ModelArgs
@@ -17,8 +18,8 @@ from unite.prior import Fixed
 
 def make_parameter_table(
     samples: dict[str, np.ndarray], args: ModelArgs, *, summary: bool = False
-) -> Table:
-    """Build an Astropy table of posterior parameter samples.
+) -> QTable:
+    """Build an Astropy table of posterior parameter samples in physical units.
 
     Parameters
     ----------
@@ -33,10 +34,60 @@ def make_parameter_table(
 
     Returns
     -------
-    astropy.table.Table
+    astropy.table.QTable
         One row per posterior sample (full mode) or 3 rows (summary mode).
+        Columns carry physical units where known:
+
+        * Line flux parameters — ``flux_unit * canonical_wl_unit``
+        * FWHM parameters — km/s
+        * Continuum ``scale`` parameters — ``flux_unit``
+        * Continuum ``slope`` / polynomial coefficients — ``flux_unit / wl_unit^n``
+        * Shape / index parameters (``beta``, ``temperature``, …) — raw values
     """
-    table = Table()
+    table = QTable()
+
+    cm = args.matrices
+    flux_unit = next((fu for fu in args.flux_units if fu is not None), None)
+    canonical_unit = args.canonical_unit
+    line_flux_unit = (
+        flux_unit * canonical_unit
+        if (flux_unit is not None and canonical_unit is not None)
+        else None
+    )
+
+    # Classify parameter names.
+    flux_names: set[str] = set(cm.flux_names)
+    fwhm_names: set[str] = set(cm.p0_names or []) | set(cm.p1v_names or [])
+    z_names: set[str] = set(cm.z_names or [])
+
+    # Build continuum param lookup: param_name → (region_idx, param_slot_name)
+    cont_param_lookup: dict[str, tuple[int, str]] = {}
+    if args.cont_config is not None and args.cont_resolved_params is not None:
+        for k, resolved in enumerate(args.cont_resolved_params):
+            for pn, tok in resolved.items():
+                cont_param_lookup[tok.name] = (k, pn)
+
+    def _to_column(pname: str, arr: np.ndarray) -> np.ndarray | u.Quantity:
+        """Convert a raw sample array to a physical Quantity where possible."""
+        if pname in flux_names:
+            phys = arr * args.line_flux_scale
+            return u.Quantity(phys, unit=line_flux_unit) if line_flux_unit else phys
+        if pname in fwhm_names:
+            return u.Quantity(arr, unit=u.km / u.s)
+        if pname in z_names:
+            return arr  # dimensionless
+        if (
+            pname in cont_param_lookup
+            and flux_unit is not None
+            and canonical_unit is not None
+        ):
+            k, pn = cont_param_lookup[pname]
+            region = args.cont_config[k]
+            pu = region.form.param_units(flux_unit, canonical_unit)
+            apply_cs, phys_unit = pu.get(pn, (False, None))
+            phys = arr * args.continuum_scale if apply_cs else arr
+            return u.Quantity(phys, unit=phys_unit) if phys_unit is not None else phys
+        return arr  # calibration or other dimensionless param
 
     if summary:
         table['stat'] = ['median', 'p16', 'p84']
@@ -47,22 +98,23 @@ def make_parameter_table(
                 table[pname] = [val, val, val]
             else:
                 arr = np.asarray(samples[pname])
-                table[pname] = [
-                    float(np.median(arr)),
-                    float(np.percentile(arr, 16)),
-                    float(np.percentile(arr, 84)),
-                ]
+                summary_arr = np.array(
+                    [np.median(arr), np.percentile(arr, 16), np.percentile(arr, 84)]
+                )
+                table[pname] = _to_column(pname, summary_arr)
     else:
+        n_samples = _get_n_samples(samples)
         for pname in args.dependency_order:
             prior = args.all_priors[pname]
             if isinstance(prior, Fixed):
-                n_samples = _get_n_samples(samples)
-                table[pname] = np.full(n_samples, prior.value)
+                table[pname] = np.full(n_samples, float(prior.value))
             else:
-                table[pname] = np.asarray(samples[pname])
+                arr = np.asarray(samples[pname])
+                table[pname] = _to_column(pname, arr)
 
     # Add metadata (short keys for FITS compatibility).
     table.meta['LFLXSCL'] = args.line_flux_scale
+    table.meta['CNTSCL'] = args.continuum_scale
     table.meta['NRMFCTRS'] = list(args.norm_factors)
     table.meta['ZSYS'] = args.redshift
 
@@ -93,8 +145,9 @@ def make_spectra_tables(
 
     Returns
     -------
-    list of astropy.table.Table
-        One table per spectrum.
+    list of astropy.table.QTable
+        One table per spectrum.  Columns carry physical units where
+        ``flux_unit`` was set on the spectrum.
     """
     predictions = evaluate_model(samples, args)
     tables: list[Table] = []
@@ -116,27 +169,42 @@ def make_spectra_tables(
             pixel_mask = np.ones(len(wl), dtype=bool)
             region_bounds = []
 
-        t = Table()
-        t['wavelength'] = wl[pixel_mask]
+        t = QTable()
+        wl_unit = spectrum.unit
+        spec_flux_unit = args.flux_units[i] if args.flux_units else None
+
+        def _as_wl(arr: np.ndarray, unit: object) -> np.ndarray | u.Quantity:
+            return u.Quantity(arr, unit=unit) if unit is not None else arr
+
+        def _as_flux(arr: np.ndarray, unit: object) -> np.ndarray | u.Quantity:
+            return u.Quantity(arr, unit=unit) if unit is not None else arr
+
+        t['wavelength'] = _as_wl(wl[pixel_mask], wl_unit)
 
         if summary:
             # _summarize returns (3, n_pixels) → trim → transpose to (n_pixels, 3)
-            t['model_total'] = _summarize(pred.total[:, pixel_mask]).T
+            t['model_total'] = _as_flux(
+                _summarize(pred.total[:, pixel_mask]).T, spec_flux_unit
+            )
             for name, arr in pred.lines.items():
-                t[name] = _summarize(arr[:, pixel_mask]).T
+                t[name] = _as_flux(_summarize(arr[:, pixel_mask]).T, spec_flux_unit)
             for name, arr in pred.continuum_regions.items():
-                t[name] = _summarize(arr[:, pixel_mask]).T
+                t[name] = _as_flux(_summarize(arr[:, pixel_mask]).T, spec_flux_unit)
         else:
             # (n_samples, n_pixels) → trim → transpose to (n_pixels, n_samples)
-            t['model_total'] = pred.total[:, pixel_mask].T
+            t['model_total'] = _as_flux(pred.total[:, pixel_mask].T, spec_flux_unit)
             for name, arr in pred.lines.items():
-                t[name] = arr[:, pixel_mask].T
+                t[name] = _as_flux(arr[:, pixel_mask].T, spec_flux_unit)
             for name, arr in pred.continuum_regions.items():
-                t[name] = arr[:, pixel_mask].T
+                t[name] = _as_flux(arr[:, pixel_mask].T, spec_flux_unit)
 
         # Add observed data columns.
-        t['observed_flux'] = np.asarray(spectrum.flux)[pixel_mask]
-        t['observed_error'] = np.asarray(spectrum.scaled_error)[pixel_mask]
+        t['observed_flux'] = _as_flux(
+            np.asarray(spectrum.flux)[pixel_mask], spec_flux_unit
+        )
+        t['observed_error'] = _as_flux(
+            np.asarray(spectrum.scaled_error)[pixel_mask], spec_flux_unit
+        )
 
         t.meta['SPECNAME'] = spectrum.name
         t.meta['NORMFAC'] = float(args.norm_factors[i])
@@ -184,6 +252,7 @@ def make_hdul(
     primary = fits.PrimaryHDU()
     primary.header['ZSYS'] = (args.redshift, 'Systemic redshift')
     primary.header['LFLXSCL'] = (args.line_flux_scale, 'Line flux scale')
+    primary.header['CNTSCL'] = (args.continuum_scale, 'Continuum flux scale')
     primary.header['NSPEC'] = (len(args.spectra), 'Number of spectra')
 
     hdus = [primary]
