@@ -11,6 +11,7 @@ from astropy import units as u
 from unite._utils import (
     C_KMS,
     _ensure_flux_density_quantity,
+    _ensure_velocity,
     _ensure_wavelength,
     _flux_density_conversion_factor,
 )
@@ -261,6 +262,11 @@ class Spectra:
     redshift : float
         Systemic redshift estimate used for rest-frame → observed-frame
         conversion during coverage checks.  Default ``0.0``.
+    canonical_unit : astropy.units.UnitBase, optional
+        Wavelength unit used for all internal model computations (line
+        centres, continuum bounds, pixel edges).  Defaults to the first
+        spectrum's disperser unit.  Override this if you want a specific
+        unit regardless of spectrum order.
 
     Raises
     ------
@@ -268,7 +274,12 @@ class Spectra:
         If *spectra* is empty or contains non-Spectrum objects.
     """
 
-    def __init__(self, spectra: Sequence[Spectrum], redshift: float = 0.0) -> None:
+    def __init__(
+        self,
+        spectra: Sequence[Spectrum],
+        redshift: float = 0.0,
+        canonical_unit: u.UnitBase | None = None,
+    ) -> None:
         if not spectra:
             msg = 'Spectra collection must contain at least one spectrum.'
             raise ValueError(msg)
@@ -287,12 +298,34 @@ class Spectra:
         self._prepared_line_config: LineConfiguration | None = None
         self._prepared_cont_config: ContinuumConfiguration | None = None
 
+        # Canonical wavelength unit: default to the first spectrum's unit.
+        if canonical_unit is not None:
+            canonical_unit = u.Unit(canonical_unit)
+            if not canonical_unit.is_equivalent(u.m):
+                msg = (
+                    f'canonical_unit must have wavelength dimensions, '
+                    f'got {canonical_unit!r}.'
+                )
+                raise u.UnitConversionError(msg)
+            self._canonical_unit: u.UnitBase = canonical_unit
+        else:
+            self._canonical_unit = self._spectra[0].unit
+
     # -- properties -----------------------------------------------------------
 
     @property
     def redshift(self) -> float:
         """Systemic redshift estimate."""
         return self._redshift
+
+    @property
+    def canonical_unit(self) -> u.UnitBase:
+        """Canonical wavelength unit used for all internal model computations.
+
+        Defaults to the first spectrum's wavelength unit.  Can be overridden
+        via the *canonical_unit* constructor parameter.
+        """
+        return self._canonical_unit
 
     @property
     def line_scale(self) -> u.Quantity | None:
@@ -350,13 +383,13 @@ class Spectra:
         line_config: LineConfiguration,
         continuum_config: ContinuumConfiguration | None = None,
         *,
-        max_fwhm_kms: float = 1000.0,
-        linedet: float = 1000.0,
+        max_fwhm: u.Quantity = 1000.0 * u.km / u.s,
+        linedet: u.Quantity = 1000.0 * u.km / u.s,
     ) -> None:
         """Estimate characteristic flux scales for lines and continuum.
 
         The **line scale** is estimated as ``peak_flux_density * typical_line_width``
-        using *max_fwhm_kms* and the disperser's resolution.  The maximum
+        using *max_fwhm* and the disperser's resolution.  The maximum
         across all spectra (converted to a common unit) is used.
 
         The **continuum scale** is the maximum median ``|flux|`` across
@@ -372,18 +405,24 @@ class Spectra:
             Line configuration.
         continuum_config : ContinuumConfiguration, optional
             Continuum configuration.  If ``None``, only line scale is computed.
-        max_fwhm_kms : float
-            Maximum expected intrinsic line FWHM in km/s.  Default ``1000``.
-        linedet : float
-            Half-width in km/s for masking line positions.  Default ``1000``.
+        max_fwhm : astropy.units.Quantity
+            Maximum expected intrinsic line FWHM.  Must have velocity units.
+            Default ``1000 km/s``.
+        linedet : astropy.units.Quantity
+            Half-width for masking line positions.  Must have velocity units.
+            Default ``1000 km/s``.
         """
+        max_fwhm = _ensure_velocity(max_fwhm, 'max_fwhm')
+        linedet = _ensure_velocity(linedet, 'linedet')
+        max_fwhm_kms = float(max_fwhm.to(u.km / u.s).value)
+        linedet_kms = float(linedet.to(u.km / u.s).value)
         from unite._utils import _wavelength_conversion_factor
 
         z = self._redshift
-        # Reference units: use the first spectrum's units as the common frame
-        # for comparing scale estimates across spectra.
+        # Reference units: use the first spectrum's flux unit and canonical
+        # wavelength unit as the common frame for comparing scale estimates.
         ref_flux_unit = self._spectra[0].flux_unit
-        ref_wl_unit = self._spectra[0].unit
+        ref_wl_unit = self._canonical_unit
 
         # --- Line scale ---
         # For each line in each spectrum, search within an LSF-convolved window
@@ -440,7 +479,7 @@ class Spectra:
                         if lam_obs <= 0:
                             continue
                         lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
-                        user_hw = lam_obs * linedet / C_KMS
+                        user_hw = lam_obs * linedet_kms / C_KMS
                         half_width = float(jnp.sqrt(user_hw**2 + lsf_fwhm**2))
                         line_mask = line_mask | (
                             (wl > lam_obs - half_width) & (wl < lam_obs + half_width)
@@ -464,7 +503,7 @@ class Spectra:
         line_config: LineConfiguration,
         continuum_config: ContinuumConfiguration | None = None,
         *,
-        linedet: float = 1000.0,
+        linedet: u.Quantity = 1000.0 * u.km / u.s,
         drop_empty_regions: bool = True,
     ) -> tuple[LineConfiguration, ContinuumConfiguration | None]:
         """Filter configs for coverage and optionally drop empty continuum regions.
@@ -480,8 +519,9 @@ class Spectra:
             Line configuration.
         continuum_config : ContinuumConfiguration, optional
             Continuum configuration.
-        linedet : float
-            Detection half-width in km/s.  Default ``1000``.
+        linedet : astropy.units.Quantity
+            Detection half-width.  Must have velocity units.
+            Default ``1000 km/s``.
         drop_empty_regions : bool
             If ``True`` (default), drop continuum regions that do not contain
             any filtered line (in rest frame).
@@ -539,12 +579,12 @@ class Spectra:
         line_config: LineConfiguration,
         continuum_config: ContinuumConfiguration | None = None,
         *,
-        linedet: float = 1000.0,
+        linedet: u.Quantity = 1000.0 * u.km / u.s,
     ) -> tuple[LineConfiguration, ContinuumConfiguration | None]:
         """Drop lines and continuum regions not covered by any spectrum.
 
         Each line's rest-frame wavelength is shifted to the observed frame
-        using :attr:`redshift`, then padded by *linedet* km/s to form a
+        using :attr:`redshift`, then padded by *linedet* to form a
         detection window.  A line is kept if **any** spectrum partially
         overlaps that window.  Continuum regions are checked the same way.
 
@@ -554,8 +594,9 @@ class Spectra:
             Line configuration to filter.
         continuum_config : ContinuumConfiguration, optional
             Continuum configuration to filter.  ``None`` is passed through.
-        linedet : float
-            Detection half-width in km/s.  Default ``1000`` km/s.
+        linedet : astropy.units.Quantity
+            Detection half-width.  Must have velocity units.
+            Default ``1000 km/s``.
 
         Returns
         -------
@@ -565,7 +606,8 @@ class Spectra:
         from unite._utils import _wavelength_conversion_factor
         from unite.continuum.config import ContinuumConfiguration
 
-        eps = linedet / C_KMS
+        linedet = _ensure_velocity(linedet, 'linedet')
+        eps = float(linedet.to(u.km / u.s).value) / C_KMS
         z = self._redshift
 
         # --- filter lines ---
@@ -612,11 +654,11 @@ class Spectra:
         line_config: LineConfiguration,
         continuum_config: ContinuumConfiguration | None = None,
         *,
-        linedet: float = 1000.0,
+        linedet: u.Quantity = 1000.0 * u.km / u.s,
     ) -> None:
         """Rescale per-spectrum errors so that continuum chi-squared ~ 1.
 
-        For each spectrum, pixels near emission lines (within *linedet* km/s)
+        For each spectrum, pixels near emission lines (within *linedet*)
         are masked.  The continuum form is fit to the remaining pixels via
         least-squares, and the reduced chi-squared of the residuals determines
         the error scale factor: ``sqrt(max(chi2_red, 1.0))``.
@@ -628,15 +670,17 @@ class Spectra:
         continuum_config : ContinuumConfiguration, optional
             Continuum configuration with regions and forms.  If ``None``,
             errors are not resized.
-        linedet : float
-            Half-width in km/s for masking line positions.  Default ``1000``.
+        linedet : astropy.units.Quantity
+            Half-width for masking line positions.  Must have velocity units.
+            Default ``1000 km/s``.
         """
+        linedet = _ensure_velocity(linedet, 'linedet')
         if continuum_config is None:
             return
 
         from unite._utils import _wavelength_conversion_factor
 
-        eps = linedet / C_KMS
+        eps = float(linedet.to(u.km / u.s).value) / C_KMS
         z = self._redshift
 
         # Observed-frame line wavelengths (as bare floats per spectrum unit).

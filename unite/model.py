@@ -306,8 +306,8 @@ class ModelBuilder:
         self._line_config = line_config
         self._cont_config = continuum_config
 
-        # --- Canonical wavelength unit: use the first spectrum's disperser unit ---
-        self._canonical_unit = spectra[0].unit
+        # --- Canonical wavelength unit: use Spectra's canonical_unit ---
+        self._canonical_unit = spectra.canonical_unit
 
         # Build precomputed matrices from line entries.
         self._matrices = line_config.build_matrices()

@@ -189,6 +189,42 @@ def _wavelength_conversion_factor(from_unit: u.UnitBase, to_unit: u.UnitBase) ->
     return float((1.0 * from_unit).to(to_unit).value)
 
 
+def _ensure_velocity(
+    value: u.Quantity, name: str = 'velocity'
+) -> u.Quantity:
+    """Validate that *value* is a Quantity with velocity units.
+
+    Parameters
+    ----------
+    value : astropy.units.Quantity
+        Value to validate.
+    name : str, optional
+        Name used in error messages.  Defaults to ``'velocity'``.
+
+    Returns
+    -------
+    astropy.units.Quantity
+        The validated quantity (unchanged).
+
+    Raises
+    ------
+    TypeError
+        If *value* is not a :class:`~astropy.units.Quantity`.
+    ValueError
+        If *value* does not have velocity units.
+    """
+    if not isinstance(value, u.Quantity):
+        raise TypeError(
+            f'{name} must be an astropy Quantity with velocity units '
+            f'(e.g. km/s), got {type(value).__name__}.'
+        )
+    if not value.unit.is_equivalent(u.km / u.s):
+        raise ValueError(
+            f'{name} must have velocity units (e.g. km/s), got {value.unit!r}.'
+        )
+    return value
+
+
 def _ensure_flux_density(unit: u.UnitBase) -> None:
     """Validate that *unit* is a spectral flux density per wavelength.
 
