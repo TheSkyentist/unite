@@ -53,14 +53,43 @@ pixi run docs      # build these docs
 
 ---
 
+## JAX 64-bit Mode
+
+JAX defaults to 32-bit arithmetic. `unite` works in 32-bit but **64-bit is strongly
+recommended**, particularly when sampling posteriors with long tails or tight
+constraints where numerical precision matters. Enable it before any JAX computation:
+
+```python
+import jax
+jax.config.update('jax_enable_x64', True)
+
+# Now import unite and other JAX-dependent packages
+from unite import line, model, prior
+```
+
+Alternatively, set the environment variable before starting Python:
+
+```bash
+JAX_ENABLE_X64=1 python my_script.py
+```
+
+:::{note}
+If you see unexpected posterior shapes or numerical instabilities (especially with
+Lorentzian or heavy-tailed profiles), enabling 64-bit mode is the first thing to try.
+:::
+
+---
+
 ## Quick Start
 
 The example below fits three emission lines (H$\alpha$ + [NII] doublet) in a simulated
 spectrum. See {doc}`tutorials/generic` for the full annotated walkthrough.
 
 ```python
-import astropy.units as u
 import jax
+jax.config.update('jax_enable_x64', True)
+
+import astropy.units as u
 import numpy as np
 from numpyro import infer
 

@@ -23,7 +23,9 @@ config = Configuration(
 
 ---
 
-## Saving to YAML
+## Saving and Loading
+
+### Top-Level Configuration
 
 ```python
 # To a file
@@ -31,14 +33,7 @@ config.save('my_fit.yaml')
 
 # To a YAML string (useful for logging or embedding in notebooks)
 yaml_str = config.to_yaml()
-print(yaml_str)
-```
 
----
-
-## Loading from YAML
-
-```python
 # From a file
 config2 = Configuration.load('my_fit.yaml')
 
@@ -51,8 +46,26 @@ cc2 = config2.continuum
 dc2 = config2.dispersers
 ```
 
-Token sharing is preserved across the round-trip: if two lines shared a `Redshift` token
-when the config was saved, they will share the same reconstructed token object after loading.
+### Sub-Configuration Serialization
+
+Each sub-configuration also supports standalone YAML I/O:
+
+```python
+# Lines only
+lc.save('lines.yaml')
+lc2 = LineConfiguration.load('lines.yaml')
+
+# Continuum only
+cc.save('continuum.yaml')
+cc2 = ContinuumConfiguration.load('continuum.yaml')
+
+# Dispersers only
+dc.save('dispersers.yaml')
+dc2 = DispersersConfiguration.load('dispersers.yaml')
+```
+
+This is useful for reusing the same line configuration across different fits, or sharing
+disperser setups between collaborators.
 
 ---
 
@@ -94,39 +107,43 @@ continuum:
 Shared tokens appear **once** as a full definition and subsequently as a `{ref: name}`
 reference. You can edit priors, add lines, or change profile types directly in the YAML.
 
----
+### Dependent Priors in YAML
 
-## Including Dispersers
+When a prior bound references another parameter, it is serialized with `ref`, `scale`, and
+`offset` fields:
 
-When a `DispersersConfiguration` is included, calibration tokens are also serialized:
-
-```python
-from unite.disperser import DispersersConfiguration, FluxScale
-from unite.disperser.nirspec import G395M, PRISM
-
-g395m = G395M(r_source='point', flux_scale=FluxScale(prior.Uniform(0.5, 2.0)))
-prism = PRISM(r_source='point')
-
-dc = DispersersConfiguration(dispersers=[g395m, prism])
-config = Configuration(lines=lc, continuum=cc, dispersers=dc)
-config.save('nirspec_fit.yaml')
+```yaml
+fwhm_broad:
+  name: fwhm_b
+  prior:
+    type: Uniform
+    low: {ref: fwhm_n, scale: 1.0, offset: 150.0}
+    high: 5000.0
 ```
 
-The YAML output will include a `dispersers` section with `calib_params` (calibration token
-definitions) and `entries` (disperser instances referencing those tokens):
+This represents the expression `fwhm_narrow * 1.0 + 150.0` as the lower bound.
+
+### Dispersers in YAML
+
+When a {class}`~unite.disperser.config.DispersersConfiguration` is included, calibration
+tokens are also serialized:
 
 ```yaml
 dispersers:
   calib_params:
-    flux_scale_g395m:
-      type: FluxScale
-      prior: {type: Uniform, low: 0.5, high: 2.0}
+    r_shared:
+      type: RScale
+      prior: {type: TruncatedNormal, loc: 1.0, scale: 0.05, low: 0.8, high: 1.2}
   entries:
-    - type: G395M
+    - type: G235H
       r_source: point
-      flux_scale: {ref: flux_scale_g395m}
-    - type: PRISM
+      r_scale: {ref: r_shared}
+    - type: G395H
       r_source: point
+      r_scale: {ref: r_shared}
+      flux_scale:
+        name: flux_g395h
+        prior: {type: Uniform, low: 0.5, high: 2.0}
 ```
 
 ---
@@ -138,6 +155,7 @@ configuration, including:
 
 - All token names and priors
 - Token sharing relationships (same token → same model parameter)
+- Dependent prior expressions (ParameterRef chains)
 - Profile types and parameters
 - Continuum region boundaries and functional forms
 - Calibration token types and priors on dispersers
@@ -162,3 +180,18 @@ The YAML format is part of `unite`'s public API, but **do not rename token `name
 without also updating all `{ref: ...}` references to that token. Broken references will
 raise a `KeyError` on load.
 :::
+
+---
+
+## Dict Interface
+
+All configuration objects also support `to_dict()` / `from_dict()` for programmatic
+manipulation:
+
+```python
+d = config.to_dict()
+# Modify the dict...
+config2 = Configuration.from_dict(d)
+```
+
+This is useful for automated parameter sweeps or template-based configuration generation.

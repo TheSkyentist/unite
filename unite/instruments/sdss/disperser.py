@@ -12,7 +12,7 @@ to be configured and the disperser configuration to be serialized.
 
 Examples
 --------
->>> from unite.disperser.sdss import SDSSDisperser
+>>> from unite.instruments.sdss import SDSSDisperser
 >>> d = SDSSDisperser()
 >>> d.unit
 Unit("Angstrom")

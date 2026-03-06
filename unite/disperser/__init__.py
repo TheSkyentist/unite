@@ -3,7 +3,7 @@
 Typical usage::
 
     from unite.disperser import DispersersConfiguration, RScale, FluxScale
-    from unite.disperser.nirspec import G235H, G395H, NIRSpecSpectrum
+    from unite.instruments.nirspec import G235H, G395H, NIRSpecSpectrum
     from unite.prior import TruncatedNormal
 
     # Shared resolving-power scale (same token instance → one parameter).

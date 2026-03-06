@@ -65,7 +65,7 @@ prism_disperser = PRISM(r_source='point')
 :::{note}
 Calibration tokens (`FluxScale`, `RScale`, `PixOffset`) are attached to the **disperser**,
 not the spectrum. If two spectra share the same disperser instance, they share the same
-calibration parameter. See {doc}`../guides/advanced` for details.
+calibration parameter. See {doc}`../guides/instruments` for details.
 :::
 
 ---
@@ -131,7 +131,7 @@ cc = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
 :::{note}
 `fwhm_narrow + 150` returns a {class}`~unite.prior.ParameterRef` expression, not a number.
 `ModelBuilder` evaluates this expression at sample time after drawing `fwhm_narrow`.
-See {doc}`../guides/advanced` for more on dependent priors.
+See {doc}`../guides/priors` for more on dependent priors.
 :::
 
 ---

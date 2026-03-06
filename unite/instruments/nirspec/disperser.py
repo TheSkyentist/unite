@@ -113,7 +113,7 @@ def _load_uniform_disp(grating: str) -> dict[str, jnp.ndarray]:
         (dimensionless), each as a 1-D ``jnp.ndarray``.
     """
     filename = f'jwst_nirspec_{grating}_disp.fits'
-    ref = resources.files('unite.disperser.nirspec.data').joinpath(filename)
+    ref = resources.files('unite.instruments.nirspec.data').joinpath(filename)
     with resources.as_file(ref) as path, fits.open(path) as hdul:
         data = hdul[1].data
         return {

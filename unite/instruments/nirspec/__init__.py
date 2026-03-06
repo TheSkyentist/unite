@@ -1,6 +1,6 @@
 """JWST NIRSpec dispersers and spectrum loader."""
 
-from unite.disperser.nirspec.disperser import (
+from unite.instruments.nirspec.disperser import (
     G140H,
     G140M,
     G235H,
@@ -8,8 +8,9 @@ from unite.disperser.nirspec.disperser import (
     G395H,
     G395M,
     PRISM,
+    NIRSpecDisperser,
 )
-from unite.disperser.nirspec.spectrum import NIRSpecSpectrum
+from unite.instruments.nirspec.spectrum import NIRSpecSpectrum
 
 __all__ = [
     'G140H',
@@ -18,6 +19,7 @@ __all__ = [
     'G235M',
     'G395H',
     'G395M',
-    'PRISM',
+    'NIRSpecDisperser',
     'NIRSpecSpectrum',
+    'PRISM',
 ]

@@ -1,0 +1,190 @@
+# Spectra and Data
+
+{class}`~unite.spectrum.Spectrum` holds a single observed spectrum;
+{class}`~unite.spectrum.Spectra` is a collection that handles coverage filtering, flux
+normalization, and error scaling.
+
+---
+
+## Spectrum
+
+A {class}`~unite.spectrum.Spectrum` is defined by pixel bin edges, flux and error arrays, and
+a {class}`~unite.disperser.base.Disperser`:
+
+```python
+from unite.spectrum import Spectrum
+from unite.disperser.generic import SimpleDisperser
+from astropy import units as u
+import numpy as np
+
+wavelength = np.linspace(6400, 6700, 300) * u.AA
+low = wavelength - 0.5 * np.gradient(wavelength)
+high = wavelength + 0.5 * np.gradient(wavelength)
+flux = np.random.normal(10, 2, 300) * u.erg / u.s / u.cm**2 / u.AA
+error = np.full(300, 2.0) * u.erg / u.s / u.cm**2 / u.AA
+
+disperser = SimpleDisperser(wavelength=wavelength.value, unit=u.AA, R=3000, name='sim')
+spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
+```
+
+### Requirements
+
+- `low` and `high` must be astropy Quantities with wavelength (length) dimensions
+- `flux` and `error` must be astropy Quantities with spectral flux density per wavelength
+  units ($f_\lambda$, e.g., `erg / s / cm^2 / AA`)
+- `flux` and `error` must have compatible units
+- `disperser` must be a {class}`~unite.disperser.base.Disperser` instance
+- All arrays must be 1-D with the same length
+- `low < high` for every pixel
+
+### Name
+
+The `name` keyword defaults to `disperser.name`. It appears in results tables and FITS
+headers:
+
+```python
+spectrum = Spectrum(..., name='G235H_obs1')
+```
+
+---
+
+## Spectra Collection
+
+{class}`~unite.spectrum.Spectra` is the main container for fitting. It holds one or more
+{class}`~unite.spectrum.Spectrum` objects:
+
+```python
+from unite.spectrum import Spectra
+
+# Single spectrum
+spectra = Spectra([spectrum], redshift=0.0)
+
+# Multiple spectra (e.g., two NIRSpec gratings)
+spectra = Spectra([g235h_spectrum, g395h_spectrum], redshift=5.28)
+```
+
+The `redshift` argument shifts all line centres to the observed frame before coverage
+filtering. Essential when fitting high-redshift sources where lines fall far from their
+rest-frame wavelengths.
+
+---
+
+## The Prepare → Scale → Build Pipeline
+
+### 1. prepare() — Coverage Filtering
+
+```python
+filtered_lines, filtered_cont = spectra.prepare(lc, cc)
+```
+
+This:
+
+- Shifts line centres by $(1 + z)$ to the observed frame
+- Checks which lines fall within each spectrum's wavelength range
+- Drops lines and continuum regions with no spectral coverage
+- Returns filtered copies of the line and continuum configurations
+
+A line that falls in one grating but not another is only modelled in the grating where it is
+covered.
+
+### 2. compute_scales() — Normalization and Error Scaling
+
+```python
+spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
+```
+
+This performs two tasks:
+
+#### Flux Normalization
+
+Estimates characteristic flux scales so that sampler parameters are near unity. This is
+important for efficient MCMC sampling — parameters spanning many orders of magnitude lead to
+poor posterior geometry and slow convergence.
+
+- **line_scale**: Estimated from peak flux above the continuum times the expected line width.
+  Stored as a {class}`~astropy.units.Quantity` in integrated flux units.
+- **continuum_scale**: Maximum median $|f|$ across continuum regions after masking lines.
+  Stored as a {class}`~astropy.units.Quantity` in flux density units.
+
+#### Error Scaling
+
+When `error_scale=True`, `compute_scales` also estimates per-region error scaling factors.
+
+Spectral reduction pipelines often produce error arrays that **underestimate the true
+noise**. This is because:
+
+- Pipeline errors typically capture photon noise and read noise but not **correlated noise**
+  from resampling (drizzling), flat-fielding, or background subtraction.
+- The reduction process — especially for JWST/NIRSpec and other IFU/MSA instruments —
+  introduces pixel-to-pixel correlations that the formal error bars do not account for.
+- The result is artificially small error bars, leading to overconfident posteriors.
+
+The error scaling algorithm:
+
+1. Masks pixels near emission lines (using a configurable FWHM, convolved in quadrature
+   with the local LSF)
+2. Fits a low-order polynomial to the unmasked pixels in each continuum region
+3. Computes the reduced $\chi^2$ ($\chi^2_\mathrm{red}$) of the residuals
+4. Inflates errors by $\sqrt{\max(\chi^2_\mathrm{red},\; 1)}$ per region
+
+This is a **conservative** correction:
+
+- Regions where the pipeline errors are already correct ($\chi^2_\mathrm{red} \approx 1$)
+  are left unchanged.
+- Regions with underestimated errors are inflated to match the observed scatter.
+
+The per-pixel error scaling factors are stored on each {class}`~unite.spectrum.Spectrum`
+via the `error_scale` attribute:
+
+```python
+for spec in spectra:
+    print(spec.name, spec.error_scale)
+```
+
+### 3. ModelBuilder.build()
+
+```python
+from unite import model
+
+builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
+model_fn, model_args = builder.build()
+```
+
+Returns a NumPyro model function and a {class}`~unite.model.ModelArgs` dataclass containing
+all pre-computed matrices, scales, and data arrays. You then run any NumPyro sampler:
+
+```python
+import jax
+from numpyro import infer
+
+mcmc = infer.MCMC(infer.NUTS(model_fn), num_warmup=500, num_samples=1000)
+mcmc.run(jax.random.PRNGKey(0), model_args)
+```
+
+---
+
+## Multiple Spectra
+
+When fitting multiple spectra simultaneously, the model is evaluated independently for each
+spectrum but parameters are **shared** according to token identity. This is the core of
+simultaneous fitting.
+
+```python
+from unite.instruments.nirspec import G235H, G395H, NIRSpecSpectrum
+from unite.disperser import DispersersConfiguration, RScale
+from unite import prior
+
+# Shared resolution calibration across both gratings
+r = RScale(prior=prior.TruncatedNormal(1.0, 0.05, 0.8, 1.2), name='r_shared')
+g235h = G235H(r_scale=r)
+g395h = G395H(r_scale=r)
+
+spec1 = NIRSpecSpectrum.from_DJA('g235h.fits', disperser=g235h)
+spec2 = NIRSpecSpectrum.from_DJA('g395h.fits', disperser=g395h)
+
+dc = DispersersConfiguration([g235h, g395h])
+spectra = Spectra([spec1, spec2], redshift=5.28)
+```
+
+See {doc}`instruments` for details on calibration tokens and disperser configuration,
+including degeneracy warnings.

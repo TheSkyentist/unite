@@ -1,7 +1,66 @@
 # Core Concepts
 
 This page explains the key ideas behind `unite`'s design. Understanding these concepts will
-make the tutorials much easier to follow.
+make the tutorials and guides much easier to follow.
+
+---
+
+## Key Assumptions
+
+`unite` makes several scientific and practical assumptions. Understanding these upfront will
+help you assess whether the package is appropriate for your data and avoid common pitfalls.
+
+### Same-Source Assumption
+
+The model is evaluated independently for each disperser/spectrum, but all spectra are assumed
+to observe the **same physical source** with the same intrinsic properties (redshift, line
+widths, line fluxes). This is what enables simultaneous fitting across multiple gratings.
+
+This assumption may **not** hold if:
+
+- **The source varies between observations** — e.g., time-variable AGN or transients observed
+  at different epochs.
+- **Different slit positions or fiber placements** sample different spatial regions of an
+  extended source, leading to different line ratios or kinematics.
+- **Different aperture sizes** capture different fractions of the source flux, biasing
+  relative line strengths.
+
+For **JWST/NIRSpec MSA** observations, objects observed with the same mask configuration are
+typically observed simultaneously across all gratings, so the same-source assumption is
+usually valid. Calibration tokens ({class}`~unite.disperser.base.FluxScale`,
+{class}`~unite.disperser.base.RScale`) can absorb some inter-disperser differences in flux
+calibration or resolution, but they cannot account for fundamentally different source
+properties.
+
+### Gaussian Line Spread Function
+
+The spectral LSF is modelled as a **Gaussian** at every pixel, with FWHM determined by the
+disperser's resolution curve $R(\lambda)$:
+
+$$\mathrm{lsf\_fwhm}(\lambda) = \frac{\lambda}{R(\lambda)}$$
+
+For profiles with a Gaussian component (`Gaussian`, `PseudoVoigt`, `SEMG`, `GaussHermite`,
+`SplitNormal`), the intrinsic and LSF widths are added in quadrature:
+
+$$\mathrm{fwhm\_total} = \sqrt{\mathrm{fwhm\_intrinsic}^2 + \mathrm{lsf\_fwhm}^2}$$
+
+For purely Lorentzian components (`Cauchy`, and the Lorentzian part of `PseudoVoigt`), the
+LSF is **not** convolved into the Lorentzian width. This means a "Cauchy" profile in `unite`
+is effectively a Voigt-like profile (Lorentzian convolved with the Gaussian LSF), which is
+physically appropriate since the instrumental broadening is always present.
+
+### Analytical Pixel Integration
+
+Line profiles are **analytically integrated** over each pixel bin (using the CDF), not
+evaluated at pixel centers or Riemann-summed. This is:
+
+- **Exact** — no discretisation error from summing sub-pixel samples
+- **Fast** — one CDF evaluation per pixel edge, independent of line width
+- **Robust for undersampled data** — critical for NIRSpec PRISM where lines can be narrower
+  than a single pixel
+
+The continuum is evaluated at pixel centres (not integrated), since it varies slowly enough
+that the sub-pixel variation is negligible.
 
 ---
 
@@ -13,6 +72,7 @@ the *same* parameter in the model.
 
 ```python
 from unite import line, prior
+from astropy import units as u
 
 # One Redshift token → one model parameter
 z = line.Redshift('nlr_z', prior=prior.Uniform(-0.005, 0.005))
@@ -56,29 +116,29 @@ Every token carries a **prior distribution** that is sampled in the NumPyro mode
 ```python
 from unite import prior
 
-prior.Uniform(low, high)
-prior.TruncatedNormal(loc, scale, low, high)
-prior.Fixed(value)          # not sampled; held constant
+prior.Uniform(low, high)                       # flat prior
+prior.TruncatedNormal(loc, scale, low, high)   # Gaussian with hard bounds
+prior.Fixed(value)                             # not sampled; held constant
 ```
 
-Priors can also be *dependent* on other tokens. You can pass another token (or an arithmetic
-expression involving tokens) as a bound:
+Priors can be *dependent* on other tokens — for example, constraining a broad FWHM to always
+exceed a narrow FWHM by at least 150 km/s:
 
 ```python
 fwhm_narrow = line.FWHM('fwhm_narrow', prior=prior.Uniform(100, 1000))
-
-# Broad component must be at least 150 km/s wider than the narrow component
-fwhm_broad = line.FWHM('fwhm_broad', prior=prior.Uniform(fwhm_narrow + 150, 5000))
+fwhm_broad  = line.FWHM('fwhm_broad',  prior=prior.Uniform(fwhm_narrow + 150, 5000))
 ```
 
-`ModelBuilder` uses topological sorting to sample `fwhm_narrow` first and then construct the
-prior for `fwhm_broad` at runtime.
+See {doc}`guides/priors` for the full reference on supported priors, dependent priors, and
+topological sorting.
 
 ---
 
 ## Line Configuration
 
 {class}`~unite.line.LineConfiguration` is the container for emission line specifications.
+Lines are added with `add_line`, specifying the rest-frame centre wavelength, kinematic
+tokens, flux, and (optionally) a profile shape.
 
 ```python
 lc = line.LineConfiguration()
@@ -86,40 +146,36 @@ lc.add_line(
     name='H_alpha',
     center=6563.0 * u.AA,
     redshift=z,
-    fwhm_gauss=fwhm,          # Gaussian FWHM token (required for Gaussian profile)
+    fwhm_gauss=fwhm,
     flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 10)),
-    profile='Gaussian',        # default
+    profile='Gaussian',   # default
 )
 ```
 
-Multiple calls with the same `name` create **multiple components** (e.g., broad + narrow):
-
-```python
-lc.add_line('H_alpha', 6563.0 * u.AA, redshift=z_narrow, fwhm_gauss=fwhm_narrow, ...)
-lc.add_line('H_alpha', 6563.0 * u.AA, redshift=z_broad,  fwhm_gauss=fwhm_broad,  ...)
-```
+Multiple calls with the same name create **multiple components** (e.g., narrow + broad) whose
+fluxes are summed. See {doc}`guides/line_configuration` for the full guide including all
+seven profile shapes, parameter sharing patterns, and merging configurations.
 
 ---
 
 ## Continuum Configuration
 
 {class}`~unite.continuum.ContinuumConfiguration` defines wavelength regions with a
-functional continuum form attached to each.
-
-The easiest way to build a continuum configuration is automatically from the line centers:
+functional continuum form attached to each. The easiest way to build one is automatically
+from the line centres:
 
 ```python
 from unite.continuum import ContinuumConfiguration, Linear
 
 cc = ContinuumConfiguration.from_lines(
-    lc.centers,    # wavelength array of line rest-frame centers
+    lc.centers,    # wavelength array of line rest-frame centres
     pad=0.05,      # fractional padding on each side
     form=Linear(), # continuum form: Linear, PowerLaw, Polynomial, …
 )
 ```
 
-This pads around each set of lines, merges overlapping regions, and assigns the chosen form
-to every region.
+See {doc}`guides/continuum_configuration` for all available functional forms and manual
+region specification.
 
 ---
 
@@ -143,12 +199,35 @@ The result is two new configuration objects containing only the relevant feature
 spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 ```
 
-Computes the median flux level of the continuum regions and uses it to set internal
-normalization constants (`line_scale`, `continuum_scale`). This makes the sampler's job
-easier by keeping parameter values near unity.
+This performs two tasks:
 
-When `error_scale=True` is passed, it also estimates and applies per-spectrum error
-rescaling factors. This is useful when the pipeline uncertainties are unreliable.
+**Flux normalisation.** Estimates characteristic flux scales (`line_scale`,
+`continuum_scale`) so that sampler parameters are near unity. This is important for efficient
+MCMC sampling — parameters spanning many orders of magnitude lead to poor posterior geometry
+and slow convergence.
+
+**Error scaling** (when `error_scale=True`). Spectral reduction pipelines — including
+NIRSpec's — often produce error arrays that underestimate the true noise. This happens
+because:
+
+- Pipeline errors capture photon noise and read noise but not **correlated noise** from
+  resampling (drizzling), flat-fielding, or background subtraction.
+- The reduction process introduces pixel-to-pixel correlations that formal error bars do not
+  account for.
+- The result is artificially small uncertainties and overconfident posteriors.
+
+The error scaling algorithm:
+
+1. Masks pixels near emission lines.
+2. Fits a low-order polynomial to the unmasked pixels in each continuum region.
+3. Computes the reduced $\chi^2$ of the residuals.
+4. Inflates errors by $\sqrt{\max(\chi^2_\mathrm{red}, 1)}$ per region.
+
+This is **conservative**: regions where pipeline errors are already correct
+($\chi^2_\mathrm{red} \approx 1$) are left unchanged, while regions with underestimated
+errors are inflated to match the observed scatter.
+
+See {doc}`guides/spectra` for the full guide on Spectrum, Spectra, and the scaling pipeline.
 
 ### 3. `ModelBuilder.build()`
 
@@ -158,8 +237,7 @@ model_fn, model_args = builder.build()
 ```
 
 Returns a NumPyro model function and a {class}`~unite.model.ModelArgs` dataclass containing
-all pre-computed matrices, scales, and data arrays. You then pass these directly to any
-NumPyro inference algorithm.
+all pre-computed matrices, scales, and data arrays.
 
 ---
 
@@ -175,7 +253,6 @@ mcmc = infer.MCMC(kernel, num_warmup=500, num_samples=1000)
 mcmc.run(jax.random.PRNGKey(0), model_args)
 
 # SVI (variational inference — faster but approximate)
-from numpyro import infer
 guide = infer.autoguide.AutoNormal(model_fn)
 svi = infer.SVI(model_fn, guide, infer.optim.Adam(0.01), infer.Trace_ELBO())
 ```
@@ -189,14 +266,15 @@ Every configuration object can be saved to and loaded from YAML:
 ```python
 from unite.config import Configuration
 
-config = Configuration(line=lc, continuum=cc, dispersers=dc)
-config.to_yaml('my_fit.yaml')
+config = Configuration(lines=lc, continuum=cc, dispersers=dc)
+config.save('my_fit.yaml')
 
 # Load back — all tokens and sharing relationships are preserved
-config2 = Configuration.from_yaml('my_fit.yaml')
+config2 = Configuration.load('my_fit.yaml')
 ```
 
-See {doc}`guides/serialization` for the full workflow.
+See {doc}`guides/serialization` for the full workflow, YAML format, and sub-configuration
+serialization.
 
 ---
 
@@ -214,5 +292,6 @@ spectra = Spectra([spectrum], redshift=0.0)
 spectra = Spectra([prism_spectrum, g395m_spectrum], redshift=5.28)
 ```
 
-The `redshift` argument shifts all line centers to the observed frame before coverage
-filtering. This is necessary when the lines fall far from their rest-frame wavelengths.
+The `redshift` argument shifts all line centres to the observed frame before coverage
+filtering. See {doc}`guides/spectra` for more on data handling, error scaling, and
+multi-spectrum fits.

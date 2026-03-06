@@ -12,7 +12,7 @@ Pass the **same** token instance to multiple dispersers to share a single
 parameter in the fitted model::
 
     from unite.disperser import DispersersConfiguration, RScale
-    from unite.disperser.nirspec import G235H, G395H
+    from unite.instruments.nirspec import G235H, G395H
     from unite.prior import TruncatedNormal
 
     r = RScale(prior=TruncatedNormal(1.0, 0.05, 0.8, 1.2))
@@ -39,7 +39,7 @@ reconstructed for both entries.
 Examples
 --------
 >>> from unite.disperser import DispersersConfiguration, RScale, FluxScale
->>> from unite.disperser.nirspec import G235H, G395H
+>>> from unite.instruments.nirspec import G235H, G395H
 >>> from unite.prior import TruncatedNormal
 >>> r = RScale(prior=TruncatedNormal(1.0, 0.05, 0.8, 1.2))
 >>> flux_0 = FluxScale(prior=TruncatedNormal(1.0, 0.1, 0.5, 2.0))
@@ -61,7 +61,7 @@ import yaml
 from astropy import units as u
 
 from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
-from unite.disperser.nirspec.disperser import (
+from unite.instruments.nirspec.disperser import (
     G140H,
     G140M,
     G235H,
@@ -70,7 +70,7 @@ from unite.disperser.nirspec.disperser import (
     G395M,
     PRISM,
 )
-from unite.disperser.sdss.disperser import SDSSDisperser
+from unite.instruments.sdss.disperser import SDSSDisperser
 from unite.prior import Parameter, prior_from_dict
 
 # ---------------------------------------------------------------------------

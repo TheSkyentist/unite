@@ -200,17 +200,15 @@ def form_from_dict(d: dict) -> ContinuumForm:
 class Linear(ContinuumForm):
     """Linear continuum: ``scale + slope * (wavelength - normalization_wavelength)``.
 
-    Parameters (sampled)
-    --------------------
+    Parameters
+    ----------
     scale : float
         Continuum level at ``normalization_wavelength``.
     slope : float
         Continuum slope in flux per wavelength unit.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
         Reference wavelength where the continuum equals ``scale``.
+        Fixed by default.
         Default: ``Fixed(region_center)``.
     """
 
@@ -259,17 +257,15 @@ class PowerLaw(ContinuumForm):
     :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
     ``Fixed(value)`` carrying your chosen reference wavelength.
 
-    Parameters (sampled)
-    --------------------
+    Parameters
+    ----------
     scale : float
         Continuum level at ``normalization_wavelength``.
     beta : float
         Power-law index.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
-        Reference wavelength.  Default: ``Fixed(region_center)``.
+        Reference wavelength. Fixed by default.
+        Default: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
@@ -316,18 +312,13 @@ class Polynomial(ContinuumForm):
     ----------
     degree : int
         Polynomial degree (default 1).
-
-    Parameters (sampled)
-    --------------------
     scale : float
         Continuum level at ``normalization_wavelength``.
     c1, c2, ... : float
         Higher-order polynomial coefficients.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
-        Reference wavelength.  Default: ``Fixed(region_center)``.
+        Reference wavelength. Fixed by default.
+        Default: ``Fixed(region_center)``.
     """
 
     def __init__(self, degree: int = 1) -> None:
@@ -422,19 +413,13 @@ class Chebyshev(ContinuumForm):
         Half-width of the continuum region in the same units as wavelength.
         Set to ``(high - low) / 2`` of the :class:`ContinuumRegion`.
         Default ``1.0``.
-
-    Parameters (sampled)
-    --------------------
     scale : float
         DC (T₀) coefficient — approximately the continuum level at
         ``normalization_wavelength``.
     c1, c2, ... : float
         Higher-order Chebyshev coefficients.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
-        Reference wavelength defining ``x = 0``.
+        Reference wavelength defining ``x = 0``. Fixed by default.
         Default: ``Fixed(region_center)``.
     """
 
@@ -533,17 +518,15 @@ class Blackbody(ContinuumForm):
     ``Fixed(value)`` to pin it to a specific wavelength across multiple
     regions.
 
-    Parameters (sampled)
-    --------------------
+    Parameters
+    ----------
     scale : float
         Continuum flux at ``normalization_wavelength``.
     temperature : float
         Blackbody temperature in Kelvin.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
-        Reference wavelength in microns.  Default: ``Fixed(region_center)``.
+        Reference wavelength in microns. Fixed by default.
+        Default: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
@@ -591,19 +574,17 @@ class ModifiedBlackbody(ContinuumForm):
     ``normalization_wavelength`` is a named parameter with a default
     ``Fixed(region_center)`` prior.
 
-    Parameters (sampled)
-    --------------------
+    Parameters
+    ----------
     scale : float
         Continuum flux at ``normalization_wavelength``.
     temperature : float
         Blackbody temperature in Kelvin.
     beta : float
         Power-law modifier index.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
-        Reference wavelength in microns.  Default: ``Fixed(region_center)``.
+        Reference wavelength in microns. Fixed by default.
+        Default: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
@@ -662,9 +643,6 @@ class AttenuatedBlackbody(ContinuumForm):
     lambda_v_micron : float
         Reference wavelength for the extinction law in microns
         (default ``0.55``, corresponding to optical V band).
-
-    Parameters (sampled)
-    --------------------
     scale : float
         Observed continuum flux at ``normalization_wavelength``.
     temperature : float
@@ -673,11 +651,9 @@ class AttenuatedBlackbody(ContinuumForm):
         Optical depth at ``lambda_v_micron``.
     alpha : float
         Dust extinction power-law index (negative = steeper at short λ).
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
-        Reference wavelength in microns.  Default: ``Fixed(region_center)``.
+        Reference wavelength in microns. Fixed by default.
+        Default: ``Fixed(region_center)``.
     """
 
     def __init__(self, lambda_v_micron: float = 0.55) -> None:
@@ -757,16 +733,10 @@ class BSpline(ContinuumForm):
         ``len(knots) - degree - 1``.
     degree : int
         Spline degree (default 3 for cubic).
-
-    Parameters (sampled)
-    --------------------
     scale : float
         First B-spline coefficient (overall amplitude level).
     coeff_1, coeff_2, … : float
         Remaining B-spline coefficients.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
         Included for API consistency; does not alter BSpline evaluation
         (the wavelength mapping is defined by the knot vector).
@@ -859,16 +829,10 @@ class Bernstein(ContinuumForm):
         Polynomial degree (default 4).  Number of coefficients = degree + 1.
     wavelength_min, wavelength_max : float
         Wavelength range for normalization to ``[0, 1]``.
-
-    Parameters (sampled)
-    --------------------
     scale : float
         First Bernstein coefficient (positive values give positive continuum).
     coeff_1, coeff_2, … : float
         Remaining Bernstein coefficients.
-
-    Parameters (Fixed by default)
-    ------------------------------
     normalization_wavelength : float
         Included for API consistency; does not alter Bernstein evaluation
         (the wavelength mapping is defined by ``wavelength_min/max``).

@@ -16,7 +16,7 @@ Build and save:
 >>> from unite.line import LineConfiguration, Redshift, FWHM
 >>> from unite.continuum import ContinuumConfiguration
 >>> from unite.disperser import DispersersConfiguration, RScale
->>> from unite.disperser.nirspec import G235H, G395H
+>>> from unite.instruments.nirspec import G235H, G395H
 >>> from unite.prior import TruncatedNormal
 >>> import astropy.units as u
 >>> z, w = Redshift('nlr'), FWHM('nlr')

@@ -9,7 +9,7 @@ import numpy as np
 from astropy import units as u
 
 if TYPE_CHECKING:
-    from unite.disperser.nirspec.disperser import NIRSpecDisperser
+    from unite.instruments.nirspec.disperser import NIRSpecDisperser
     from unite.spectrum.spectrum import Spectrum
 
 
@@ -33,7 +33,7 @@ class NIRSpecSpectrum:
     Create from pre-loaded arrays:
 
     >>> from astropy import units as u
-    >>> from unite.disperser.nirspec import G235H, NIRSpecSpectrum
+    >>> from unite.instruments.nirspec import G235H, NIRSpecSpectrum
     >>> import numpy as np
     >>> disperser = G235H()
     >>> n = 300

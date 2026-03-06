@@ -9,7 +9,7 @@ import numpy as np
 from astropy import units as u
 
 if TYPE_CHECKING:
-    from unite.disperser.sdss.disperser import SDSSDisperser
+    from unite.instruments.sdss.disperser import SDSSDisperser
     from unite.spectrum.spectrum import Spectrum
 
 
@@ -27,7 +27,7 @@ class SDSSSpectrum:
     --------
     Load from a standard SDSS spec file:
 
-    >>> from unite.disperser.sdss import SDSSDisperser, SDSSSpectrum
+    >>> from unite.instruments.sdss import SDSSDisperser, SDSSSpectrum
     >>> disperser = SDSSDisperser()
     >>> spec = SDSSSpectrum.from_fits('spec-1678-53433-0425.fits', disperser)
     """

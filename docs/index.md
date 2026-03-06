@@ -12,11 +12,12 @@ with shared kinematics, calibration tokens, and flexible priors.
 - Fast, exact pixel integration of line profiles (Gaussian, Voigt, Hermite, and more)
 - Simultaneous fitting across multiple spectra and gratings
 - Shared kinematic parameters (redshift, FWHM) across lines and components
+- Dependent priors with arbitrary-depth parameter chains
 - Calibration tokens (flux scale, resolution scale, pixel offset) with free or fixed priors
 - YAML serialization for reproducible, human-editable configurations
-- Instrument support for JWST/NIRSpec (all gratings + PRISM) and generic spectrographs
+- Instrument support for JWST/NIRSpec (all gratings + PRISM), SDSS, and generic spectrographs
 - User-controlled sampler — `ModelBuilder` returns `(model_fn, model_args)` for use with
-  any NumPyro backend (NUTS, SVI, nested sampling, …)
+  any NumPyro backend (NUTS, SVI, nested sampling, ...)
 
 ---
 
@@ -33,25 +34,28 @@ concepts
 ## Tutorials
 
 ```{toctree}
-:maxdepth: 1
+:maxdepth: 2
 :caption: Tutorials
 
-tutorials/index
 tutorials/generic
 tutorials/nirspec
+tutorials/programmatic
 ```
 
-## How-To Guides
+## Usage
 
 ```{toctree}
-:maxdepth: 1
-:caption: How-To Guides
+:maxdepth: 3
+:caption: Usage
 
-guides/index
-guides/line_profiles
+guides/priors
+guides/line_configuration
+guides/continuum_configuration
+guides/instruments
+guides/spectra
 guides/serialization
+guides/running_model
 guides/results
-guides/advanced
 ```
 
 ## API Reference

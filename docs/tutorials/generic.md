@@ -113,8 +113,8 @@ lc.add_line(
 ```
 
 :::{note}
-The `profile` argument defaults to `'Gaussian'`. See {doc}`../guides/line_profiles` for other
-available profiles.
+The `profile` argument defaults to `'Gaussian'`. See {doc}`../guides/line_configuration` for other
+available profiles and their parameters.
 :::
 
 ---

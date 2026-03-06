@@ -24,19 +24,3 @@ Generic Dispersers
    :members:
    :undoc-members:
    :show-inheritance:
-
-NIRSpec Dispersers
-------------------
-
-.. automodule:: unite.disperser.nirspec.disperser
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-NIRSpec Spectrum
-----------------
-
-.. automodule:: unite.disperser.nirspec.spectrum
-   :members:
-   :undoc-members:
-   :show-inheritance:

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from astropy import units as u
 
-from unite.disperser.sdss import SDSSDisperser, SDSSSpectrum
+from unite.instruments.sdss import SDSSDisperser, SDSSSpectrum
 
 
 class TestSDSSDisperser:

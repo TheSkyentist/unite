@@ -13,4 +13,5 @@ prior
 model
 results
 disperser
+instruments
 ```
