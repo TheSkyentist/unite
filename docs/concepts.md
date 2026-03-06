@@ -170,12 +170,24 @@ from unite.continuum import ContinuumConfiguration, Linear
 cc = ContinuumConfiguration.from_lines(
     lc.centers,    # wavelength array of line rest-frame centres
     pad=0.05,      # fractional padding on each side
-    form=Linear(), # continuum form: Linear, PowerLaw, Polynomial, …
+    form=Linear(), # continuum form (or string name, e.g. 'Linear')
 )
 ```
 
-See {doc}`guides/continuum_configuration` for all available functional forms and manual
-region specification.
+Nine built-in forms are available: {class}`~unite.continuum.Linear`,
+{class}`~unite.continuum.PowerLaw`, {class}`~unite.continuum.Polynomial`,
+{class}`~unite.continuum.Chebyshev`, {class}`~unite.continuum.BSpline`,
+{class}`~unite.continuum.Bernstein`, {class}`~unite.continuum.Blackbody`,
+{class}`~unite.continuum.ModifiedBlackbody`, and
+{class}`~unite.continuum.AttenuatedBlackbody`.
+
+Each form's model parameters (e.g. `scale`, `slope`, `temperature`) receive default priors
+that can be overridden per-region via `ContinuumRegion(params={...})`. Sharing the same
+{class}`~unite.prior.Parameter` instance across regions ties them to a single model
+parameter — the same token pattern used for emission lines.
+
+See {doc}`guides/continuum_configuration` for all available functional forms, custom priors,
+parameter sharing, and the quick-reference table.
 
 ---
 
