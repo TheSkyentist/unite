@@ -384,14 +384,32 @@ class ModelBuilder:
         model_args : ModelArgs
             Pre-built data bundle to pass to the model function.
         """
+        # Trim spectra to union of continuum regions (observed frame).
+        # Pixels outside all regions have model = 0 and would corrupt the
+        # likelihood if observed flux is nonzero.  Trimming also reduces
+        # array sizes passed to JAX.
+        z = self._spectra.redshift
+        if self._cont_config is not None:
+            trimmed_spectra: list[Spectrum] = []
+            for s in self._spectra:
+                mask = jnp.zeros(s.npix, dtype=bool)
+                for region in self._cont_config:
+                    conv = _wavelength_conversion_factor(region._unit, s.unit)
+                    obs_low = region.low * conv * (1.0 + z)
+                    obs_high = region.high * conv * (1.0 + z)
+                    mask = mask | s.pixel_mask(obs_low, obs_high)
+                trimmed_spectra.append(s._sliced(mask))
+        else:
+            trimmed_spectra = list(self._spectra)
+
         # Per-spectrum wavelength conversion factors.
         spec_to_canonical = [
             _wavelength_conversion_factor(s.unit, self._canonical_unit)
-            for s in self._spectra
+            for s in trimmed_spectra
         ]
 
         # Per-spectrum flux normalization.
-        norm_factors = [_compute_norm_factor(s) for s in self._spectra]
+        norm_factors = [_compute_norm_factor(s) for s in trimmed_spectra]
 
         # Line flux scale (Quantity from Spectra.compute_scales).
         line_scale_qty = self._spectra.line_scale
@@ -405,7 +423,7 @@ class ModelBuilder:
         canonical_unit = self._canonical_unit
         line_flux_scales: list[float] = []
         continuum_scales: list[float] = []
-        for s in self._spectra:
+        for s in trimmed_spectra:
             target_line_unit = s.flux_unit * canonical_unit
             lfs = float(line_scale_qty.to(target_line_unit).value)
             line_flux_scales.append(lfs)
@@ -416,7 +434,7 @@ class ModelBuilder:
                 cs = 1.0
             continuum_scales.append(cs)
 
-        flux_units = [s.flux_unit for s in self._spectra]
+        flux_units = [s.flux_unit for s in trimmed_spectra]
 
         # Pre-convert continuum region bounds to canonical unit.
         if self._cont_config is not None:
@@ -443,7 +461,7 @@ class ModelBuilder:
 
         args = ModelArgs(
             matrices=self._matrices,
-            spectra=list(self._spectra),
+            spectra=trimmed_spectra,
             redshift=self._spectra.redshift,
             cont_config=self._cont_config,
             cont_resolved_params=(

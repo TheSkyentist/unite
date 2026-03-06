@@ -122,6 +122,37 @@ class ContinuumForm(ABC):
             Continuum flux at each wavelength.
         """
 
+    @property
+    def is_linear(self) -> bool:
+        """Whether the form is linear in its fitted parameters.
+
+        Linear forms can be solved exactly via weighted least squares.
+        Nonlinear forms require iterative solvers (e.g. Gauss-Newton).
+
+        Returns
+        -------
+        bool
+        """
+        return False
+
+    def _adapt_for_observed_region(
+        self, obs_low: float, obs_high: float
+    ) -> ContinuumForm:
+        """Return a copy adapted for fitting in an observed-frame region.
+
+        For forms with static wavelength configuration (e.g. knots,
+        half-widths), adjusts the configuration to match the observed
+        region bounds.  The default implementation returns ``self``.
+
+        Parameters
+        ----------
+        obs_low : float
+            Lower observed-frame wavelength bound.
+        obs_high : float
+            Upper observed-frame wavelength bound.
+        """
+        return self
+
     @abstractmethod
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
@@ -283,6 +314,10 @@ class Linear(ContinuumForm):
       Default prior: ``Fixed(region_center)``.
     """
 
+    @property
+    def is_linear(self) -> bool:
+        return True
+
     def param_names(self) -> tuple[str, ...]:
         return ('scale', 'slope', 'normalization_wavelength')
 
@@ -405,6 +440,10 @@ class Polynomial(ContinuumForm):
         self._degree = degree
 
     @property
+    def is_linear(self) -> bool:
+        return True
+
+    @property
     def degree(self) -> int:
         """Polynomial degree."""
         return self._degree
@@ -510,6 +549,18 @@ class Chebyshev(ContinuumForm):
             raise ValueError(msg)
         self._order = order
         self._half_width = half_width
+
+    @property
+    def is_linear(self) -> bool:
+        return True
+
+    def _adapt_for_observed_region(
+        self, obs_low: float, obs_high: float
+    ) -> Chebyshev:
+        new = object.__new__(Chebyshev)
+        new._order = self._order
+        new._half_width = (obs_high - obs_low) / 2.0
+        return new
 
     @property
     def order(self) -> int:
@@ -890,6 +941,25 @@ class BSpline(ContinuumForm):
         self._n_basis = len(self._knots) - degree - 1
 
     @property
+    def is_linear(self) -> bool:
+        return True
+
+    def _adapt_for_observed_region(
+        self, obs_low: float, obs_high: float
+    ) -> BSpline:
+        orig_lo = float(self._knots[0])
+        orig_hi = float(self._knots[-1])
+        if orig_hi == orig_lo:
+            return self
+        scale = (obs_high - obs_low) / (orig_hi - orig_lo)
+        new_knots = (self._knots - orig_lo) * scale + obs_low
+        new = object.__new__(BSpline)
+        new._knots = new_knots
+        new._degree = self._degree
+        new._n_basis = self._n_basis
+        return new
+
+    @property
     def n_basis(self) -> int:
         """Number of B-spline basis functions."""
         return self._n_basis
@@ -1009,6 +1079,25 @@ class Bernstein(ContinuumForm):
         self._binom = jnp.array(
             [comb(degree, i, exact=True) for i in range(degree + 1)], dtype=float
         )
+
+    @property
+    def is_linear(self) -> bool:
+        return True
+
+    def _adapt_for_observed_region(
+        self, obs_low: float, obs_high: float
+    ) -> Bernstein:
+        from scipy.special import comb
+
+        new = object.__new__(Bernstein)
+        new._degree = self._degree
+        new._wavelength_min = obs_low
+        new._wavelength_max = obs_high
+        new._binom = jnp.array(
+            [comb(self._degree, i, exact=True) for i in range(self._degree + 1)],
+            dtype=float,
+        )
+        return new
 
     @property
     def degree(self) -> int:

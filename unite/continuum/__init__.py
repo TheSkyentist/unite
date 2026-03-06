@@ -6,6 +6,7 @@ from unite.continuum.config import (
     ContinuumRegion,
     ContinuumScale,
 )
+from unite.continuum.fit import ContinuumFitResult, fit_continuum_form
 from unite.continuum.library import (
     AttenuatedBlackbody,
     Bernstein,
@@ -28,6 +29,7 @@ __all__ = [
     'Blackbody',
     'Chebyshev',
     'ContinuumConfiguration',
+    'ContinuumFitResult',
     'ContinuumForm',
     'ContinuumNormalizationWavelength',
     'ContinuumRegion',
@@ -36,6 +38,7 @@ __all__ = [
     'ModifiedBlackbody',
     'Polynomial',
     'PowerLaw',
+    'fit_continuum_form',
     'form_from_dict',
     'get_form',
 ]

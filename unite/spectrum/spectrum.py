@@ -246,6 +246,34 @@ class Spectrum:
         """
         return (self._high > low) & (self._low < high)
 
+    # -- slicing (internal) ---------------------------------------------------
+
+    def _sliced(self, mask: jnp.ndarray) -> Spectrum:
+        """Return a new Spectrum with arrays selected by a boolean mask.
+
+        Bypasses ``__init__`` validation (arrays are already validated).
+        Used internally by :class:`ModelBuilder` to trim spectra to
+        continuum coverage before model evaluation.
+
+        Parameters
+        ----------
+        mask : jnp.ndarray
+            Boolean array of shape ``(npix,)``.
+        """
+        new = object.__new__(Spectrum)
+        new._low = self._low[mask]
+        new._high = self._high[mask]
+        new._flux = self._flux[mask]
+        new._error = self._error[mask]
+        new._flux_unit = self._flux_unit
+        new.disperser = self.disperser
+        new.name = self.name
+        if isinstance(self._error_scale, (int, float)):
+            new._error_scale = self._error_scale
+        else:
+            new._error_scale = self._error_scale[mask]
+        return new
+
     # -- repr -----------------------------------------------------------------
 
     def __repr__(self) -> str:
@@ -468,47 +496,35 @@ class Spectra:
                 )
             return mask
 
-        # --- Helper: fit polynomial continuum in a region ---
-        def _fit_continuum_region(wl, flux, error, obs_low, obs_high, line_mask):
-            """Fit a low-order polynomial to unmasked pixels in a region.
+        # --- Helper: fit continuum form in a region ---
+        def _fit_continuum_region(wl, flux, error, obs_low, obs_high, line_mask, form):
+            """Fit the region's continuum form to unmasked pixels.
 
             Returns (model_values_on_region, good_mask, chi2_red).
             model_values_on_region covers all pixels in_region.
             """
+            from unite.continuum.fit import fit_continuum_form
+
             in_region = (wl >= obs_low) & (wl <= obs_high)
             good = in_region & ~line_mask
             n_good = int(jnp.sum(good))
 
-            if n_good < 3:
+            min_params = form.n_params  # includes normalization_wavelength
+            if n_good < max(min_params + 1, 3):
                 return None, in_region, None
 
             center = float((obs_low + obs_high) / 2.0)
-            wl_good = wl[good]
-            flux_good = flux[good]
-            err_good = error[good]
+            adapted_form = form._adapt_for_observed_region(obs_low, obs_high)
+            result = fit_continuum_form(
+                adapted_form, wl[good], flux[good], error[good], center,
+            )
 
-            # Polynomial degree: linear for small regions, up to cubic
-            degree = min(max(n_good // 10, 1), 3)
-            x_good = wl_good - center
-            weights = 1.0 / err_good
+            # Evaluate on all in-region pixels.
+            model_region = adapted_form.evaluate(
+                wl[in_region], center, result.params,
+            )
 
-            design = jnp.stack([x_good**k for k in range(degree + 1)], axis=-1)
-            design_w = design * weights[:, None]
-            bw = flux_good * weights
-
-            coeffs, _, _, _ = jnp.linalg.lstsq(design_w, bw)
-
-            # Evaluate on all in-region pixels
-            x_region = wl[in_region] - center
-            design_region = jnp.stack([x_region**k for k in range(degree + 1)], axis=-1)
-            model_region = design_region @ coeffs
-
-            # Chi-squared on the good (unmasked) pixels
-            residuals = (flux_good - design[..., : degree + 1] @ coeffs) / err_good
-            dof = n_good - (degree + 1)
-            chi2_red = float(jnp.sum(residuals**2) / dof) if dof > 0 else None
-
-            return model_region, in_region, chi2_red
+            return model_region, in_region, result.chi2_red
 
         # --- Line scale (with continuum subtraction when available) ---
         max_line_scale = 0.0
@@ -528,7 +544,8 @@ class Spectra:
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
                     result = _fit_continuum_region(
-                        wl, spectrum.flux, spectrum.error, obs_low, obs_high, line_mask
+                        wl, spectrum.flux, spectrum.error, obs_low, obs_high,
+                        line_mask, region.form,
                     )
                     model_region, in_region, _ = result
                     if model_region is not None:
@@ -590,6 +607,7 @@ class Spectra:
                             obs_low,
                             obs_high,
                             line_mask,
+                            region.form,
                         )
                         _, fit_region, chi2_red = result
                         if chi2_red is not None:
