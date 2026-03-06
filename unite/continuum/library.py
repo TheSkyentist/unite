@@ -10,7 +10,11 @@ from astropy import units as u
 from jax import Array
 from jax.typing import ArrayLike
 
-from unite._utils import _make_register
+from unite._utils import (
+    _ensure_wavelength,
+    _make_register,
+    _wavelength_conversion_factor,
+)
 from unite.continuum.functions import (
     bernstein_eval,
     bspline_eval,
@@ -158,6 +162,28 @@ class ContinuumForm(ABC):
     def __hash__(self) -> int:
         return hash(type(self).__name__)
 
+    def _prepare(
+        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
+    ) -> ContinuumForm:
+        """Return a copy with static wavelength config converted to *canonical_unit*.
+
+        Called by the model builder before evaluation so that static
+        wavelength-valued configuration (e.g. knots, half-widths, reference
+        wavelengths) is in the same unit as the wavelength arrays.
+
+        The default implementation returns ``self`` (no static wavelength
+        config to convert).  Subclasses with wavelength-valued configuration
+        must override this method.
+
+        Parameters
+        ----------
+        canonical_unit : astropy.units.UnitBase
+            Target wavelength unit (from the first spectrum's disperser).
+        region_unit : astropy.units.UnitBase
+            Wavelength unit of the :class:`ContinuumRegion` bounds.
+        """
+        return self
+
     def __repr__(self) -> str:
         return f'{type(self).__name__}()'
 
@@ -191,6 +217,47 @@ def form_from_dict(d: dict) -> ContinuumForm:
     return _FORM_REGISTRY[type_name].from_dict(d)
 
 
+def get_form(name_or_form: str | ContinuumForm, **kwargs) -> ContinuumForm:
+    """Get a :class:`ContinuumForm` by name or pass through an existing instance.
+
+    Parameters
+    ----------
+    name_or_form : str or ContinuumForm
+        A registered form name (e.g. ``'Linear'``, ``'PowerLaw'``,
+        ``'Polynomial'``) or an existing :class:`ContinuumForm` instance.
+    **kwargs
+        Passed to the form constructor when *name_or_form* is a string
+        (e.g. ``get_form('Polynomial', degree=3)``).
+
+    Returns
+    -------
+    ContinuumForm
+
+    Raises
+    ------
+    ValueError
+        If the name is not recognised.
+
+    Examples
+    --------
+    >>> get_form('Linear')
+    Linear()
+    >>> get_form('Polynomial', degree=3)
+    Polynomial(degree=3)
+    >>> get_form(Linear())  # pass-through
+    Linear()
+    """
+    if isinstance(name_or_form, ContinuumForm):
+        return name_or_form
+    if name_or_form not in _FORM_REGISTRY:
+        msg = (
+            f'Unknown ContinuumForm type: {name_or_form!r}. '
+            f'Available: {sorted(_FORM_REGISTRY)}'
+        )
+        raise ValueError(msg)
+    return _FORM_REGISTRY[name_or_form](**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Piecewise / region-local forms
 # ---------------------------------------------------------------------------
@@ -200,16 +267,20 @@ def form_from_dict(d: dict) -> ContinuumForm:
 class Linear(ContinuumForm):
     """Linear continuum: ``scale + slope * (wavelength - normalization_wavelength)``.
 
-    Parameters
-    ----------
-    scale : float
-        Continuum level at ``normalization_wavelength``.
-    slope : float
-        Continuum slope in flux per wavelength unit.
-    normalization_wavelength : float
-        Reference wavelength where the continuum equals ``scale``.
-        Fixed by default.
-        Default: ``Fixed(region_center)``.
+    This form has no constructor parameters.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum level at ``normalization_wavelength``.
+      Default prior: ``Uniform(0, 10)``.
+    * ``slope`` — Continuum slope in flux per wavelength unit.
+      Default prior: ``Uniform(-10, 10)``.
+    * ``normalization_wavelength`` — Reference wavelength where the
+      continuum equals ``scale``.
+      Default prior: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
@@ -249,23 +320,24 @@ class Linear(ContinuumForm):
 class PowerLaw(ContinuumForm):
     """Power-law continuum: ``scale * (wavelength / normalization_wavelength) ** beta``.
 
-    The reference wavelength ``normalization_wavelength`` is a named
-    parameter with a default ``Fixed(region_center)`` prior — pinned to the
-    region midpoint when not explicitly set.  To share a consistent
-    reference across multiple regions (required for physically meaningful
-    parameter sharing), pass a
+    This form has no constructor parameters.
+
+    To share a consistent reference wavelength across multiple regions
+    (required for physically meaningful parameter sharing), pass a
     :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
     ``Fixed(value)`` carrying your chosen reference wavelength.
 
-    Parameters
-    ----------
-    scale : float
-        Continuum level at ``normalization_wavelength``.
-    beta : float
-        Power-law index.
-    normalization_wavelength : float
-        Reference wavelength. Fixed by default.
-        Default: ``Fixed(region_center)``.
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum level at ``normalization_wavelength``.
+      Default prior: ``Uniform(0, 10)``.
+    * ``beta`` — Power-law index (dimensionless).
+      Default prior: ``Uniform(-5, 5)``.
+    * ``normalization_wavelength`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
@@ -312,13 +384,18 @@ class Polynomial(ContinuumForm):
     ----------
     degree : int
         Polynomial degree (default 1).
-    scale : float
-        Continuum level at ``normalization_wavelength``.
-    c1, c2, ... : float
-        Higher-order polynomial coefficients.
-    normalization_wavelength : float
-        Reference wavelength. Fixed by default.
-        Default: ``Fixed(region_center)``.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum level at ``normalization_wavelength``.
+      Default prior: ``Uniform(0, 10)``.
+    * ``c1, c2, ...`` — Higher-order polynomial coefficients.
+      Default prior: ``Uniform(-10, 10)`` each.
+    * ``normalization_wavelength`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
     """
 
     def __init__(self, degree: int = 1) -> None:
@@ -410,17 +487,21 @@ class Chebyshev(ContinuumForm):
     order : int
         Chebyshev order (default 2).  Number of coefficients = order + 1.
     half_width : float
-        Half-width of the continuum region in the same units as wavelength.
-        Set to ``(high - low) / 2`` of the :class:`ContinuumRegion`.
-        Default ``1.0``.
-    scale : float
-        DC (T₀) coefficient — approximately the continuum level at
-        ``normalization_wavelength``.
-    c1, c2, ... : float
-        Higher-order Chebyshev coefficients.
-    normalization_wavelength : float
-        Reference wavelength defining ``x = 0``. Fixed by default.
-        Default: ``Fixed(region_center)``.
+        Half-width of the continuum region in the same wavelength units as
+        the :class:`ContinuumRegion` bounds.  Set to
+        ``(high - low) / 2``.  Default ``1.0``.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — DC (T₀) coefficient, approximately the continuum level at
+      ``normalization_wavelength``.  Default prior: ``Uniform(0, 10)``.
+    * ``c1, c2, ...`` — Higher-order Chebyshev coefficients.
+      Default prior: ``Uniform(-10, 10)`` each.
+    * ``normalization_wavelength`` — Reference wavelength defining ``x = 0``.
+      Default prior: ``Fixed(region_center)``.
     """
 
     def __init__(self, order: int = 2, half_width: float = 1.0) -> None:
@@ -495,6 +576,15 @@ class Chebyshev(ContinuumForm):
     def __hash__(self) -> int:
         return hash(('Chebyshev', self._order, self._half_width))
 
+    def _prepare(
+        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
+    ) -> Chebyshev:
+        factor = _wavelength_conversion_factor(region_unit, canonical_unit)
+        new = object.__new__(Chebyshev)
+        new._order = self._order
+        new._half_width = self._half_width * factor
+        return new
+
     def __repr__(self) -> str:
         return f'Chebyshev(order={self._order}, half_width={self._half_width})'
 
@@ -516,17 +606,23 @@ class Blackbody(ContinuumForm):
     ``Fixed(region_center)`` prior.  Pass an explicit
     :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
     ``Fixed(value)`` to pin it to a specific wavelength across multiple
-    regions.
+    regions — essential for physically consistent normalization when fitting
+    a single blackbody across disjoint spectral windows.
 
-    Parameters
-    ----------
-    scale : float
-        Continuum flux at ``normalization_wavelength``.
-    temperature : float
-        Blackbody temperature in Kelvin.
-    normalization_wavelength : float
-        Reference wavelength in microns. Fixed by default.
-        Default: ``Fixed(region_center)``.
+    This form has no constructor parameters.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum flux at ``normalization_wavelength``
+      (in units of ``continuum_scale``).
+      Default prior: ``Uniform(0, 10)``.
+    * ``temperature`` — Blackbody temperature in Kelvin.
+      Default prior: ``Uniform(100, 50000)``.
+    * ``normalization_wavelength`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
@@ -572,19 +668,26 @@ class ModifiedBlackbody(ContinuumForm):
     :class:`Blackbody`.
 
     ``normalization_wavelength`` is a named parameter with a default
-    ``Fixed(region_center)`` prior.
+    ``Fixed(region_center)`` prior.  Share a
+    :class:`~unite.continuum.config.ContinuumNormalizationWavelength` token
+    across regions to enforce a consistent reference wavelength.
 
-    Parameters
-    ----------
-    scale : float
-        Continuum flux at ``normalization_wavelength``.
-    temperature : float
-        Blackbody temperature in Kelvin.
-    beta : float
-        Power-law modifier index.
-    normalization_wavelength : float
-        Reference wavelength in microns. Fixed by default.
-        Default: ``Fixed(region_center)``.
+    This form has no constructor parameters.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum flux at ``normalization_wavelength``
+      (in units of ``continuum_scale``).
+      Default prior: ``Uniform(0, 10)``.
+    * ``temperature`` — Blackbody temperature in Kelvin.
+      Default prior: ``Uniform(100, 50000)``.
+    * ``beta`` — Power-law modifier index (dimensionless).
+      Default prior: ``Uniform(-4, 4)``.
+    * ``normalization_wavelength`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
     """
 
     def param_names(self) -> tuple[str, ...]:
@@ -635,34 +738,57 @@ class AttenuatedBlackbody(ContinuumForm):
     represents the **observed** (attenuated) flux there.  Negative *alpha*
     gives steeper extinction at short wavelengths (typical dust law).
 
-    ``normalization_wavelength`` is a named parameter with a default
-    ``Fixed(region_center)`` prior.
-
     Parameters
     ----------
-    lambda_v_micron : float
-        Reference wavelength for the extinction law in microns
-        (default ``0.55``, corresponding to optical V band).
-    scale : float
-        Observed continuum flux at ``normalization_wavelength``.
-    temperature : float
-        Blackbody temperature in Kelvin.
-    tau_v : float
-        Optical depth at ``lambda_v_micron``.
-    alpha : float
-        Dust extinction power-law index (negative = steeper at short λ).
-    normalization_wavelength : float
-        Reference wavelength in microns. Fixed by default.
-        Default: ``Fixed(region_center)``.
+    lambda_v_micron : float or astropy.units.Quantity
+        Reference wavelength for the extinction law.  May be a bare
+        ``float`` (interpreted as microns) or an
+        :class:`~astropy.units.Quantity` with any length unit — it will
+        be converted automatically.  Defaults to ``0.55``
+        (optical V band).  ``5500 * u.AA`` and ``0.55`` are equivalent.
+
+    Notes
+    -----
+    ``lambda_v_micron`` is a *static* configuration parameter (not
+    sampled).  It is stored as an :class:`~astropy.units.Quantity` and
+    converted to the canonical wavelength unit at model-build time via
+    :meth:`_prepare`.
+
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Observed continuum flux at ``normalization_wavelength``
+      (in units of ``continuum_scale``).
+      Default prior: ``Uniform(0, 10)``.
+    * ``temperature`` — Blackbody temperature in Kelvin.
+      Default prior: ``Uniform(100, 50000)``.
+    * ``tau_v`` — Optical depth at ``lambda_v``.
+      Default prior: ``Uniform(0, 5)``.
+    * ``alpha`` — Dust extinction power-law index (negative = steeper at
+      short λ).  Default prior: ``Uniform(-2, 0)``.
+    * ``normalization_wavelength`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
     """
 
-    def __init__(self, lambda_v_micron: float = 0.55) -> None:
-        self._lambda_v_micron = lambda_v_micron
+    def __init__(self, lambda_v_micron: float | u.Quantity = 0.55) -> None:
+        if isinstance(lambda_v_micron, u.Quantity):
+            self._lambda_v: u.Quantity = _ensure_wavelength(
+                lambda_v_micron, 'lambda_v_micron'
+            )
+        else:
+            self._lambda_v = float(lambda_v_micron) * u.um
+        # Float used in evaluate(); initially microns, updated by _prepare().
+        self._lambda_v_eval: float = float(self._lambda_v.to(u.um).value)
 
     @property
     def lambda_v_micron(self) -> float:
         """Extinction reference wavelength in microns."""
-        return self._lambda_v_micron
+        return float(self._lambda_v.to(u.um).value)
+
+    @property
+    def lambda_v(self) -> u.Quantity:
+        """Extinction reference wavelength as an astropy Quantity."""
+        return self._lambda_v
 
     def param_names(self) -> tuple[str, ...]:
         return ('scale', 'temperature', 'tau_v', 'alpha', 'normalization_wavelength')
@@ -692,13 +818,21 @@ class AttenuatedBlackbody(ContinuumForm):
     ) -> Array:
         nw = params['normalization_wavelength']
         bb = planck_function(wavelength, params['temperature'], nw)
-        ext_data = (wavelength / self._lambda_v_micron) ** params['alpha']
-        ext_pivot = (nw / self._lambda_v_micron) ** params['alpha']
+        ext_data = (wavelength / self._lambda_v_eval) ** params['alpha']
+        ext_pivot = (nw / self._lambda_v_eval) ** params['alpha']
         extinction = jnp.exp(-params['tau_v'] * (ext_data - ext_pivot))
         return params['scale'] * bb * extinction
 
+    def _prepare(
+        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
+    ) -> AttenuatedBlackbody:
+        new = object.__new__(AttenuatedBlackbody)
+        new._lambda_v = self._lambda_v
+        new._lambda_v_eval = float(self._lambda_v.to(canonical_unit).value)
+        return new
+
     def to_dict(self) -> dict:
-        return {'type': 'AttenuatedBlackbody', 'lambda_v_micron': self._lambda_v_micron}
+        return {'type': 'AttenuatedBlackbody', 'lambda_v_micron': self.lambda_v_micron}
 
     @classmethod
     def from_dict(cls, d: dict) -> AttenuatedBlackbody:
@@ -707,13 +841,13 @@ class AttenuatedBlackbody(ContinuumForm):
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return self._lambda_v_micron == other._lambda_v_micron  # type: ignore[attr-defined]
+        return self.lambda_v_micron == other.lambda_v_micron  # type: ignore[attr-defined]
 
     def __hash__(self) -> int:
-        return hash(('AttenuatedBlackbody', self._lambda_v_micron))
+        return hash(('AttenuatedBlackbody', self.lambda_v_micron))
 
     def __repr__(self) -> str:
-        return f'AttenuatedBlackbody(lambda_v_micron={self._lambda_v_micron})'
+        return f'AttenuatedBlackbody(lambda_v_micron={self.lambda_v_micron})'
 
 
 @_register
@@ -721,26 +855,33 @@ class BSpline(ContinuumForm):
     """Global B-spline continuum with local knot control.
 
     The knot vector must be set via *knots* at construction time (typically
-    derived from the wavelength coverage of the spectrum).
-
-    The first coefficient is named ``scale`` (overall amplitude level);
-    remaining coefficients are named ``coeff_1, coeff_2, ...``.
+    derived from the wavelength coverage of the spectrum).  Knots should be
+    in the same wavelength unit as the :class:`ContinuumRegion` bounds;
+    they are converted to the canonical unit at model-build time via
+    :meth:`_prepare`.
 
     Parameters
     ----------
     knots : array-like
-        Clamped knot vector.  The number of basis functions is
+        Clamped knot vector in the same wavelength unit as the region
+        bounds.  The number of basis functions is
         ``len(knots) - degree - 1``.
     degree : int
         Spline degree (default 3 for cubic).
-    scale : float
-        First B-spline coefficient (overall amplitude level).
-    coeff_1, coeff_2, … : float
-        Remaining B-spline coefficients.
-    normalization_wavelength : float
-        Included for API consistency; does not alter BSpline evaluation
-        (the wavelength mapping is defined by the knot vector).
-        Default: ``Fixed(region_center)``.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — First B-spline coefficient (overall amplitude level).
+      Default prior: ``Uniform(0, 10)``.
+    * ``coeff_1, coeff_2, …`` — Remaining B-spline coefficients.
+      Default prior: ``Uniform(-10, 10)`` each.
+    * ``normalization_wavelength`` — Included for API consistency; does
+      not alter BSpline evaluation (the wavelength mapping is defined
+      by the knot vector).
+      Default prior: ``Fixed(region_center)``.
     """
 
     def __init__(self, knots, degree: int = 3) -> None:
@@ -809,6 +950,16 @@ class BSpline(ContinuumForm):
     def __hash__(self) -> int:
         return hash(('BSpline', tuple(float(k) for k in self._knots), self._degree))
 
+    def _prepare(
+        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
+    ) -> BSpline:
+        factor = _wavelength_conversion_factor(region_unit, canonical_unit)
+        new = object.__new__(BSpline)
+        new._knots = self._knots * factor
+        new._degree = self._degree
+        new._n_basis = self._n_basis
+        return new
+
     def __repr__(self) -> str:
         return f'BSpline(n_basis={self._n_basis}, degree={self._degree})'
 
@@ -820,23 +971,31 @@ class Bernstein(ContinuumForm):
     Bernstein basis polynomials are non-negative on ``[0, 1]``, so fitting
     with positive coefficients guarantees a positive continuum everywhere.
 
-    The first coefficient is named ``scale``; remaining coefficients are
-    named ``coeff_1, coeff_2, ...``.
+    The wavelength range ``[wavelength_min, wavelength_max]`` should be in
+    the same unit as the :class:`ContinuumRegion` bounds; it is converted
+    to the canonical unit at model-build time via :meth:`_prepare`.
 
     Parameters
     ----------
     degree : int
         Polynomial degree (default 4).  Number of coefficients = degree + 1.
     wavelength_min, wavelength_max : float
-        Wavelength range for normalization to ``[0, 1]``.
-    scale : float
-        First Bernstein coefficient (positive values give positive continuum).
-    coeff_1, coeff_2, … : float
-        Remaining Bernstein coefficients.
-    normalization_wavelength : float
-        Included for API consistency; does not alter Bernstein evaluation
-        (the wavelength mapping is defined by ``wavelength_min/max``).
-        Default: ``Fixed(region_center)``.
+        Wavelength range for normalization to ``[0, 1]``, in the same
+        unit as the region bounds.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — First Bernstein coefficient (positive values give
+      positive continuum).  Default prior: ``Uniform(0, 10)``.
+    * ``coeff_1, coeff_2, …`` — Remaining Bernstein coefficients.
+      Default prior: ``Uniform(0, 10)`` each.
+    * ``normalization_wavelength`` — Included for API consistency; does
+      not alter Bernstein evaluation (the wavelength mapping is defined
+      by ``wavelength_min/max``).
+      Default prior: ``Fixed(region_center)``.
     """
 
     def __init__(
@@ -922,6 +1081,17 @@ class Bernstein(ContinuumForm):
         return hash(
             ('Bernstein', self._degree, self._wavelength_min, self._wavelength_max)
         )
+
+    def _prepare(
+        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
+    ) -> Bernstein:
+        factor = _wavelength_conversion_factor(region_unit, canonical_unit)
+        new = object.__new__(Bernstein)
+        new._degree = self._degree
+        new._wavelength_min = self._wavelength_min * factor
+        new._wavelength_max = self._wavelength_max * factor
+        new._binom = self._binom
+        return new
 
     def __repr__(self) -> str:
         return f'Bernstein(degree={self._degree})'

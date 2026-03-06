@@ -18,6 +18,7 @@ from unite.continuum.library import (
     Polynomial,
     PowerLaw,
     form_from_dict,
+    get_form,
 )
 
 __all__ = [
@@ -36,4 +37,5 @@ __all__ = [
     'Polynomial',
     'PowerLaw',
     'form_from_dict',
+    'get_form',
 ]

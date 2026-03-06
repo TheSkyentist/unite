@@ -189,7 +189,7 @@ def evaluate_model(
             continuum_total = jnp.zeros(_n_pix)
             cont_contributions = []
             if args.cont_config is not None:
-                for k, region in enumerate(args.cont_config):
+                for k in range(len(args.cont_config)):
                     obs_low = args.cont_low[k] * (1.0 + z_sys)
                     obs_high = args.cont_high[k] * (1.0 + z_sys)
                     obs_center = args.cont_center[k] * (1.0 + z_sys)
@@ -202,8 +202,9 @@ def evaluate_model(
                         )
                         for pn, tok in args.cont_resolved_params[k].items()
                     }
+                    form = args.cont_forms[k]
                     region_cont = (
-                        region.form.evaluate(wavelength, obs_center, cont_p)
+                        form.evaluate(wavelength, obs_center, cont_p)
                         * _cont_scale
                     )
                     region_cont = jnp.where(in_region, region_cont, 0.0)

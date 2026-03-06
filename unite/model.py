@@ -59,6 +59,8 @@ class ModelArgs:
     cont_center: list[float] | None
     # --- Unit conversion factors: region._unit → canonical unit, per region ---
     cont_nw_conv: list[float] | None
+    #: Pre-converted continuum forms (static wavelength config in canonical unit).
+    cont_forms: list | None
     # --- Flux normalization ---
     norm_factors: list[float]
     #: Per-spectrum line flux scale (in each spectrum's flux_unit * canonical_wl_unit).
@@ -209,7 +211,7 @@ def unite_model(args: ModelArgs) -> None:
         # Continuum (evaluated in canonical-unit wavelengths, then normalized).
         continuum = jnp.zeros(spectrum.npix)
         if args.cont_config is not None:
-            for k, region in enumerate(args.cont_config):
+            for k in range(len(args.cont_config)):
                 obs_low = args.cont_low[k] * (1.0 + z_sys)
                 obs_high = args.cont_high[k] * (1.0 + z_sys)
                 obs_center = args.cont_center[k] * (1.0 + z_sys)
@@ -222,7 +224,8 @@ def unite_model(args: ModelArgs) -> None:
                     )
                     for pn, tok in args.cont_resolved_params[k].items()
                 }
-                region_cont = region.form.evaluate(wavelength, obs_center, cont_params)
+                form = args.cont_forms[k]
+                region_cont = form.evaluate(wavelength, obs_center, cont_params)
                 continuum = continuum + jnp.where(in_region, region_cont, 0.0)
 
         # Likelihood (normalized flux space).
@@ -421,17 +424,22 @@ class ModelBuilder:
             cont_high = []
             cont_center = []
             cont_nw_conv = []
+            cont_forms = []
             for region in self._cont_config:
                 conv = _wavelength_conversion_factor(region._unit, self._canonical_unit)
                 cont_low.append(region.low * conv)
                 cont_high.append(region.high * conv)
                 cont_center.append(region.center * conv)
                 cont_nw_conv.append(conv)
+                cont_forms.append(
+                    region.form._prepare(self._canonical_unit, region._unit)
+                )
         else:
             cont_low = None
             cont_high = None
             cont_center = None
             cont_nw_conv = None
+            cont_forms = None
 
         args = ModelArgs(
             matrices=self._matrices,
@@ -451,6 +459,7 @@ class ModelBuilder:
             cont_high=cont_high,
             cont_center=cont_center,
             cont_nw_conv=cont_nw_conv,
+            cont_forms=cont_forms,
             norm_factors=norm_factors,
             line_flux_scales=line_flux_scales,
             continuum_scales=continuum_scales,

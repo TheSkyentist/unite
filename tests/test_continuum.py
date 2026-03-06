@@ -19,6 +19,7 @@ from unite.continuum import (
     Polynomial,
     PowerLaw,
     form_from_dict,
+    get_form,
 )
 from unite.prior import Fixed, Parameter, Uniform
 
@@ -1038,3 +1039,143 @@ class TestBernstein:
         b1 = Bernstein(3, 0.9, 1.1)
         b2 = Bernstein(3, 0.9, 1.2)
         assert b1 != b2
+
+
+# ---------------------------------------------------------------------------
+# get_form string registry
+# ---------------------------------------------------------------------------
+
+
+class TestGetForm:
+    def test_string_returns_instance(self):
+        f = get_form('Linear')
+        assert isinstance(f, Linear)
+
+    def test_string_with_kwargs(self):
+        f = get_form('Polynomial', degree=3)
+        assert isinstance(f, Polynomial)
+        assert f.degree == 3
+
+    def test_passthrough_instance(self):
+        original = PowerLaw()
+        assert get_form(original) is original
+
+    def test_unknown_raises(self):
+        with pytest.raises(ValueError, match='Unknown ContinuumForm type'):
+            get_form('NoSuchForm')
+
+    def test_region_accepts_string(self):
+        r = ContinuumRegion(1.0 * u.um, 2.0 * u.um, 'PowerLaw')
+        assert isinstance(r.form, PowerLaw)
+
+    def test_region_string_unknown_raises(self):
+        with pytest.raises(ValueError, match='Unknown ContinuumForm type'):
+            ContinuumRegion(1.0 * u.um, 2.0 * u.um, 'FakeForm')
+
+
+# ---------------------------------------------------------------------------
+# Params validation
+# ---------------------------------------------------------------------------
+
+
+class TestParamsValidation:
+    def test_invalid_param_name_raises(self):
+        region = ContinuumRegion(
+            1.0 * u.um,
+            2.0 * u.um,
+            Linear(),
+            params={'amplitude': Parameter('amp', prior=Uniform(0, 10))},
+        )
+        with pytest.raises(ValueError, match='does not have parameter'):
+            ContinuumConfiguration([region])
+
+    def test_typo_param_name_raises(self):
+        region = ContinuumRegion(
+            1.0 * u.um,
+            2.0 * u.um,
+            PowerLaw(),
+            params={'betta': Parameter('b', prior=Uniform(-5, 5))},
+        )
+        with pytest.raises(ValueError, match='does not have parameter'):
+            ContinuumConfiguration([region])
+
+    def test_valid_param_names_pass(self):
+        region = ContinuumRegion(
+            1.0 * u.um,
+            2.0 * u.um,
+            Linear(),
+            params={'scale': Parameter('s', prior=Uniform(0, 5))},
+        )
+        config = ContinuumConfiguration([region])
+        assert len(config) == 1
+
+
+# ---------------------------------------------------------------------------
+# _prepare: static wavelength conversion
+# ---------------------------------------------------------------------------
+
+
+class TestPrepare:
+    def test_linear_returns_self(self):
+        f = Linear()
+        assert f._prepare(u.AA, u.um) is f
+
+    def test_powerlaw_returns_self(self):
+        f = PowerLaw()
+        assert f._prepare(u.AA, u.um) is f
+
+    def test_blackbody_returns_self(self):
+        f = Blackbody()
+        assert f._prepare(u.AA, u.um) is f
+
+    def test_attenuated_blackbody_converts_lambda_v(self):
+        f = AttenuatedBlackbody(lambda_v_micron=0.55)
+        prepared = f._prepare(u.AA, u.um)
+        # 0.55 um = 5500 AA
+        assert prepared._lambda_v_eval == pytest.approx(5500.0)
+        # Original unchanged
+        assert f._lambda_v_eval == pytest.approx(0.55)
+
+    def test_attenuated_blackbody_quantity_input(self):
+        f = AttenuatedBlackbody(lambda_v_micron=5500.0 * u.AA)
+        assert f.lambda_v_micron == pytest.approx(0.55)
+        prepared = f._prepare(u.AA, u.um)
+        assert prepared._lambda_v_eval == pytest.approx(5500.0)
+
+    def test_attenuated_blackbody_evaluate_uses_prepared_value(self):
+        # Evaluate in Angstrom space after _prepare
+        f = AttenuatedBlackbody(lambda_v_micron=0.55)
+        prepared = f._prepare(u.AA, u.um)
+        wl = jnp.linspace(4000.0, 8000.0, 20)  # Angstroms
+        nw = 5500.0
+        params = {
+            'scale': jnp.array(1.0),
+            'temperature': jnp.array(5000.0),
+            'tau_v': jnp.array(0.5),
+            'alpha': jnp.array(-1.5),
+            'normalization_wavelength': jnp.array(nw),
+        }
+        result = prepared.evaluate(wl, nw, params)
+        assert result.shape == wl.shape
+        # At normalization wavelength, result should equal scale
+        val = prepared.evaluate(jnp.array([nw]), nw, params)
+        assert val[0] == pytest.approx(1.0, rel=1e-5)
+
+    def test_chebyshev_scales_half_width(self):
+        f = Chebyshev(order=2, half_width=0.1)  # 0.1 um
+        prepared = f._prepare(u.AA, u.um)
+        assert prepared._half_width == pytest.approx(1000.0)  # 0.1 um = 1000 AA
+
+    def test_bernstein_scales_bounds(self):
+        f = Bernstein(degree=3, wavelength_min=0.9, wavelength_max=1.1)  # um
+        prepared = f._prepare(u.AA, u.um)
+        assert prepared._wavelength_min == pytest.approx(9000.0)
+        assert prepared._wavelength_max == pytest.approx(11000.0)
+        assert prepared._degree == 3
+
+    def test_bspline_scales_knots(self):
+        knots = jnp.array([0.9, 0.9, 0.9, 0.9, 1.0, 1.1, 1.1, 1.1, 1.1])
+        f = BSpline(knots, degree=3)
+        prepared = f._prepare(u.AA, u.um)
+        assert prepared._knots[4] == pytest.approx(10000.0)
+        assert prepared._n_basis == f._n_basis

@@ -12,7 +12,7 @@ import yaml
 from astropy import units as u
 
 from unite._utils import _ensure_wavelength
-from unite.continuum.library import ContinuumForm, Linear, form_from_dict
+from unite.continuum.library import ContinuumForm, Linear, form_from_dict, get_form
 from unite.prior import Fixed, Parameter, Prior, Uniform, prior_from_dict
 
 # ------------------------------------------------------------------
@@ -99,8 +99,38 @@ class ContinuumRegion:
     params : dict of str to Parameter, optional
         Parameter tokens for the form's parameters, keyed by
         :meth:`ContinuumForm.param_names`.  Parameters not listed here
-        receive auto-created tokens when the region is added to a
-        :class:`ContinuumConfiguration`.
+        receive auto-created tokens with the form's default priors when
+        the region is added to a :class:`ContinuumConfiguration`.
+
+        **Custom priors** — supply a :class:`~unite.prior.Parameter`
+        with the desired prior for any slot you want to override::
+
+            from unite.prior import Parameter, TruncatedNormal
+            region = ContinuumRegion(
+                1.0 * u.um, 1.5 * u.um, form=PowerLaw(),
+                params={
+                    'scale': Parameter('my_scale',
+                                       prior=TruncatedNormal(2.0, 0.5, 0, 10)),
+                    # 'beta' and 'normalization_wavelength' get default priors
+                },
+            )
+
+        **Shared parameters** — pass the *same* :class:`~unite.prior.Parameter`
+        instance in the ``params`` dict of multiple regions.  The
+        :class:`ContinuumConfiguration` detects shared identity and creates
+        a single numpyro site, coupling those regions to one sampled value::
+
+            shared_scale = Parameter('global_scale', prior=Uniform(0, 10))
+            region1 = ContinuumRegion(1.0 * u.um, 1.5 * u.um, form=PowerLaw(),
+                                      params={'scale': shared_scale})
+            region2 = ContinuumRegion(2.0 * u.um, 2.5 * u.um, form=PowerLaw(),
+                                      params={'scale': shared_scale})
+
+        Use :class:`ContinuumScale` and
+        :class:`ContinuumNormalizationWavelength` typed tokens for the
+        ``'scale'`` and ``'normalization_wavelength'`` slots respectively;
+        they add a validation check that prevents accidentally assigning
+        them to the wrong slot.
 
     Raises
     ------
@@ -112,10 +142,13 @@ class ContinuumRegion:
 
     low: u.Quantity
     high: u.Quantity
-    form: ContinuumForm = field(default_factory=Linear)
+    form: ContinuumForm | str = field(default_factory=Linear)
     params: dict[str, Parameter] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # Resolve string form names to ContinuumForm instances.
+        if isinstance(self.form, str):
+            self.form = get_form(self.form)
         low_q = _ensure_wavelength(self.low, 'low')
         high_q = _ensure_wavelength(self.high, 'high')
         self._unit: u.UnitBase = low_q.unit
@@ -192,24 +225,53 @@ class ContinuumConfiguration:
     --------
     Auto-generate from line wavelengths (independent local continua):
 
+    >>> from astropy import units as u
     >>> from unite.continuum import ContinuumConfiguration
     >>> cont = ContinuumConfiguration.from_lines(
-    ...     [6564.61, 4862.68, 6585.27, 6549.86])
+    ...     [6564.61, 4862.68, 6585.27, 6549.86] * u.AA)
     >>> len(cont)
     2
 
-    Manual construction with a global power-law (shared parameters):
+    Manual construction with independent regions and custom priors:
 
-    >>> from unite.continuum import (
-    ...     ContinuumConfiguration, Parameter, ContinuumRegion, PowerLaw)
-    >>> from unite.prior import Uniform
-    >>> pl = PowerLaw(pivot=2.5)
-    >>> amp = Parameter('pl_amp', prior=Uniform(0, 10))
-    >>> beta = Parameter('pl_beta', prior=Uniform(-5, 5))
+    >>> from astropy import units as u
+    >>> from unite.continuum.config import (
+    ...     ContinuumConfiguration, ContinuumRegion)
+    >>> from unite.continuum.library import Linear
+    >>> from unite.prior import Parameter, TruncatedNormal, Fixed
+    >>> region = ContinuumRegion(
+    ...     1.0 * u.um, 1.5 * u.um, form=Linear(),
+    ...     params={
+    ...         'scale': Parameter('my_scale',
+    ...                            prior=TruncatedNormal(2.0, 0.5, 0.0, 10.0)),
+    ...         'normalization_wavelength': Parameter('my_nw', prior=Fixed(1.25)),
+    ...         # 'slope' receives the default Uniform(-10, 10) prior
+    ...     },
+    ... )
+    >>> cont = ContinuumConfiguration([region])
+
+    Global power-law with parameters shared across two spectral windows:
+
+    >>> from astropy import units as u
+    >>> from unite.continuum.config import (
+    ...     ContinuumConfiguration, ContinuumRegion,
+    ...     ContinuumNormalizationWavelength)
+    >>> from unite.continuum.library import PowerLaw
+    >>> from unite.prior import Parameter, Uniform, Fixed
+    >>> pl = PowerLaw()
+    >>> shared_scale = Parameter('pl_scale', prior=Uniform(0, 10))
+    >>> shared_beta  = Parameter('pl_beta',  prior=Uniform(-5, 5))
+    >>> shared_nw    = ContinuumNormalizationWavelength(
+    ...     'pl_nw', prior=Fixed(1.0))  # single reference wavelength
     >>> cont = ContinuumConfiguration([
-    ...     ContinuumRegion(4600, 5100, pl, params={'amplitude': amp, 'beta': beta}),
-    ...     ContinuumRegion(6200, 6900, pl, params={'amplitude': amp, 'beta': beta}),
+    ...     ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=pl,
+    ...                     params={'scale': shared_scale, 'beta': shared_beta,
+    ...                             'normalization_wavelength': shared_nw}),
+    ...     ContinuumRegion(1.7 * u.um, 2.5 * u.um, form=pl,
+    ...                     params={'scale': shared_scale, 'beta': shared_beta,
+    ...                             'normalization_wavelength': shared_nw}),
     ... ])
+    >>> # → one 'pl_scale', one 'pl_beta', one 'pl_nw' site in the numpyro model
     """
 
     def __init__(self, regions: list[ContinuumRegion] | None = None) -> None:
@@ -253,6 +315,16 @@ class ContinuumConfiguration:
         type_counts: dict[str, int] = {}
         resolved_list: list[dict[str, Parameter]] = []
         for region in self._regions:
+            # Validate that all param keys match the form's param_names.
+            valid_names = set(region.form.param_names())
+            invalid = set(region.params) - valid_names
+            if invalid:
+                msg = (
+                    f'{type(region.form).__name__} does not have parameter(s) '
+                    f'{invalid}. Valid parameters: {sorted(valid_names)}'
+                )
+                raise ValueError(msg)
+
             # Validate typed tokens before resolving.
             for pn, tok in region.params.items():
                 if isinstance(tok, ContinuumScale) and pn != 'scale':
