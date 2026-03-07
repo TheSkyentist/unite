@@ -41,4 +41,5 @@ jobs:
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "${{ steps.ver.outputs.tag }}"
         env:
-          GH_TOKEN: ${{ github.token }}
+          # PAT required: events from GITHUB_TOKEN do not trigger other workflows.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}

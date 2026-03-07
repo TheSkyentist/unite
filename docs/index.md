@@ -81,4 +81,3 @@ contributing
 - {ref}`genindex`
 - {ref}`modindex`
 - {ref}`search`
-- [GitHub](https://github.com/TheSkyentist/unite)

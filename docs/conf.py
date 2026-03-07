@@ -94,7 +94,7 @@ html_title = f'unite v{version}'
 html_static_path = ['_static']
 
 html_theme_options = {
-    'source_repository': 'https://github.com/rhviding/unite',
+    'source_repository': 'https://github.com/TheSkyentist/unite',
     'source_branch': 'main',
     'source_directory': 'docs/',
 }
