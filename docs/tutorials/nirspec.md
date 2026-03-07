@@ -40,7 +40,7 @@ from numpyro import infer
 
 from unite import disperser, line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.disperser.nirspec import G395M, PRISM, NIRSpecSpectrum
+from unite.instrument.nirspec import G395M, PRISM, NIRSpecSpectrum
 from unite.results import make_hdul, make_parameter_table, make_spectra_tables
 from unite.spectrum import Spectra
 ```
