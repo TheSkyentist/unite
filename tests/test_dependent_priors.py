@@ -11,7 +11,6 @@ constraints such as:
 - Complex redshift hierarchies (systemic → NLR → BLR → outflow)
 """
 
-
 import astropy.units as u
 import jax.numpy as jnp
 import numpy as np
