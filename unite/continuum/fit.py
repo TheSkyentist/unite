@@ -127,7 +127,9 @@ def _fit_linear(form, wavelength, flux, error, center, nw, fitted_names, dof):
     residuals = (flux - model) / error
     chi2_red = float(jnp.sum(residuals**2) / dof) if dof > 0 else None
 
-    return ContinuumFitResult(model=model, params=params_dict, chi2_red=chi2_red, dof=dof)
+    return ContinuumFitResult(
+        model=model, params=params_dict, chi2_red=chi2_red, dof=dof
+    )
 
 
 # ------------------------------------------------------------------
@@ -136,8 +138,7 @@ def _fit_linear(form, wavelength, flux, error, center, nw, fitted_names, dof):
 
 
 def _fit_nonlinear(
-    form, wavelength, flux, error, center, nw, fitted_names, dof,
-    max_iter=30, tol=1e-8,
+    form, wavelength, flux, error, center, nw, fitted_names, dof, max_iter=30, tol=1e-8
 ):
     """Gauss-Newton iteration for nonlinear forms."""
     x = _initial_guess(fitted_names, flux)
@@ -168,7 +169,9 @@ def _fit_nonlinear(
     residuals = (flux - model) / error
     chi2_red = float(jnp.sum(residuals**2) / dof) if dof > 0 else None
 
-    return ContinuumFitResult(model=model, params=params_dict, chi2_red=chi2_red, dof=dof)
+    return ContinuumFitResult(
+        model=model, params=params_dict, chi2_red=chi2_red, dof=dof
+    )
 
 
 def _initial_guess(fitted_names: list[str], flux: jnp.ndarray) -> jnp.ndarray:

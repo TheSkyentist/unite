@@ -11,7 +11,6 @@ constraints such as:
 - Complex redshift hierarchies (systemic → NLR → BLR → outflow)
 """
 
-import warnings
 
 import astropy.units as u
 import jax.numpy as jnp
@@ -20,19 +19,11 @@ import pytest
 from jax import random
 from numpyro.infer import Predictive
 
-from unite import line, model, prior
+from unite import model
 from unite.disperser.generic import SimpleDisperser
-from unite.line.config import FWHM, Flux, LineConfiguration, Param, Redshift
-from unite.prior import (
-    Fixed,
-    Parameter,
-    ParameterRef,
-    TruncatedNormal,
-    Uniform,
-    topological_sort,
-)
+from unite.line.config import FWHM, Flux, LineConfiguration, Redshift
+from unite.prior import ParameterRef, TruncatedNormal, Uniform, topological_sort
 from unite.spectrum import Spectra, Spectrum
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,9 +33,7 @@ from unite.spectrum import Spectra, Spectrum
 def _make_spectrum(wl_range=(6400, 6700), npix=200, name='test'):
     """Create a test spectrum covering the given range."""
     wl = np.linspace(*wl_range, npix) * u.AA
-    disperser = SimpleDisperser(
-        wavelength=wl.value, unit=u.AA, R=3000.0, name=name,
-    )
+    disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0, name=name)
     low = wl - 0.5 * np.gradient(wl)
     high = wl + 0.5 * np.gradient(wl)
     flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
@@ -52,19 +41,16 @@ def _make_spectrum(wl_range=(6400, 6700), npix=200, name='test'):
     flux = (10.0 + rng.normal(0, 1, npix)) * flux_unit
     error = np.full(npix, 1.0) * flux_unit
     return Spectrum(
-        low=low, high=high, flux=flux, error=error,
-        disperser=disperser, name=name,
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
     )
 
 
 def _prepare_and_build(line_config, spectra, cont_config=None):
     """Prepare spectra and build model."""
     spectra.prepare(line_config, cont_config)
-    spectra.compute_scales(
-        spectra.prepared_line_config, spectra.prepared_cont_config,
-    )
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
     return model.ModelBuilder(
-        spectra.prepared_line_config, spectra.prepared_cont_config, spectra,
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
     ).build()
 
 
@@ -100,9 +86,7 @@ class TestDeepChains:
         c = FWHM('c', prior=Uniform(low=b * 1.5, high=1000))
         d = FWHM('d', prior=Uniform(low=c + 100, high=5000))
 
-        named_priors = {
-            'a': a.prior, 'b': b.prior, 'c': c.prior, 'd': d.prior,
-        }
+        named_priors = {'a': a.prior, 'b': b.prior, 'c': c.prior, 'd': d.prior}
         param_to_name = {a: 'a', b: 'b', c: 'c', d: 'd'}
         order = topological_sort(named_priors, param_to_name)
 
@@ -114,16 +98,10 @@ class TestDeepChains:
         z_nlr = Redshift(
             'z_nlr',
             prior=TruncatedNormal(
-                loc=z_sys,
-                scale=0.001,
-                low=z_sys - 0.005,
-                high=z_sys + 0.005,
+                loc=z_sys, scale=0.001, low=z_sys - 0.005, high=z_sys + 0.005
             ),
         )
-        z_out = Redshift(
-            'z_out',
-            prior=Uniform(low=z_nlr - 0.01, high=z_nlr),
-        )
+        z_out = Redshift('z_out', prior=Uniform(low=z_nlr - 0.01, high=z_nlr))
 
         named_priors = {
             'z_sys': z_sys.prior,
@@ -171,8 +149,7 @@ class TestParameterAsBound:
         """Redshift token passed directly as TruncatedNormal loc."""
         z_sys = Redshift('z_sys', prior=Uniform(-0.01, 0.01))
         z_nlr = Redshift(
-            'z_nlr',
-            prior=TruncatedNormal(loc=z_sys, scale=0.001, low=-0.02, high=0.02),
+            'z_nlr', prior=TruncatedNormal(loc=z_sys, scale=0.001, low=-0.02, high=0.02)
         )
         assert z_sys in z_nlr.prior.dependencies()
 
@@ -193,12 +170,7 @@ class TestTruncatedNormalDependencies:
 
         constrained = FWHM(
             'constrained',
-            prior=TruncatedNormal(
-                loc=center,
-                scale=50.0,
-                low=lower,
-                high=upper,
-            ),
+            prior=TruncatedNormal(loc=center, scale=50.0, low=lower, high=upper),
         )
 
         deps = constrained.prior.dependencies()
@@ -211,12 +183,7 @@ class TestTruncatedNormalDependencies:
         base = FWHM('base', prior=Uniform(100, 500))
         derived = FWHM(
             'derived',
-            prior=TruncatedNormal(
-                loc=base + 100,
-                scale=30.0,
-                low=base,
-                high=2000,
-            ),
+            prior=TruncatedNormal(loc=base + 100, scale=30.0, low=base, high=2000),
         )
 
         deps = derived.prior.dependencies()
@@ -244,10 +211,7 @@ class TestFluxDependencies:
         f_weak = Flux(
             'NII_6549',
             prior=TruncatedNormal(
-                loc=f_strong / 2.95,
-                scale=0.1,
-                low=f_strong / 4.0,
-                high=f_strong / 2.0,
+                loc=f_strong / 2.95, scale=0.1, low=f_strong / 4.0, high=f_strong / 2.0
             ),
         )
 
@@ -263,17 +227,11 @@ class TestFluxDependencies:
     def test_flux_chain(self):
         """Three-line flux chain: Ha → [NII]6585 → [NII]6549."""
         f_ha = Flux('Ha', prior=Uniform(0, 20))
-        f_nii_s = Flux(
-            'NII_6585',
-            prior=Uniform(low=0, high=f_ha * 2),
-        )
+        f_nii_s = Flux('NII_6585', prior=Uniform(low=0, high=f_ha * 2))
         f_nii_w = Flux(
             'NII_6549',
             prior=TruncatedNormal(
-                loc=f_nii_s / 2.95,
-                scale=0.05,
-                low=f_nii_s / 4.0,
-                high=f_nii_s / 2.0,
+                loc=f_nii_s / 2.95, scale=0.05, low=f_nii_s / 4.0, high=f_nii_s / 2.0
             ),
         )
 
@@ -316,27 +274,15 @@ class TestComplexLineConfig:
         z_blr = Redshift(
             'z_blr',
             prior=TruncatedNormal(
-                loc=z_nlr,
-                scale=0.002,
-                low=z_nlr - 0.01,
-                high=z_nlr + 0.01,
+                loc=z_nlr, scale=0.002, low=z_nlr - 0.01, high=z_nlr + 0.01
             ),
         )
-        z_out = Redshift(
-            'z_out',
-            prior=Uniform(low=z_nlr - 0.02, high=z_nlr),
-        )
+        z_out = Redshift('z_out', prior=Uniform(low=z_nlr - 0.02, high=z_nlr))
 
         # -- FWHM hierarchy --
         fwhm_narrow = FWHM('fwhm_narrow', prior=Uniform(50, 500))
-        fwhm_broad = FWHM(
-            'fwhm_broad',
-            prior=Uniform(low=fwhm_narrow + 200, high=5000),
-        )
-        fwhm_out = FWHM(
-            'fwhm_out',
-            prior=Uniform(low=fwhm_broad, high=8000),
-        )
+        fwhm_broad = FWHM('fwhm_broad', prior=Uniform(low=fwhm_narrow + 200, high=5000))
+        fwhm_out = FWHM('fwhm_out', prior=Uniform(low=fwhm_broad, high=8000))
 
         # -- Flux with doublet ratio --
         f_ha_n = Flux('Ha_n', prior=Uniform(0, 10))
@@ -346,25 +292,40 @@ class TestComplexLineConfig:
         f_nii_w = Flux(
             'NII_w',
             prior=TruncatedNormal(
-                loc=f_nii_s / 2.95,
-                scale=0.1,
-                low=f_nii_s / 4.0,
-                high=f_nii_s / 2.0,
+                loc=f_nii_s / 2.95, scale=0.1, low=f_nii_s / 4.0, high=f_nii_s / 2.0
             ),
         )
 
         lc = LineConfiguration()
 
         # Narrow lines
-        lc.add_line('Ha', 6564.61 * u.AA, redshift=z_nlr, fwhm_gauss=fwhm_narrow, flux=f_ha_n)
-        lc.add_line('NII_6585', 6585.27 * u.AA, redshift=z_nlr, fwhm_gauss=fwhm_narrow, flux=f_nii_s)
-        lc.add_line('NII_6549', 6549.86 * u.AA, redshift=z_nlr, fwhm_gauss=fwhm_narrow, flux=f_nii_w)
+        lc.add_line(
+            'Ha', 6564.61 * u.AA, redshift=z_nlr, fwhm_gauss=fwhm_narrow, flux=f_ha_n
+        )
+        lc.add_line(
+            'NII_6585',
+            6585.27 * u.AA,
+            redshift=z_nlr,
+            fwhm_gauss=fwhm_narrow,
+            flux=f_nii_s,
+        )
+        lc.add_line(
+            'NII_6549',
+            6549.86 * u.AA,
+            redshift=z_nlr,
+            fwhm_gauss=fwhm_narrow,
+            flux=f_nii_w,
+        )
 
         # Broad lines
-        lc.add_line('Ha', 6564.61 * u.AA, redshift=z_blr, fwhm_gauss=fwhm_broad, flux=f_ha_b)
+        lc.add_line(
+            'Ha', 6564.61 * u.AA, redshift=z_blr, fwhm_gauss=fwhm_broad, flux=f_ha_b
+        )
 
         # Outflow lines
-        lc.add_line('Ha', 6564.61 * u.AA, redshift=z_out, fwhm_gauss=fwhm_out, flux=f_ha_out)
+        lc.add_line(
+            'Ha', 6564.61 * u.AA, redshift=z_out, fwhm_gauss=fwhm_out, flux=f_ha_out
+        )
 
         return lc
 
@@ -463,20 +424,13 @@ class TestDiamondDependencies:
         """A FWHM with low from one token and high from another."""
         lower = FWHM('lower', prior=Uniform(50, 200))
         upper = FWHM('upper', prior=Uniform(800, 2000))
-        mid = FWHM(
-            'mid',
-            prior=Uniform(low=lower + 50, high=upper - 50),
-        )
+        mid = FWHM('mid', prior=Uniform(low=lower + 50, high=upper - 50))
 
         deps = mid.prior.dependencies()
         assert lower in deps
         assert upper in deps
 
-        named_priors = {
-            'lower': lower.prior,
-            'upper': upper.prior,
-            'mid': mid.prior,
-        }
+        named_priors = {'lower': lower.prior, 'upper': upper.prior, 'mid': mid.prior}
         param_to_name = {lower: 'lower', upper: 'upper', mid: 'mid'}
         order = topological_sort(named_priors, param_to_name)
         assert order.index('lower') < order.index('mid')
@@ -489,9 +443,7 @@ class TestDiamondDependencies:
         c = FWHM('c', prior=Uniform(low=a, high=b))
         d = FWHM('d', prior=Uniform(low=a + 50, high=b - 50))
 
-        named_priors = {
-            'a': a.prior, 'b': b.prior, 'c': c.prior, 'd': d.prior,
-        }
+        named_priors = {'a': a.prior, 'b': b.prior, 'c': c.prior, 'd': d.prior}
         param_to_name = {a: 'a', b: 'b', c: 'c', d: 'd'}
         order = topological_sort(named_priors, param_to_name)
 
@@ -543,10 +495,7 @@ class TestComplexArithmetic:
         derived = FWHM(
             'derived',
             prior=TruncatedNormal(
-                loc=base * 1.5 + 50,
-                scale=30.0,
-                low=base + 20,
-                high=base * 3,
+                loc=base * 1.5 + 50, scale=30.0, low=base + 20, high=base * 3
             ),
         )
         context = {base: 200.0}
@@ -595,10 +544,7 @@ class TestDeepChainSerialization:
         f_weak = Flux(
             'f_w',
             prior=TruncatedNormal(
-                loc=f_strong / 2.95,
-                scale=0.1,
-                low=f_strong / 4.0,
-                high=f_strong / 2.0,
+                loc=f_strong / 2.95, scale=0.1, low=f_strong / 4.0, high=f_strong / 2.0
             ),
         )
 
@@ -651,10 +597,7 @@ class TestEndToEndDeepDependencies:
     def test_narrow_broad_model_respects_ordering(self):
         """Verify sampled broad FWHM > sampled narrow FWHM + offset."""
         fwhm_narrow = FWHM('fwhm_narrow', prior=Uniform(50, 300))
-        fwhm_broad = FWHM(
-            'fwhm_broad',
-            prior=Uniform(low=fwhm_narrow + 200, high=3000),
-        )
+        fwhm_broad = FWHM('fwhm_broad', prior=Uniform(low=fwhm_narrow + 200, high=3000))
 
         lc = LineConfiguration()
         z = Redshift('z', prior=Uniform(-0.005, 0.005))
@@ -709,10 +652,7 @@ class TestEndToEndDeepDependencies:
         z_nlr = Redshift(
             'z_nlr',
             prior=TruncatedNormal(
-                loc=z_sys,
-                scale=0.001,
-                low=z_sys - 0.003,
-                high=z_sys + 0.003,
+                loc=z_sys, scale=0.001, low=z_sys - 0.003, high=z_sys + 0.003
             ),
         )
 

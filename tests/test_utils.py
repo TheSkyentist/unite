@@ -16,7 +16,6 @@ from unite._utils import (
     _wavelength_conversion_factor,
 )
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -26,7 +25,7 @@ class TestConstants:
     """Tests for physical constants."""
 
     def test_c_kms(self):
-        assert C_KMS == pytest.approx(299792.458, rel=1e-6)
+        assert pytest.approx(299792.458, rel=1e-6) == C_KMS
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +135,7 @@ class TestEnsureWavelength:
             _ensure_wavelength(5000.0)
 
     def test_wrong_units_raises(self):
-        with pytest.raises(ValueError, match='wavelength.*length.*units'):
+        with pytest.raises(ValueError, match=r'wavelength.*length.*units'):
             _ensure_wavelength(100.0 * u.km / u.s)
 
     def test_ndim_validation(self):

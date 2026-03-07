@@ -2,7 +2,6 @@
 
 import warnings
 
-import pytest
 from astropy import units as u
 
 from unite.config import Configuration
@@ -10,7 +9,7 @@ from unite.continuum import ContinuumConfiguration, Linear
 from unite.disperser.base import FluxScale, RScale
 from unite.disperser.config import DispersersConfiguration
 from unite.instruments.nirspec import G235H, G395H
-from unite.line import FWHM, Flux, LineConfiguration, Redshift
+from unite.line import FWHM, LineConfiguration, Redshift
 from unite.prior import TruncatedNormal, Uniform
 
 

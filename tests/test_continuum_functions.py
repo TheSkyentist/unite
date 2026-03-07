@@ -2,7 +2,6 @@
 
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from scipy.special import comb as scipy_comb
 
 from unite.continuum.functions import (
@@ -12,7 +11,6 @@ from unite.continuum.functions import (
     chebval,
     planck_function,
 )
-
 
 # ---------------------------------------------------------------------------
 # Planck function
@@ -109,11 +107,7 @@ class TestBSpline:
         """Create a clamped knot vector."""
         n_internal = n_basis - degree + 1
         internal = np.linspace(low, high, n_internal)
-        knots = np.concatenate([
-            np.full(degree, low),
-            internal,
-            np.full(degree, high),
-        ])
+        knots = np.concatenate([np.full(degree, low), internal, np.full(degree, high)])
         return jnp.asarray(knots)
 
     def test_basis_partition_of_unity(self):

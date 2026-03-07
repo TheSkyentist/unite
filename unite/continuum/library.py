@@ -554,9 +554,7 @@ class Chebyshev(ContinuumForm):
     def is_linear(self) -> bool:
         return True
 
-    def _adapt_for_observed_region(
-        self, obs_low: float, obs_high: float
-    ) -> Chebyshev:
+    def _adapt_for_observed_region(self, obs_low: float, obs_high: float) -> Chebyshev:
         new = object.__new__(Chebyshev)
         new._order = self._order
         new._half_width = (obs_high - obs_low) / 2.0
@@ -944,9 +942,7 @@ class BSpline(ContinuumForm):
     def is_linear(self) -> bool:
         return True
 
-    def _adapt_for_observed_region(
-        self, obs_low: float, obs_high: float
-    ) -> BSpline:
+    def _adapt_for_observed_region(self, obs_low: float, obs_high: float) -> BSpline:
         orig_lo = float(self._knots[0])
         orig_hi = float(self._knots[-1])
         if orig_hi == orig_lo:
@@ -1020,9 +1016,7 @@ class BSpline(ContinuumForm):
     def __hash__(self) -> int:
         return hash(('BSpline', tuple(float(k) for k in self._knots), self._degree))
 
-    def _prepare(
-        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
-    ) -> BSpline:
+    def _prepare(self, canonical_unit: u.UnitBase, region_unit: u.UnitBase) -> BSpline:
         factor = _wavelength_conversion_factor(region_unit, canonical_unit)
         new = object.__new__(BSpline)
         new._knots = self._knots * factor
@@ -1084,9 +1078,7 @@ class Bernstein(ContinuumForm):
     def is_linear(self) -> bool:
         return True
 
-    def _adapt_for_observed_region(
-        self, obs_low: float, obs_high: float
-    ) -> Bernstein:
+    def _adapt_for_observed_region(self, obs_low: float, obs_high: float) -> Bernstein:
         from scipy.special import comb
 
         new = object.__new__(Bernstein)

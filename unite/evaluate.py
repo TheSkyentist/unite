@@ -204,8 +204,7 @@ def evaluate_model(
                     }
                     form = args.cont_forms[k]
                     region_cont = (
-                        form.evaluate(wavelength, obs_center, cont_p)
-                        * _cont_scale
+                        form.evaluate(wavelength, obs_center, cont_p) * _cont_scale
                     )
                     region_cont = jnp.where(in_region, region_cont, 0.0)
                     cont_contributions.append(region_cont * flux_scale_val)

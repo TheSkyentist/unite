@@ -12,11 +12,10 @@ from unite.instruments.nirspec import (
     G235M,
     G395H,
     G395M,
+    PRISM,
     NIRSpecDisperser,
     NIRSpecSpectrum,
-    PRISM,
 )
-
 
 # ---------------------------------------------------------------------------
 # NIRSpecDisperser — construction and validation

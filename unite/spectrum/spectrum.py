@@ -516,13 +516,11 @@ class Spectra:
             center = float((obs_low + obs_high) / 2.0)
             adapted_form = form._adapt_for_observed_region(obs_low, obs_high)
             result = fit_continuum_form(
-                adapted_form, wl[good], flux[good], error[good], center,
+                adapted_form, wl[good], flux[good], error[good], center
             )
 
             # Evaluate on all in-region pixels.
-            model_region = adapted_form.evaluate(
-                wl[in_region], center, result.params,
-            )
+            model_region = adapted_form.evaluate(wl[in_region], center, result.params)
 
             return model_region, in_region, result.chi2_red
 
@@ -544,8 +542,13 @@ class Spectra:
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
                     result = _fit_continuum_region(
-                        wl, spectrum.flux, spectrum.error, obs_low, obs_high,
-                        line_mask, region.form,
+                        wl,
+                        spectrum.flux,
+                        spectrum.error,
+                        obs_low,
+                        obs_high,
+                        line_mask,
+                        region.form,
                     )
                     model_region, in_region, _ = result
                     if model_region is not None:

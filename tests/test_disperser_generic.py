@@ -8,7 +8,6 @@ from astropy import units as u
 from unite.disperser.base import RScale
 from unite.disperser.generic import GenericDisperser, SimpleDisperser
 
-
 # ---------------------------------------------------------------------------
 # GenericDisperser
 # ---------------------------------------------------------------------------
@@ -65,10 +64,7 @@ class TestGenericDisperser:
     def test_with_calibration_tokens(self):
         r = RScale()
         d = GenericDisperser(
-            R_func=lambda w: w,
-            dlam_dpix_func=lambda w: w,
-            unit=u.AA,
-            r_scale=r,
+            R_func=lambda w: w, dlam_dpix_func=lambda w: w, unit=u.AA, r_scale=r
         )
         assert d.has_calibration_params
         assert d.r_scale is r

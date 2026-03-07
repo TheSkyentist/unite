@@ -7,10 +7,9 @@ from astropy import units as u
 
 from unite.disperser.base import FluxScale, PixOffset, RScale
 from unite.disperser.config import DispersersConfiguration
-from unite.instruments.nirspec import G235H, G395H, PRISM
+from unite.instruments.nirspec import G235H, G395H
 from unite.instruments.sdss import SDSSDisperser
-from unite.prior import Fixed, TruncatedNormal, Uniform
-
+from unite.prior import TruncatedNormal, Uniform
 
 # ---------------------------------------------------------------------------
 # Construction and validation
@@ -131,7 +130,11 @@ class TestMakeSpectrum:
         wl = np.linspace(1.66, 3.17, npix + 1) * u.um
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
         spec = cfg.make_spectrum(
-            'G235H', wl[:-1], wl[1:], np.ones(npix) * flux_unit, np.full(npix, 0.1) * flux_unit
+            'G235H',
+            wl[:-1],
+            wl[1:],
+            np.ones(npix) * flux_unit,
+            np.full(npix, 0.1) * flux_unit,
         )
         assert spec.npix == npix
         assert spec.name == 'G235H'
@@ -145,7 +148,11 @@ class TestMakeSpectrum:
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
         with pytest.raises(KeyError):
             cfg.make_spectrum(
-                'G999', wl[:-1], wl[1:], np.ones(npix) * flux_unit, np.full(npix, 0.1) * flux_unit
+                'G999',
+                wl[:-1],
+                wl[1:],
+                np.ones(npix) * flux_unit,
+                np.full(npix, 0.1) * flux_unit,
             )
 
 

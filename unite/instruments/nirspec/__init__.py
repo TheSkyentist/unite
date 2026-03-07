@@ -19,7 +19,7 @@ __all__ = [
     'G235M',
     'G395H',
     'G395M',
+    'PRISM',
     'NIRSpecDisperser',
     'NIRSpecSpectrum',
-    'PRISM',
 ]

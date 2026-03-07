@@ -6,7 +6,6 @@ from astropy import units as u
 from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
 from unite.prior import Fixed, TruncatedNormal, Uniform
 
-
 # ---------------------------------------------------------------------------
 # Calibration token construction
 # ---------------------------------------------------------------------------
@@ -120,9 +119,7 @@ class TestDisperserTypeValidation:
         from unite.disperser.generic import GenericDisperser
 
         d = GenericDisperser(
-            R_func=lambda w: w * 0 + 1000,
-            dlam_dpix_func=lambda w: w / 1000,
-            unit=u.AA,
+            R_func=lambda w: w * 0 + 1000, dlam_dpix_func=lambda w: w / 1000, unit=u.AA
         )
         assert not d.has_calibration_params
 
