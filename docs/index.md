@@ -67,8 +67,18 @@ guides/results
 api/index
 ```
 
+## Development
+
+```{toctree}
+:maxdepth: 1
+:caption: Development
+
+contributing
+```
+
 ## Indices and Tables
 
 - {ref}`genindex`
 - {ref}`modindex`
 - {ref}`search`
+- [GitHub](https://github.com/TheSkyentist/unite)

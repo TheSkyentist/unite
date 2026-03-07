@@ -56,6 +56,10 @@ mcmc = MCMC(NUTS(model_fn), num_warmup=500, num_samples=1000)
 mcmc.run(jax.random.PRNGKey(0), *model_args)
 ```
 
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome on [GitHub](https://github.com/TheSkyentist/unite/issues). If you find a bug or have an idea for an improvement, please open an issue — even a brief description is helpful.
+
 ## Documentation
 
 Full documentation, tutorials, and API reference at **[unite.readthedocs.io](https://unite.readthedocs.io/)**.
