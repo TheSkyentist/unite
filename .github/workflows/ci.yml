@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -59,17 +59,35 @@ jobs:
           pytest --cov=unite --cov-report=term-missing --cov-report=xml:coverage.xml -ra
 
       - name: Upload coverage artifact
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.14'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: coverage.xml
 
       - name: Upload to Codecov
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.14'
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
+  test-lowest:
+    name: Test (lowest deps, Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lowest dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test-lowest]"
+
+      - name: Run tests
+        run: pytest -ra

@@ -4,6 +4,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/unite)](https://pypi.org/project/unite/)
 [![License: GPL v2](https://img.shields.io/badge/License-GPLv2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![Tests](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml/badge.svg)](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/TheSkyentist/unite/branch/main/graph/badge.svg)](https://codecov.io/gh/TheSkyentist/unite)
 [![Documentation](https://img.shields.io/badge/docs-readthedocs-blue)](https://unite.readthedocs.io/)
 
 `unite` is a Python package for fast, Bayesian inference of emission lines from astronomical spectra. It is built on [JAX](https://jax.readthedocs.io/), [NumPyro](https://num.pyro.ai/), and [Astropy](https://www.astropy.org/), and supports fitting multiple spectra simultaneously with shared kinematics, calibration tokens, and flexible priors.
