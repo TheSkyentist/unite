@@ -14,8 +14,6 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
-  push:
-    tags: ['v*']
 
   # Allow manual trigger for testing the workflow
   workflow_dispatch:

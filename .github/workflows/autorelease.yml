@@ -1,0 +1,44 @@
+name: Auto-release on version bump
+
+# Fires when pyproject.toml changes on main (i.e. a version bump is committed).
+# Creates a GitHub Release, which in turn triggers publish.yml (PyPI) and Zenodo.
+
+on:
+  push:
+    branches: [main]
+    paths: [pyproject.toml]
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from pyproject.toml
+        id: ver
+        run: |
+          VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if release already exists
+        id: check
+        run: |
+          if gh release view "${{ steps.ver.outputs.tag }}" &>/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create release
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --title "${{ steps.ver.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
