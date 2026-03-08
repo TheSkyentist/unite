@@ -50,7 +50,7 @@ def _make_line_config():
         'H_alpha',
         6563.0 * u.AA,
         redshift=line.Redshift(prior=prior.Uniform(-0.01, 0.01)),
-        fwhm_gauss=line.FWHM(prior=prior.Uniform(1.0, 10.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
         flux=line.Flux(prior=prior.Uniform(0, 5)),
     )
     return lc

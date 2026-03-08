@@ -61,12 +61,16 @@ def create_minimal_config():
     # Create line configuration
     line_config = line.LineConfiguration()
 
-    # Add a single H-alpha line with variable parameters
+    # Add a single H-alpha line with variable parameters.
+    # Redshift prior is kept narrow enough that the line center stays within
+    # the 6500–6600 Å spectral range (z=±0.005 → Δλ ≈ ±33 Å from 6563 Å).
+    # FWHM prior uses physically sensible km/s values that are wide enough
+    # to span multiple pixels (pixel width ≈ 1 Å ≈ 46 km/s at H-alpha).
     line_config.add_line(
         'H_alpha',
         center=6563.0 * u.AA,
-        redshift=line.Redshift(prior=prior.Uniform(-0.01, 0.01)),
-        fwhm_gauss=line.FWHM(prior=prior.Uniform(1.0, 10.0)),
+        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100.0, 1000.0)),
         flux=line.Flux(prior=prior.Uniform(50.0, 150.0)),
     )
 
@@ -173,7 +177,7 @@ class TestMinimalModel:
             'H_alpha',
             center=6563.0 * u.AA,
             redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
-            fwhm_gauss=line.FWHM(prior=prior.Uniform(3.0, 7.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(10, 100)),
         )
 
         spectra = Spectra([spectrum], redshift=0.0)
@@ -306,6 +310,8 @@ class TestModelOutputValidation:
         posterior_samples = mcmc.get_samples()
         preds = evaluate_model(posterior_samples, unite_args)
         mean_model = jnp.mean(jnp.asarray(preds[0].total), axis=0)
+
+        print(mean_model)
 
         # evaluate_model returns physical flux units.
         assert jnp.all(jnp.isfinite(mean_model))

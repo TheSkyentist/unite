@@ -41,7 +41,7 @@ def _setup():
         'Ha',
         6563.0 * u.AA,
         redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
-        fwhm_gauss=line.FWHM(prior=prior.Uniform(2.0, 8.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
         flux=line.Flux(prior=prior.Uniform(0, 5)),
     )
 

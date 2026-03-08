@@ -57,6 +57,28 @@ class RegionDiagnostic:
     fit_params: dict = field(default_factory=dict)
 
 
+class ScaleDiagnosticList(list):
+    """A list of :class:`SpectrumScaleDiagnostic` objects that also supports lookup by spectrum name.
+
+    Inherits all standard :class:`list` behaviour.  Additionally,
+    ``diags["my_spectrum"]`` returns the first diagnostic whose
+    :attr:`~SpectrumScaleDiagnostic.name` matches the given string,
+    raising :exc:`KeyError` if no match is found.
+    """
+
+    def __getitem__(self, idx):
+        if isinstance(idx, str):
+            for diag in self:
+                if diag.name == idx:
+                    return diag
+            msg = f'No scale diagnostic found for spectrum name {idx!r}.'
+            raise KeyError(msg)
+        result = super().__getitem__(idx)
+        if isinstance(idx, slice):
+            result = ScaleDiagnosticList(result)
+        return result
+
+
 @dataclass
 class SpectrumScaleDiagnostic:
     """Diagnostics for one spectrum produced by :meth:`Spectra.compute_scales`.
@@ -152,7 +174,7 @@ class Spectra:
         self._is_prepared: bool = False
         self._prepared_line_config: LineConfiguration | None = None
         self._prepared_cont_config: ContinuumConfiguration | None = None
-        self._scale_diagnostics: list[SpectrumScaleDiagnostic] | None = None
+        self._scale_diagnostics: ScaleDiagnosticList | None = None
 
         # Canonical wavelength unit: default to the first spectrum's unit.
         if canonical_unit is not None:
@@ -235,13 +257,15 @@ class Spectra:
         self._continuum_scale = value
 
     @property
-    def scale_diagnostics(self) -> list[SpectrumScaleDiagnostic] | None:
+    def scale_diagnostics(self) -> ScaleDiagnosticList | None:
         """Per-spectrum diagnostics from the most recent :meth:`compute_scales` call.
 
-        Returns a list of :class:`SpectrumScaleDiagnostic` objects (one per
-        spectrum), each holding the line mask, the fitted continuum model
-        array, and per-region fit details.  ``None`` if :meth:`compute_scales`
-        has not been called yet.
+        Returns a :class:`ScaleDiagnosticList` of
+        :class:`SpectrumScaleDiagnostic` objects (one per spectrum), each
+        holding the line mask, the fitted continuum model array, and
+        per-region fit details.  Supports both integer indexing and
+        lookup by spectrum name (e.g. ``diags["my_spectrum"]``).
+        ``None`` if :meth:`compute_scales` has not been called yet.
         """
         return self._scale_diagnostics
 
@@ -349,8 +373,12 @@ class Spectra:
 
             return model_region, in_region, good, result.chi2_red, result.params
 
-        # --- Line scale (with continuum subtraction when available) ---
+        # --- Single pass: fit continuum once per region per spectrum, then
+        #     derive line scale, continuum scale, error scale, and diagnostics.
         max_line_scale = 0.0
+        max_cont_scale = 0.0
+        diag_list = []
+
         for spectrum in self._spectra:
             wl = spectrum.wavelength
             flux_conv = _flux_density_conversion_factor(
@@ -359,104 +387,8 @@ class Spectra:
             wl_conv = _wavelength_conversion_factor(spectrum.unit, ref_wl_unit)
             line_mask = _build_line_mask(spectrum, mask_fwhm_kms)
 
-            # Build a full-spectrum continuum estimate for subtraction.
-            continuum_est = jnp.zeros(spectrum.npix)
-            if continuum_config is not None:
-                for region in continuum_config:
-                    conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
-                    obs_low = region.low * conv * (1.0 + z)
-                    obs_high = region.high * conv * (1.0 + z)
-                    result = _fit_continuum_region(
-                        wl,
-                        spectrum.flux,
-                        spectrum.error,
-                        obs_low,
-                        obs_high,
-                        line_mask,
-                        region.form,
-                    )
-                    model_region, in_region, _good, _, _ = result
-                    if model_region is not None:
-                        continuum_est = continuum_est.at[in_region].set(model_region)
-
-            # Measure peak height above continuum for each line.
-            for lam_rest in line_config.wavelengths:
-                lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
-                if lam_obs <= 0:
-                    continue
-                lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
-                user_fwhm = lam_obs * max_fwhm_kms / C_KMS
-                total_fwhm = float(jnp.sqrt(user_fwhm**2 + lsf_fwhm**2))
-                in_window = (wl >= lam_obs - total_fwhm) & (wl <= lam_obs + total_fwhm)
-                if not jnp.any(in_window):
-                    continue
-                peak_above = float(
-                    jnp.max(
-                        jnp.abs(spectrum.flux[in_window] - continuum_est[in_window])
-                    )
-                )
-                flux_est = peak_above * flux_conv * total_fwhm * wl_conv
-                max_line_scale = max(max_line_scale, flux_est)
-
-        line_scale_val = max_line_scale if max_line_scale > 0 else 1.0
-        self._line_scale = line_scale_val * ref_flux_unit * ref_wl_unit
-
-        # --- Continuum scale and optional error scale ---
-        if continuum_config is not None:
-            max_cont_scale = 0.0
-            for spectrum in self._spectra:
-                wl = spectrum.wavelength
-                flux_conv = _flux_density_conversion_factor(
-                    spectrum.flux_unit, ref_flux_unit
-                )
-                line_mask = _build_line_mask(spectrum, mask_fwhm_kms)
-                per_pixel_scale = jnp.ones(spectrum.npix)
-                all_chi2_reds: list[float] = []
-
-                for region in continuum_config:
-                    conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
-                    obs_low = region.low * conv * (1.0 + z)
-                    obs_high = region.high * conv * (1.0 + z)
-
-                    in_region = (wl >= obs_low) & (wl <= obs_high)
-                    if not jnp.any(in_region):
-                        continue
-
-                    good = in_region & ~line_mask
-                    if jnp.any(good):
-                        median_flux = float(jnp.median(jnp.abs(spectrum.flux[good])))
-                        max_cont_scale = max(max_cont_scale, median_flux * flux_conv)
-
-                    if error_scale:
-                        result = _fit_continuum_region(
-                            wl,
-                            spectrum.flux,
-                            spectrum.error,
-                            obs_low,
-                            obs_high,
-                            line_mask,
-                            region.form,
-                        )
-                        _, fit_region, _good, chi2_red, _ = result
-                        if chi2_red is not None:
-                            all_chi2_reds.append(chi2_red)
-                            region_scale = float(jnp.sqrt(chi2_red))
-                            per_pixel_scale = jnp.where(
-                                fit_region, region_scale, per_pixel_scale
-                            )
-
-                if error_scale:
-                    spectrum.error_scale = per_pixel_scale
-
-            cont_scale_val = max_cont_scale if max_cont_scale > 0 else 1.0
-            self._continuum_scale = cont_scale_val * ref_flux_unit
-
-        # --- Collect diagnostics ---
-        diag_list = []
-        for spectrum in self._spectra:
-            wl = spectrum.wavelength
-            line_mask = _build_line_mask(spectrum, mask_fwhm_kms)
-            continuum_model_full = jnp.full(spectrum.npix, jnp.nan)
+            continuum_model = jnp.full(spectrum.npix, jnp.nan)
+            per_pixel_scale = jnp.ones(spectrum.npix)
             region_diags: list[RegionDiagnostic] = []
 
             if continuum_config is not None:
@@ -480,10 +412,25 @@ class Spectra:
                             region.form,
                         )
                     )
+
+                    # Continuum estimate for line-scale peak subtraction.
                     if model_region is not None:
-                        continuum_model_full = continuum_model_full.at[in_region].set(
+                        continuum_model = continuum_model.at[in_region].set(
                             model_region
                         )
+
+                    # Continuum scale: median |flux| of unmasked pixels.
+                    if jnp.any(good):
+                        median_flux = float(jnp.median(jnp.abs(spectrum.flux[good])))
+                        max_cont_scale = max(max_cont_scale, median_flux * flux_conv)
+
+                    # Error scale: per-pixel sqrt(chi2_red) from fit residuals.
+                    if error_scale and chi2_red is not None:
+                        region_scale = float(jnp.sqrt(chi2_red))
+                        per_pixel_scale = jnp.where(
+                            in_region, region_scale, per_pixel_scale
+                        )
+
                     region_diags.append(
                         RegionDiagnostic(
                             obs_low=float(obs_low),
@@ -496,6 +443,28 @@ class Spectra:
                         )
                     )
 
+            if error_scale and (continuum_config is not None):
+                spectrum.error_scale = per_pixel_scale
+
+            # Line scale: peak above continuum within ±total_fwhm of each line.
+            for lam_rest in line_config.wavelengths:
+                lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
+                if lam_obs <= 0:
+                    continue
+                lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
+                user_fwhm = lam_obs * max_fwhm_kms / C_KMS
+                total_fwhm = float(jnp.sqrt(user_fwhm**2 + lsf_fwhm**2))
+                in_window = (wl >= lam_obs - total_fwhm) & (wl <= lam_obs + total_fwhm)
+                if not jnp.any(in_window):
+                    continue
+                peak_above = float(
+                    jnp.max(
+                        jnp.abs(spectrum.flux[in_window] - continuum_model[in_window])
+                    )
+                )
+                flux_est = peak_above * flux_conv * total_fwhm * wl_conv
+                max_line_scale = max(max_line_scale, flux_est)
+
             diag_list.append(
                 SpectrumScaleDiagnostic(
                     name=spectrum.name,
@@ -503,13 +472,21 @@ class Spectra:
                     flux=spectrum.flux,
                     error=spectrum.error,
                     line_mask=line_mask,
-                    continuum_model=continuum_model_full,
+                    continuum_model=continuum_model,
                     regions=region_diags,
                     flux_unit=spectrum.flux_unit,
                     wavelength_unit=spectrum.unit,
                 )
             )
-        self._scale_diagnostics = diag_list
+
+        line_scale_val = max_line_scale if max_line_scale > 0 else 1.0
+        self._line_scale = line_scale_val * ref_flux_unit * ref_wl_unit
+
+        if continuum_config is not None:
+            cont_scale_val = max_cont_scale if max_cont_scale > 0 else 1.0
+            self._continuum_scale = cont_scale_val * ref_flux_unit
+
+        self._scale_diagnostics = ScaleDiagnosticList(diag_list)
 
     # -- preparation ----------------------------------------------------------
 
@@ -670,7 +647,29 @@ class Spectra:
     def __iter__(self) -> Iterator[GenericSpectrum]:
         return iter(self._spectra)
 
-    def __getitem__(self, idx: int) -> GenericSpectrum:
+    def __getitem__(self, idx: int | str) -> GenericSpectrum:
+        """Return a spectrum by integer index or by name.
+
+        Parameters
+        ----------
+        idx : int or str
+            Integer index into the internal spectrum list, or a string
+            matching :attr:`~unite.instrument.generic.GenericSpectrum.name`
+            of the desired spectrum.
+
+        Raises
+        ------
+        KeyError
+            If *idx* is a string and no spectrum with that name exists.
+        IndexError
+            If *idx* is an integer and is out of range.
+        """
+        if isinstance(idx, str):
+            for spectrum in self._spectra:
+                if spectrum.name == idx:
+                    return spectrum
+            msg = f'No spectrum found with name {idx!r}.'
+            raise KeyError(msg)
         return self._spectra[idx]
 
     def __repr__(self) -> str:
