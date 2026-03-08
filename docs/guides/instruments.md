@@ -26,7 +26,10 @@ A {class}`~unite.instrument.base.Disperser` provides:
 Seven convenience classes for each NIRSpec grating/prism:
 
 ```python
-from unite.instrument.nirspec import G140H, G140M, G235H, G235M, G395H, G395M, PRISM
+from unite.instrument import nirspec
+
+# nirspec.G140H, nirspec.G140M, nirspec.G235H, nirspec.G235M,
+# nirspec.G395H, nirspec.G395M, nirspec.PRISM
 ```
 
 Each class provides $R(\lambda)$ based on calibration data.  Spectra are loaded with
@@ -38,8 +41,8 @@ Each class provides $R(\lambda)$ based on calibration data.  Spectra are loaded 
 NIRSpec dispersers support two resolution calibration modes via `r_source`:
 
 ```python
-g235h = G235H(r_source='point')     # point-source R (de Graaff et al. 2025)
-g235h = G235H(r_source='uniform')   # uniform illumination R from FITS tables
+g235h = nirspec.G235H(r_source='point')     # point-source R (de Graaff et al. 2025)
+g235h = nirspec.G235H(r_source='uniform')   # uniform illumination R from FITS tables
 ```
 
 - **`'point'`** (default): Uses polynomial fits to the point-source resolving power from
@@ -51,17 +54,17 @@ g235h = G235H(r_source='uniform')   # uniform illumination R from FITS tables
 #### Calibration Tokens on NIRSpec
 
 ```python
-from unite.instrument import RScale, FluxScale, PixOffset
+from unite.instrument import nirspec, RScale, FluxScale, PixOffset
 from unite import prior
 
 # Free resolution scale (e.g., for extended sources)
-g235h = G235H(r_scale=RScale(prior=prior.TruncatedNormal(1.0, 0.05, 0.8, 1.2)))
+g235h = nirspec.G235H(r_scale=RScale(prior=prior.TruncatedNormal(1.0, 0.05, 0.8, 1.2)))
 
 # Free flux calibration between gratings
-g235h = G235H(flux_scale=FluxScale(prior=prior.Uniform(0.5, 2.0)))
+g235h = nirspec.G235H(flux_scale=FluxScale(prior=prior.Uniform(0.5, 2.0)))
 
 # Wavelength offset in pixels
-g235h = G235H(pix_offset=PixOffset(prior=prior.Uniform(-2, 2)))
+g235h = nirspec.G235H(pix_offset=PixOffset(prior=prior.Uniform(-2, 2)))
 ```
 
 #### Loading NIRSpec Spectra
@@ -70,39 +73,39 @@ g235h = G235H(pix_offset=PixOffset(prior=prior.Uniform(-2, 2)))
 {class}`~unite.instrument.generic.GenericSpectrum` and provides loaders for NIRSpec data:
 
 ```python
-from unite.instrument.nirspec import G235H, NIRSpecSpectrum
+from unite.instrument import nirspec
 
-g235h = G235H()
+g235h = nirspec.G235H()
 
 # From DJA pipeline output
-spectrum = NIRSpecSpectrum.from_DJA('spectrum_g235h.fits', disperser=g235h)
+spectrum = nirspec.NIRSpecSpectrum.from_DJA('spectrum_g235h.fits', disperser=g235h)
 
 # From arrays (wavelength in microns)
-spectrum = NIRSpecSpectrum.from_arrays(low, high, flux, error, disperser=g235h)
+spectrum = nirspec.NIRSpecSpectrum.from_arrays(low, high, flux, error, disperser=g235h)
 ```
 
 Because `NIRSpecSpectrum` is a subclass of `GenericSpectrum`, the returned object works
 everywhere a `GenericSpectrum` is expected:
 
 ```python
-from unite.instrument.generic import GenericSpectrum
+from unite.instrument import generic
 
-assert isinstance(spectrum, NIRSpecSpectrum)  # True
-assert isinstance(spectrum, GenericSpectrum)  # True
+assert isinstance(spectrum, nirspec.NIRSpecSpectrum)  # True
+assert isinstance(spectrum, generic.GenericSpectrum)  # True
 ```
 
 ### SDSS
 
 ```python
-from unite.instrument.sdss import SDSSDisperser, SDSSSpectrum
+from unite.instrument import sdss
 
-disperser = SDSSDisperser()
+disperser = sdss.SDSSDisperser()
 
 # From FITS file — disperser R(λ) is updated from the wdisp column in the file
-spectrum = SDSSSpectrum.from_fits('spec-PLATE-MJD-FIBER.fits', disperser=disperser)
+spectrum = sdss.SDSSSpectrum.from_fits('spec-PLATE-MJD-FIBER.fits', disperser=disperser)
 
 # From arrays
-spectrum = SDSSSpectrum.from_arrays(low, high, flux, error, disperser=disperser)
+spectrum = sdss.SDSSSpectrum.from_arrays(low, high, flux, error, disperser=disperser)
 ```
 
 {class}`~unite.instrument.sdss.SDSSSpectrum` is also a subclass of
@@ -123,12 +126,12 @@ Import them explicitly from `unite.instrument.generic`:
 Define the dispersion from a wavelength grid:
 
 ```python
-from unite.instrument.generic import SimpleDisperser
+from unite.instrument import generic
 import numpy as np
 from astropy import units as u
 
 wavelength = np.linspace(4000, 9000, 500)
-disperser = SimpleDisperser(
+disperser = generic.SimpleDisperser(
     wavelength=wavelength,
     unit=u.AA,
     R=3000.0,        # constant R
@@ -150,7 +153,7 @@ dispersion:
 For maximum flexibility, pass callables that return $R(\lambda)$ and $d\lambda/\mathrm{pix}(\lambda)$:
 
 ```python
-from unite.instrument.generic import GenericDisperser
+from unite.instrument import generic
 
 def my_R(wavelength):
     return 2000 + 500 * (wavelength - 4000) / 5000
@@ -158,7 +161,7 @@ def my_R(wavelength):
 def my_dlam(wavelength):
     return wavelength / my_R(wavelength)
 
-disperser = GenericDisperser(R_func=my_R, dlam_dpix_func=my_dlam, unit=u.AA, name='custom')
+disperser = generic.GenericDisperser(R_func=my_R, dlam_dpix_func=my_dlam, unit=u.AA, name='custom')
 ```
 
 ### GenericSpectrum
@@ -167,10 +170,10 @@ To build a spectrum for a custom instrument, use
 {class}`~unite.instrument.generic.GenericSpectrum`:
 
 ```python
-from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument import generic
 
-disperser = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0, name='sim')
-spectrum = GenericSpectrum(
+disperser = generic.SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0, name='sim')
+spectrum = generic.GenericSpectrum(
     low=low, high=high, flux=flux, error=error, disperser=disperser
 )
 ```
@@ -196,7 +199,7 @@ $R_\mathrm{eff}(\lambda) = R_\mathrm{nominal}(\lambda) \times r\_scale$
 
 ```python
 r = RScale(prior=prior.TruncatedNormal(1.0, 0.05, 0.8, 1.2))
-g235h = G235H(r_scale=r)
+g235h = nirspec.G235H(r_scale=r)
 ```
 
 Useful when the actual LSF is broader or narrower than the calibration predicts — e.g., for
@@ -210,7 +213,7 @@ means no correction.
 
 ```python
 f = FluxScale(prior=prior.Uniform(0.5, 2.0))
-g395h = G395H(flux_scale=f)
+g395h = nirspec.G395H(flux_scale=f)
 ```
 
 ### PixOffset — Wavelength Offset
@@ -219,7 +222,7 @@ Shifts the wavelength solution by a number of pixels.
 
 ```python
 p = PixOffset(prior=prior.Uniform(-2, 2))
-g395h = G395H(pix_offset=p)
+g395h = nirspec.G395H(pix_offset=p)
 ```
 
 ### Sharing Calibration Tokens
@@ -228,8 +231,8 @@ Pass the **same token instance** to multiple dispersers to share a calibration p
 
 ```python
 shared_r = RScale(prior=prior.TruncatedNormal(1.0, 0.05, 0.8, 1.2), name='r_shared')
-g235h = G235H(r_scale=shared_r)
-g395h = G395H(r_scale=shared_r)
+g235h = nirspec.G235H(r_scale=shared_r)
+g395h = nirspec.G395H(r_scale=shared_r)
 ```
 
 ### Fixed Calibration
@@ -237,7 +240,7 @@ g395h = G395H(r_scale=shared_r)
 Use {class}`~unite.prior.Fixed` to apply a known correction without uncertainty:
 
 ```python
-g395h = G395H(flux_scale=FluxScale(prior=prior.Fixed(1.15)))
+g395h = nirspec.G395H(flux_scale=FluxScale(prior=prior.Fixed(1.15)))
 ```
 
 ---
@@ -311,19 +314,18 @@ A typical setup fits overlapping NIRSpec gratings with a single shared resolutio
 calibration and an independent flux scale per grating:
 
 ```python
-from unite.instrument.nirspec import G235H, G395H, NIRSpecSpectrum
-from unite.instrument import RScale, FluxScale
+from unite.instrument import nirspec, RScale, FluxScale
 from unite import prior
 
 # Shared resolution scale — same physical LSF for both gratings
 r = RScale(prior=prior.TruncatedNormal(1.0, 0.05, 0.8, 1.2), name='r_shared')
 
 # G235H is the flux reference; G395H has a free relative calibration
-g235h = G235H(r_scale=r)
-g395h = G395H(r_scale=r, flux_scale=FluxScale(prior=prior.Uniform(0.5, 2.0)))
+g235h = nirspec.G235H(r_scale=r)
+g395h = nirspec.G395H(r_scale=r, flux_scale=FluxScale(prior=prior.Uniform(0.5, 2.0)))
 
-spec1 = NIRSpecSpectrum.from_DJA('g235h.fits', disperser=g235h)
-spec2 = NIRSpecSpectrum.from_DJA('g395h.fits', disperser=g395h)
+spec1 = nirspec.NIRSpecSpectrum.from_DJA('g235h.fits', disperser=g235h)
+spec2 = nirspec.NIRSpecSpectrum.from_DJA('g395h.fits', disperser=g395h)
 ```
 
 Because `r` is the **same token instance** on both dispersers, it becomes a single
@@ -336,23 +338,21 @@ uses its own disperser; shared line tokens ensure the same physical parameters a
 across all spectra.
 
 ```python
-from unite.instrument.nirspec import G395H, NIRSpecSpectrum
-from unite.instrument.sdss import SDSSDisperser, SDSSSpectrum
-from unite.instrument import FluxScale, Spectra
+from unite.instrument import nirspec, sdss, FluxScale, Spectra
 from unite import prior, line
 import astropy.units as u
 
 # NIRSpec grating (flux reference — no FluxScale)
-g395h = G395H()
+g395h = nirspec.G395H()
 
 # SDSS disperser with a free flux scale relative to NIRSpec
-sdss_disp = SDSSDisperser()
+sdss_disp = sdss.SDSSDisperser()
 sdss_disp.flux_scale = FluxScale(prior=prior.Uniform(0.5, 2.0))
 
 # Both spectra share the same line and continuum configurations
 # → same physical redshift, FWHM, and flux parameters
-spec_nir  = NIRSpecSpectrum.from_DJA('g395h.fits', disperser=g395h)
-spec_sdss = SDSSSpectrum.from_fits('spec-PLATE-MJD-FIBER.fits', disperser=sdss_disp)
+spec_nir  = nirspec.NIRSpecSpectrum.from_DJA('g395h.fits', disperser=g395h)
+spec_sdss = sdss.SDSSSpectrum.from_fits('spec-PLATE-MJD-FIBER.fits', disperser=sdss_disp)
 
 spectra = Spectra([spec_nir, spec_sdss], redshift=z_sys)
 ```

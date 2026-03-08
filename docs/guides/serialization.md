@@ -12,12 +12,12 @@ to describe a fit:
 
 ```python
 from unite.config import Configuration
-from unite.disperser import DispersersConfiguration
+from unite.instrument.config import InstrumentConfig
 
 config = Configuration(
     lines=lc,           # LineConfiguration
     continuum=cc,       # ContinuumConfiguration (optional)
-    dispersers=dc,      # DispersersConfiguration (optional)
+    dispersers=dc,      # InstrumentConfig (optional)
 )
 ```
 
@@ -61,7 +61,7 @@ cc2 = ContinuumConfiguration.load('continuum.yaml')
 
 # Dispersers only
 dc.save('dispersers.yaml')
-dc2 = DispersersConfiguration.load('dispersers.yaml')
+dc2 = InstrumentConfig.load('dispersers.yaml')
 ```
 
 This is useful for reusing the same line configuration across different fits, or sharing
@@ -125,7 +125,7 @@ This represents the expression `fwhm_narrow * 1.0 + 150.0` as the lower bound.
 
 ### Dispersers in YAML
 
-When a {class}`~unite.disperser.config.DispersersConfiguration` is included, calibration
+When a {class}`~unite.instrument.config.InstrumentConfig` is included, calibration
 tokens are also serialized:
 
 ```yaml

@@ -92,6 +92,36 @@ lc.add_line('Ha_broad',  6563.0 * u.AA, redshift=z_broad,  ...)
 | {class}`~unite.line.Flux` | Line flux normalization | internal units |
 | {class}`~unite.line.Param` | Arbitrary profile parameter (h3, h4, etc.) | user-defined |
 
+### Parameter Names
+
+All token classes accept an optional first positional `name` argument. This name appears
+directly in the MCMC posterior samples and results tables. **Always name your tokens** —
+without a name, `unite` auto-generates one (e.g. `fwhm_0`, `redshift_2`) that becomes
+difficult to interpret in output.
+
+```python
+# Auto-generated names → hard to read in output
+z    = line.Redshift(prior=prior.Uniform(-0.01, 0.01))   # → 'redshift_0'
+fwhm = line.FWHM(prior=prior.Uniform(50, 500))            # → 'fwhm_0'
+
+# Explicit names → clean, readable output
+z    = line.Redshift('z',       prior=prior.Uniform(-0.01, 0.01))
+fwhm = line.FWHM('fwhm_nlr',   prior=prior.Uniform(50, 500))
+flux = line.Flux('Ha_flux',     prior=prior.Uniform(0, 10))
+```
+
+The name shows up in:
+
+- The `samples` dict returned by `mcmc.get_samples()`
+- Column names in the parameter table from `make_parameter_table()`
+- FITS header keywords in the output HDU list
+
+:::{tip}
+Use short, descriptive names that identify both the physical component and the quantity,
+e.g. `z_nlr`, `fwhm_broad`, `Ha_flux`, `NII_flux`. This makes it easy to navigate results
+without cross-referencing the original configuration.
+:::
+
 ---
 
 ## Multiple Components

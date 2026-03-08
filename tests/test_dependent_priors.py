@@ -19,8 +19,8 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import model
+from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum, SimpleDisperser
-from unite.instrument.spectrum import Spectra
 from unite.line.config import FWHM, Flux, LineConfiguration, Redshift
 from unite.prior import ParameterRef, TruncatedNormal, Uniform, topological_sort
 

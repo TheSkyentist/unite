@@ -18,8 +18,8 @@ from numpyro import distributions as dist
 
 from unite._utils import C_KMS, _wavelength_conversion_factor
 from unite.continuum.config import ContinuumConfiguration
+from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum
-from unite.instrument.spectrum import Spectra
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.line.profiles import integrate_lines
 from unite.prior import Fixed, Parameter, Prior, topological_sort

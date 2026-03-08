@@ -8,8 +8,8 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import line, model, prior
+from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum, SimpleDisperser
-from unite.instrument.spectrum import Spectra
 from unite.results import make_hdul, make_parameter_table, make_spectra_tables
 
 

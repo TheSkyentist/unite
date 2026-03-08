@@ -20,7 +20,7 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 - **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
 - **YAML serialization** for reproducible, human-editable configurations
 - **User-controlled sampler** — `ModelBuilder` returns `(model_fn, model_args)` for use with any NumPyro backend (NUTS, SVI, nested sampling, ...)
-- **Instrument support** for JWST/NIRSpec (all gratings + PRISM) and generic spectrographs
+- **Instrument support** for JWST/NIRSpec (all gratings + PRISM), SDSS, and any custom spectrograph via generic dispersers
 
 ## Installation
 
@@ -37,24 +37,45 @@ pixi add unite
 ## Quick Start
 
 ```python
-from unite.line import LineConfiguration, Redshift, FWHM, Flux
-from unite.continuum import ContinuumConfiguration
-from unite.spectrum import Spectrum, Spectra
-from unite.model import ModelBuilder
+import jax
+import astropy.units as u
+from numpyro import infer
 
-# Configure lines with shared kinematics
-line_config = LineConfiguration(...)
-continuum_config = ContinuumConfiguration.from_line_config(line_config)
+from unite import line, model, prior
+from unite.continuum import ContinuumConfiguration, Linear
+from unite.instrument import Spectra, nirspec
+from unite.results import make_parameter_table, make_spectra_tables
 
-# Load spectra and build the numpyro model
-spectra = Spectra([Spectrum(...)])
-model_fn, model_args = ModelBuilder(line_config, continuum_config, spectra).build()
+# 1. Configure lines with shared kinematics
+z    = line.Redshift('z',    prior=prior.Uniform(-0.005, 0.005))
+fwhm = line.FWHM('fwhm_nlr', prior=prior.Uniform(100, 1000))
 
-# Run with any NumPyro sampler
-import numpyro
-from numpyro.infer import MCMC, NUTS
-mcmc = MCMC(NUTS(model_fn), num_warmup=500, num_samples=1000)
-mcmc.run(jax.random.PRNGKey(0), *model_args)
+lc = line.LineConfiguration()
+lc.add_line('H_alpha',  6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
+            flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 10)))
+lc.add_line('NII_6585', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
+            flux=line.Flux('NII_flux', prior=prior.Uniform(0, 10)))
+
+cc = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+
+# 2. Load spectra (NIRSpec example; any instrument works)
+g395m = nirspec.G395M()
+spectrum = nirspec.NIRSpecSpectrum.from_DJA('spectrum.fits', disperser=g395m)
+
+spectra = Spectra([spectrum], redshift=5.28)
+filtered_lines, filtered_cont = spectra.prepare(lc, cc)
+spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
+
+# 3. Build and run with any NumPyro sampler
+builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
+model_fn, model_args = builder.build()
+
+mcmc = infer.MCMC(infer.NUTS(model_fn), num_warmup=500, num_samples=1000)
+mcmc.run(jax.random.PRNGKey(0), model_args)
+
+# 4. Extract results
+param_table   = make_parameter_table(mcmc.get_samples(), model_args)
+spectra_tables = make_spectra_tables(mcmc.get_samples(), model_args, summary=True)
 ```
 
 ## Contributing

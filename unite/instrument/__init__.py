@@ -2,12 +2,14 @@
 
 Generic building blocks are in :mod:`unite.instrument.generic`::
 
-    from unite.instrument.generic import GenericDisperser, SimpleDisperser, GenericSpectrum
+    from unite.instrument import generic
+    generic.GenericDisperser, generic.SimpleDisperser, generic.GenericSpectrum
 
 Instrument-specific subclasses::
 
-    from unite.instrument.nirspec import G235H, G395H, NIRSpecSpectrum
-    from unite.instrument.sdss import SDSSDisperser, SDSSSpectrum
+    from unite.instrument import nirspec, sdss
+    nirspec.G235H, nirspec.G395H, nirspec.NIRSpecSpectrum
+    sdss.SDSSDisperser, sdss.SDSSSpectrum
 
 Collection and configuration::
 

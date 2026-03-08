@@ -24,7 +24,7 @@ simultaneously.
 | `G395M` | G395M | F290LP | 700–1340 |
 | `PRISM` | PRISM | CLEAR | 30–300 |
 
-Each class accepts an `r_source` argument (`'point'` or `'extended'`) that selects the
+Each class accepts an `r_source` argument (`'point'` or `'uniform'`) that selects the
 appropriate LSF calibration.
 
 ---
@@ -38,51 +38,51 @@ import numpy as np
 from matplotlib import pyplot as plt
 from numpyro import infer
 
-from unite import disperser, line, model, prior
+from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.instrument.nirspec import G395M, PRISM, NIRSpecSpectrum
+from unite.instrument import FluxScale, Spectra, nirspec
 from unite.results import make_hdul, make_parameter_table, make_spectra_tables
-from unite.spectrum import Spectra
 ```
 
 ---
 
 ## Step 1 — Create Dispersers
 
-Instantiate the disperser objects. Here we attach a {class}`~unite.disperser.FluxScale`
+Instantiate the disperser objects. Here we attach a {class}`~unite.instrument.base.FluxScale`
 calibration token to the G395M grating. This adds a free multiplicative scaling parameter
 (with a $\mathcal{U}(0.5, 2.0)$ prior) that accounts for flux calibration uncertainty
 between the two gratings.
 
 ```python
-g395m_disperser = G395M(
+g395m_disperser = nirspec.G395M(
     r_source='point',
-    flux_scale=disperser.FluxScale(prior.Uniform(0.5, 2.0)),
+    flux_scale=FluxScale(prior=prior.Uniform(0.5, 2.0)),
 )
-prism_disperser = PRISM(r_source='point')
+prism_disperser = nirspec.PRISM(r_source='point')
 ```
 
 :::{note}
 Calibration tokens (`FluxScale`, `RScale`, `PixOffset`) are attached to the **disperser**,
-not the spectrum. If two spectra share the same disperser instance, they share the same
-calibration parameter. See {doc}`../guides/instruments` for details.
+not the spectrum. If two dispersers share the same token instance, they share a single model
+parameter. See {doc}`../guides/instruments` for details.
 :::
 
 ---
 
 ## Step 2 — Load Spectra from DJA
 
-{class}`~unite.disperser.nirspec.NIRSpecSpectrum` wraps NIRSpec 1D extractions in the DJA
+{class}`~unite.instrument.nirspec.NIRSpecSpectrum` wraps NIRSpec 1D extractions in the DJA
 `msaexp` format. The `from_DJA` class method downloads and parses the FITS file, extracts
-wavelength, flux, and error arrays, and returns a {class}`~unite.spectrum.Spectrum`.
+wavelength, flux, and error arrays, and returns a
+{class}`~unite.instrument.generic.GenericSpectrum` subclass instance.
 
 ```python
-g395m_spectrum = NIRSpecSpectrum.from_DJA(
+g395m_spectrum = nirspec.NIRSpecSpectrum.from_DJA(
     'https://s3.amazonaws.com/msaexp-nirspec/extractions/'
     'rubies-egs53-v4/rubies-egs53-v4_g395m-f290lp_4233_42046.spec.fits',
     disperser=g395m_disperser,
 )
-prism_spectrum = NIRSpecSpectrum.from_DJA(
+prism_spectrum = nirspec.NIRSpecSpectrum.from_DJA(
     'https://s3.amazonaws.com/msaexp-nirspec/extractions/'
     'rubies-egs53-v4/rubies-egs53-v4_prism-clear_4233_42046.spec.fits',
     disperser=prism_disperser,
@@ -138,8 +138,8 @@ See {doc}`../guides/priors` for more on dependent priors.
 
 ## Step 4 — Prepare the Spectra
 
-Pass both spectra to a {class}`~unite.spectrum.Spectra` collection and set the source
-redshift. `prepare()` will shift line centers to the observed frame and filter coverage for
+Pass both spectra to a {class}`~unite.instrument.spectrum.Spectra` collection and set the
+source redshift. `prepare()` will shift line centers to the observed frame and filter coverage for
 each spectrum independently.
 
 ```python

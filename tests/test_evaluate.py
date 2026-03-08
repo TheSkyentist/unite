@@ -7,8 +7,8 @@ from numpyro.infer import Predictive
 
 from unite import line, model, prior
 from unite.evaluate import SpectrumPrediction, evaluate_model
+from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum, SimpleDisperser
-from unite.instrument.spectrum import Spectra
 
 
 def _setup():

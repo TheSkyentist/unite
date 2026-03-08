@@ -18,9 +18,8 @@ from numpyro import infer
 
 from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.disperser.generic import SimpleDisperser
+from unite.instrument import generic, Spectra
 from unite.results import make_hdul, make_parameter_table, make_spectra_tables
-from unite.spectrum import Spectra, Spectrum
 ```
 
 ---
@@ -59,14 +58,14 @@ high = wavelength + 0.5 * np.gradient(wavelength)
 
 ## Step 2 — Create the Disperser and Spectrum
 
-{class}`~unite.disperser.generic.SimpleDisperser` takes a wavelength array and a constant
+{class}`~unite.instrument.generic.SimpleDisperser` takes a wavelength array and a constant
 spectral resolution $R = \lambda / \Delta\lambda$. It uses these to compute the LSF FWHM at
 each pixel for the line integration.
 
 ```python
-disperser = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0, name='sim_grating')
+disperser = generic.SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0, name='sim_grating')
 
-spectrum = Spectrum(
+spectrum = generic.GenericSpectrum(
     low=low,
     high=high,
     flux=flux,
@@ -136,8 +135,8 @@ cc = ContinuumConfiguration.from_lines(
 
 ## Step 5 — Prepare the Spectra
 
-Wrap the spectrum in a {class}`~unite.spectrum.Spectra` collection and run the three
-preparation steps.
+Wrap the spectrum in a {class}`~unite.instrument.spectrum.Spectra` collection and run the
+three preparation steps.
 
 ```python
 spectra = Spectra([spectrum], redshift=0.0)

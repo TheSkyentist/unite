@@ -7,8 +7,8 @@ import pytest
 
 from unite import line, prior
 from unite.continuum import ContinuumConfiguration, Linear
+from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum, SimpleDisperser
-from unite.instrument.spectrum import Spectra
 
 
 def _make_spectrum(
