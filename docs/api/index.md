@@ -8,10 +8,8 @@ Auto-generated reference documentation for all public modules in `unite`.
 config
 line
 continuum
-spectrum
+instrument
 prior
 model
 results
-disperser
-instruments
 ```

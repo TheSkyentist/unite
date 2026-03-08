@@ -1,19 +1,18 @@
 # Spectra and Data
 
-{class}`~unite.spectrum.Spectrum` holds a single observed spectrum;
-{class}`~unite.spectrum.Spectra` is a collection that handles coverage filtering, flux
+{class}`~unite.instrument.generic.GenericSpectrum` holds a single observed spectrum;
+{class}`~unite.instrument.spectrum.Spectra` is a collection that handles coverage filtering, flux
 normalization, and error scaling.
 
 ---
 
-## Spectrum
+## GenericSpectrum
 
-A {class}`~unite.spectrum.Spectrum` is defined by pixel bin edges, flux and error arrays, and
-a {class}`~unite.disperser.base.Disperser`:
+A {class}`~unite.instrument.generic.GenericSpectrum` is defined by pixel bin edges, flux and
+error arrays, and a {class}`~unite.instrument.base.Disperser`:
 
 ```python
-from unite.spectrum import Spectrum
-from unite.disperser.generic import SimpleDisperser
+from unite.instrument.generic import GenericSpectrum, SimpleDisperser
 from astropy import units as u
 import numpy as np
 
@@ -24,7 +23,7 @@ flux = np.random.normal(10, 2, 300) * u.erg / u.s / u.cm**2 / u.AA
 error = np.full(300, 2.0) * u.erg / u.s / u.cm**2 / u.AA
 
 disperser = SimpleDisperser(wavelength=wavelength.value, unit=u.AA, R=3000, name='sim')
-spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
+spectrum = GenericSpectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
 ```
 
 ### Requirements
@@ -33,9 +32,8 @@ spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disper
 - `flux` and `error` must be astropy Quantities with spectral flux density per wavelength
   units ($f_\lambda$, e.g., `erg / s / cm^2 / AA`)
 - `flux` and `error` must have compatible units
-- `disperser` must be a {class}`~unite.disperser.base.Disperser` instance
+- `disperser` must be a {class}`~unite.instrument.base.Disperser` instance
 - All arrays must be 1-D with the same length
-- `low < high` for every pixel
 
 ### Name
 
@@ -43,18 +41,44 @@ The `name` keyword defaults to `disperser.name`. It appears in results tables an
 headers:
 
 ```python
-spectrum = Spectrum(..., name='G235H_obs1')
+spectrum = GenericSpectrum(..., name='G235H_obs1')
 ```
+
+### Instrument-specific Subclasses
+
+Instrument-specific spectrum classes are **subclasses** of `GenericSpectrum`:
+
+```python
+from unite.instrument.nirspec import NIRSpecSpectrum
+from unite.instrument.sdss import SDSSSpectrum
+from unite.instrument.generic import GenericSpectrum
+
+nirspec_spec = NIRSpecSpectrum.from_DJA('file.fits', disperser=g235h)
+sdss_spec    = SDSSSpectrum.from_fits('spec.fits', disperser=sdss_disp)
+
+# Both are GenericSpectrum instances
+assert isinstance(nirspec_spec, GenericSpectrum)  # True
+assert isinstance(sdss_spec, GenericSpectrum)     # True
+
+# And their repr shows the concrete class name
+print(nirspec_spec)  # NIRSpecSpectrum 'G235H': 1200 px, λ ∈ [1.66, 3.17] um
+```
+
+:::{note}
+`GenericSpectrum`, `GenericDisperser`, and `SimpleDisperser` are intentionally not
+re-exported from `unite.instrument`. Import them explicitly from
+`unite.instrument.generic` to make the generic nature of your code clear.
+:::
 
 ---
 
 ## Spectra Collection
 
-{class}`~unite.spectrum.Spectra` is the main container for fitting. It holds one or more
-{class}`~unite.spectrum.Spectrum` objects:
+{class}`~unite.instrument.spectrum.Spectra` is the main container for fitting. It holds one
+or more {class}`~unite.instrument.generic.GenericSpectrum` objects:
 
 ```python
-from unite.spectrum import Spectra
+from unite.instrument.spectrum import Spectra
 
 # Single spectrum
 spectra = Spectra([spectrum], redshift=0.0)
@@ -133,8 +157,8 @@ This is a **conservative** correction:
   are left unchanged.
 - Regions with underestimated errors are inflated to match the observed scatter.
 
-The per-pixel error scaling factors are stored on each {class}`~unite.spectrum.Spectrum`
-via the `error_scale` attribute:
+The per-pixel error scaling factors are stored on each spectrum via the `error_scale`
+attribute:
 
 ```python
 for spec in spectra:
@@ -209,8 +233,9 @@ spectrum but parameters are **shared** according to token identity. This is the 
 simultaneous fitting.
 
 ```python
-from unite.instruments.nirspec import G235H, G395H, NIRSpecSpectrum
-from unite.disperser import DispersersConfiguration, RScale
+from unite.instrument.nirspec import G235H, G395H, NIRSpecSpectrum
+from unite.instrument import RScale
+from unite.instrument.spectrum import Spectra
 from unite import prior
 
 # Shared resolution calibration across both gratings
@@ -221,7 +246,6 @@ g395h = G395H(r_scale=r)
 spec1 = NIRSpecSpectrum.from_DJA('g235h.fits', disperser=g235h)
 spec2 = NIRSpecSpectrum.from_DJA('g395h.fits', disperser=g395h)
 
-dc = DispersersConfiguration([g235h, g395h])
 spectra = Spectra([spec1, spec2], redshift=5.28)
 ```
 
