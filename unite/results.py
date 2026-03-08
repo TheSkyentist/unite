@@ -204,6 +204,9 @@ def make_spectra_tables(
             np.asarray(spectrum.flux)[pixel_mask], unit=spec_flux_unit
         )
         t['observed_error'] = u.Quantity(
+            np.asarray(spectrum.error)[pixel_mask], unit=spec_flux_unit
+        )
+        t['scaled_error'] = u.Quantity(
             np.asarray(spectrum.scaled_error)[pixel_mask], unit=spec_flux_unit
         )
 

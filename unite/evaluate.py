@@ -30,9 +30,12 @@ class SpectrumPrediction:
     wavelength: np.ndarray
     #: Total model flux (lines + continuum). Shape ``(n_samples, n_pixels)``.
     total: np.ndarray
-    #: Per-line contributions keyed by ``'line_{idx}'``. Shape ``(n_samples, n_pixels)`` each.
+    #: Per-line contributions keyed by informative line labels (e.g. ``'Ha'``, ``'[NII]_6585'``).
+    #: Shape ``(n_samples, n_pixels)`` each.
     lines: dict[str, np.ndarray]
-    #: Per-continuum-region contributions keyed by ``'cont_{idx}'``. Shape ``(n_samples, n_pixels)`` each.
+    #: Per-continuum-region contributions keyed by informative region labels
+    #: (e.g. ``'linear_6400_6700'``, ``'powerlaw_0.95_2.5'``).
+    #: Shape ``(n_samples, n_pixels)`` each.
     continuum_regions: dict[str, np.ndarray]
 
 
@@ -221,12 +224,12 @@ def evaluate_model(
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
 
         lines_dict: dict[str, np.ndarray] = {
-            f'line_{j}': np.asarray(line_arr[:, j, :]) for j in range(n_lines)
+            args.line_labels[j]: np.asarray(line_arr[:, j, :]) for j in range(n_lines)
         }
         cont_dict: dict[str, np.ndarray] = {}
         if args.cont_config is not None:
             for k in range(len(args.cont_config)):
-                cont_dict[f'cont_{k}'] = np.asarray(cont_arr[k])
+                cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
 
         results.append(
             SpectrumPrediction(

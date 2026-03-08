@@ -114,6 +114,7 @@ class TestMakeSpectraTables:
         t = tables[0]
         assert 'observed_flux' in t.colnames
         assert 'observed_error' in t.colnames
+        assert 'scaled_error' in t.colnames
 
     def test_has_spectrum_metadata(self):
         samples, args = _setup()

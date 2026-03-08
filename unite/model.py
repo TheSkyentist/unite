@@ -75,6 +75,12 @@ class ModelArgs:
     #: The Quantity line_scale and continuum_scale from Spectra (for results output).
     line_scale_quantity: object
     continuum_scale_quantity: object
+    #: Human-readable column labels for each line, parallel to ``matrices.wavelengths``.
+    #: Derived from user-supplied line names and rest-frame wavelengths.
+    line_labels: list[str]
+    #: Human-readable column labels for each continuum region, parallel to ``cont_config``.
+    #: Derived from form type and wavelength bounds.
+    continuum_labels: list[str]
 
 
 # ------------------------------------------------------------------
@@ -366,6 +372,7 @@ class ModelBuilder:
         )
         # Reverse mapping: site name → token object, for obj_ctx in unite_model.
         # Continuum params have no token objects and are intentionally absent.
+        self._line_config = line_config
         self._name_to_token: dict[str, object] = {
             name: tok for tok, name in param_to_name.items()
         }
@@ -460,6 +467,13 @@ class ModelBuilder:
             cont_nw_conv = None
             cont_forms = None
 
+        line_labels = _make_line_labels(self._line_config)
+        continuum_labels = (
+            _make_continuum_labels(self._cont_config)
+            if self._cont_config is not None
+            else []
+        )
+
         args = ModelArgs(
             matrices=self._matrices,
             spectra=trimmed_spectra,
@@ -486,6 +500,8 @@ class ModelBuilder:
             flux_units=flux_units,
             line_scale_quantity=line_scale_qty,
             continuum_scale_quantity=cont_scale_qty,
+            line_labels=line_labels,
+            continuum_labels=continuum_labels,
         )
         return unite_model, args
 
@@ -495,23 +511,145 @@ class ModelBuilder:
 # ------------------------------------------------------------------
 
 
-def _compute_norm_factor(spectrum: GenericSpectrum) -> float:
+def _make_line_labels(line_config: LineConfiguration) -> list[str]:
+    """Build a human-readable label for every line entry.
+
+    For a name group with only one entry, the label is just the line name.
+
+    For a name group with multiple entries, the label is built by appending
+    the token names of every axis that varies *within the group*:
+
+    * **Wavelength** — if rest-frame wavelengths differ, the rounded value is
+      appended (e.g. ``'[NII]_6585'``).
+    * **Redshift** — if redshift token names differ, the token name is
+      appended (e.g. ``'Ha_z_nlr'``).
+    * **FWHM(s)** — if any fwhm token names differ, every fwhm token name for
+      that entry is appended in ``profile.param_names()`` order
+      (e.g. ``'Ha_fwhm_narrow'``, ``'Ha_fwhm_gauss_narrow'``).
+    * **Flux** — if flux token names differ, the token name is appended
+      (e.g. ``'Ha_flux_broad'``).
+
+    All varying axes are included simultaneously, so the label is always
+    unambiguous and self-documenting regardless of how the tokens were
+    named by the user.
+
+    Examples
+    --------
+    Unique name::
+
+        add_line('Ha', 6563 Å, ...)  →  'Ha'
+
+    Multiplet — same kinematics, different wavelengths::
+
+        add_line('[NII]', [6585, 6550] Å, z=z, fwhm_gauss=fwhm, flux=flux)
+        →  '[NII]_6585', '[NII]_6550'
+
+    Multiple components — same wavelength, different FWHM tokens::
+
+        fwhm1 = FWHM('narrow');  fwhm2 = FWHM('broad')
+        add_line('Ha', 6563 Å, fwhm_gauss=fwhm1, ...)
+        add_line('Ha', 6563 Å, fwhm_gauss=fwhm2, ...)
+        →  'Ha_narrow', 'Ha_broad'
+
+    Three components sharing a flux token (the motivating bug case)::
+
+        fwhm1 = FWHM('f1');  fwhm2 = FWHM('f2');  fwhm3 = FWHM('f3')
+        flux  = Flux('flux')
+        add_line('a', 6563 Å, fwhm_gauss=fwhm1, flux=flux, ...)
+        add_line('a', 6563 Å, fwhm_gauss=fwhm2, flux=flux, ...)
+        add_line('a', 6563 Å, fwhm_gauss=fwhm3, flux=flux, ...)
+        →  'a_f1', 'a_f2', 'a_f3'
+
+    Multiplet + multiple components::
+
+        fwhm_n = FWHM('narrow');  fwhm_b = FWHM('broad')
+        add_line('[NII]', [6585, 6550] Å, fwhm_gauss=fwhm_n, flux=flux1, ...)
+        add_line('[NII]', [6585, 6550] Å, fwhm_gauss=fwhm_b, flux=flux2, ...)
+        →  '[NII]_6585_narrow', '[NII]_6550_narrow',
+           '[NII]_6585_broad',  '[NII]_6550_broad'
+    """
+    from collections import defaultdict
+
+    entries = list(line_config._entries)
+    labels: list[str] = [''] * len(entries)
+
+    # Group entry indices by user-supplied line name.
+    name_to_indices: dict[str, list[int]] = defaultdict(list)
+    for j, entry in enumerate(entries):
+        name_to_indices[entry.name].append(j)
+
+    for name, indices in name_to_indices.items():
+        if len(indices) == 1:
+            labels[indices[0]] = name
+            continue
+
+        group = [entries[j] for j in indices]
+
+        # Determine which axes vary within this name group.
+        wl_strs = [f'{float(e.wavelength.value):.0f}' for e in group]
+        z_names = [e.redshift.name for e in group]
+        flux_names_list = [e.flux.name for e in group]
+        # fwhm names: list-of-lists, one inner list per entry.
+        fwhm_names_per_entry = [
+            [e.fwhms[pn].name for pn in e.profile.param_names()] for e in group
+        ]
+
+        vary_wl = len(set(wl_strs)) > 1
+        vary_z = len(set(z_names)) > 1
+        vary_fwhm = len({tuple(fns) for fns in fwhm_names_per_entry}) > 1
+        vary_flux = len(set(flux_names_list)) > 1
+
+        for idx, j in enumerate(indices):
+            parts = [name]
+            if vary_wl:
+                parts.append(wl_strs[idx])
+            if vary_z:
+                parts.append(z_names[idx])
+            if vary_fwhm:
+                parts.extend(fwhm_names_per_entry[idx])
+            if vary_flux:
+                parts.append(flux_names_list[idx])
+            labels[j] = '_'.join(parts)
+
+    return labels
+
+
+def _make_continuum_labels(cont_config: ContinuumConfiguration) -> list[str]:
+    """Build a human-readable label for every continuum region.
+
+    Format: ``'{form_type}_{low:.4g}_{high:.4g}'`` where the wavelength
+    values are in the region's native unit and ``form_type`` is the
+    lower-cased class name of the functional form (e.g. ``'linear'``,
+    ``'powerlaw'``, ``'polynomial'``).
+
+    Examples: ``'linear_6400_6700'``, ``'powerlaw_0.95_2.5'``.
+    """
+    labels: list[str] = []
+    for region in cont_config:
+        form_type = type(region.form).__name__.lower()
+        low_str = f'{region.low:.4g}'
+        high_str = f'{region.high:.4g}'
+        labels.append(f'{form_type}_{low_str}_{high_str}')
+    return labels
+
+
+def _compute_norm_factor(s: GenericSpectrum) -> float:
     """Robust scale factor to bring a spectrum's flux to ~O(1).
 
     Uses the median of the absolute non-zero flux values.
 
     Parameters
     ----------
-    spectrum : GenericSpectrum
+    s : GenericSpectrum
 
     Returns
     -------
     float
         Positive normalization factor.
     """
-    absflux = jnp.abs(spectrum.flux)
+    absflux = jnp.abs(s.flux)
     positive = absflux[absflux > 0]
     if positive.size == 0:
-        fallback = float(jnp.max(spectrum.error))
+        fallback = float(jnp.max(s.error))
         return fallback if fallback > 0 else 1.0
     return float(jnp.median(positive))

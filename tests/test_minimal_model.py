@@ -63,7 +63,7 @@ def create_minimal_config():
 
     # Add a single H-alpha line with variable parameters.
     # Redshift prior is kept narrow enough that the line center stays within
-    # the 6500–6600 Å spectral range (z=±0.005 → Δλ ≈ ±33 Å from 6563 Å).
+    # the 6500-6600 Å spectral range (z=±0.005 → Δλ ≈ ±33 Å from 6563 Å).
     # FWHM prior uses physically sensible km/s values that are wide enough
     # to span multiple pixels (pixel width ≈ 1 Å ≈ 46 km/s at H-alpha).
     line_config.add_line(
