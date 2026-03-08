@@ -150,10 +150,7 @@ def _resolve_params(
     # Detect unrecognised keyword arguments before building defaults
     unexpected = sorted(set(param_kwargs) - set(pnames))
     if unexpected:
-        msg = (
-            f'Unexpected parameter keyword argument(s): {unexpected}. '
-            f'{pname} expects: {list(pnames)}.'
-        )
+        msg = f'Unexpected parameter keyword argument(s): {unexpected}. {pname} expects: {list(pnames)}.'
         raise ValueError(msg)
 
     # Validate types and fill defaults
@@ -164,10 +161,7 @@ def _resolve_params(
             tok = param_kwargs[pn]
             expected = _param_class_for(pn)
             if not isinstance(tok, expected):
-                msg = (
-                    f"Parameter '{pn}' must be a {expected.__name__}, "
-                    f'got {type(tok).__name__}.'
-                )
+                msg = f"Parameter '{pn}' must be a {expected.__name__}, got {type(tok).__name__}."
                 raise TypeError(msg)
             result[pn] = tok
         else:
@@ -1011,10 +1005,7 @@ class LineConfiguration:
             for wn in {wn for e in self._entries for wn in e.fwhms}
         )
 
-        header = (
-            f'LineConfiguration: {len(self._entries)} lines, '
-            f'{n_flux} flux / {n_z} z / {n_params} profile params'
-        )
+        header = f'LineConfiguration: {len(self._entries)} lines, {n_flux} flux / {n_z} z / {n_params} profile params'
 
         # --- Line table ---
         rows: list[tuple[str, str, str, str, str, str, str]] = []

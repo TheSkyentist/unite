@@ -233,10 +233,7 @@ class InstrumentConfig:
         names = [d.name for d in dispersers]
         empty = [i for i, n in enumerate(names) if not n]
         if empty:
-            msg = (
-                f'Dispersers at indices {empty} have empty names. '
-                'Set a non-empty name on each disperser.'
-            )
+            msg = f'Dispersers at indices {empty} have empty names. Set a non-empty name on each disperser.'
             raise ValueError(msg)
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:

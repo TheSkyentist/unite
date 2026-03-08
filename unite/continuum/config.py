@@ -155,10 +155,7 @@ class ContinuumRegion:
         self.low: float = float(low_q.value)
         self.high: float = float(high_q.to(low_q.unit).value)
         if self.low >= self.high:
-            msg = (
-                f'ContinuumRegion low must be < high, '
-                f'got low={self.low}, high={self.high}'
-            )
+            msg = f'ContinuumRegion low must be < high, got low={self.low}, high={self.high}'
             raise ValueError(msg)
 
     @property
@@ -328,10 +325,7 @@ class ContinuumConfiguration:
             # Validate typed tokens before resolving.
             for pn, tok in region.params.items():
                 if isinstance(tok, ContinuumScale) and pn != 'scale':
-                    msg = (
-                        f'ContinuumScale token can only be placed in the '
-                        f'"scale" slot, got "{pn}"'
-                    )
+                    msg = f'ContinuumScale token can only be placed in the "scale" slot, got "{pn}"'
                     raise ValueError(msg)
                 if (
                     isinstance(tok, ContinuumNormalizationWavelength)
@@ -616,10 +610,7 @@ class ContinuumConfiguration:
             for tok in resolved.values():
                 seen_tok_ids.add(id(tok))
 
-        header = (
-            f'ContinuumConfiguration: {len(self._regions)} region(s), '
-            f'{len(seen_tok_ids)} parameter(s)'
-        )
+        header = f'ContinuumConfiguration: {len(self._regions)} region(s), {len(seen_tok_ids)} parameter(s)'
 
         # Build table.
         rows = []

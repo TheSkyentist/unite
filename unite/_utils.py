@@ -154,8 +154,7 @@ def _ensure_wavelength(
     """
     if not isinstance(value, u.Quantity):
         raise TypeError(
-            f'{name} must be an astropy Quantity with wavelength units, '
-            f'got {type(value).__name__}.'
+            f'{name} must be an astropy Quantity with wavelength units, got {type(value).__name__}.'
         )
     if not value.unit.is_equivalent(u.m):  # type: ignore[union-attr]
         raise ValueError(
@@ -213,8 +212,7 @@ def _ensure_velocity(value: u.Quantity, name: str = 'velocity') -> u.Quantity:
     """
     if not isinstance(value, u.Quantity):
         raise TypeError(
-            f'{name} must be an astropy Quantity with velocity units '
-            f'(e.g. km/s), got {type(value).__name__}.'
+            f'{name} must be an astropy Quantity with velocity units (e.g. km/s), got {type(value).__name__}.'
         )
     if not value.unit.is_equivalent(u.km / u.s):
         raise ValueError(
@@ -243,8 +241,7 @@ def _ensure_flux_density(unit: u.UnitBase) -> None:
     ref = u.erg / u.s / u.cm**2 / u.AA
     if not unit.is_equivalent(ref):
         raise ValueError(
-            f'flux_unit must be a spectral flux density per wavelength '
-            f'(e.g. erg/s/cm^2/Angstrom), got {unit!r}.'
+            f'flux_unit must be a spectral flux density per wavelength (e.g. erg/s/cm^2/Angstrom), got {unit!r}.'
         )
 
 

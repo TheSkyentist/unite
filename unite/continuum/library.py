@@ -281,10 +281,7 @@ def get_form(name_or_form: str | ContinuumForm, **kwargs) -> ContinuumForm:
     if isinstance(name_or_form, ContinuumForm):
         return name_or_form
     if name_or_form not in _FORM_REGISTRY:
-        msg = (
-            f'Unknown ContinuumForm type: {name_or_form!r}. '
-            f'Available: {sorted(_FORM_REGISTRY)}'
-        )
+        msg = f'Unknown ContinuumForm type: {name_or_form!r}. Available: {sorted(_FORM_REGISTRY)}'
         raise ValueError(msg)
     return _FORM_REGISTRY[name_or_form](**kwargs)
 

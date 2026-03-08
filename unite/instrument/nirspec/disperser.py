@@ -183,10 +183,7 @@ class NIRSpecDisperser(Disperser):
     ) -> None:
         grating = grating.lower()
         if grating not in _NIRSPEC_GRATINGS:
-            msg = (
-                f'Unknown NIRSpec grating {grating!r}. '
-                f'Must be one of {_NIRSPEC_GRATINGS}.'
-            )
+            msg = f'Unknown NIRSpec grating {grating!r}. Must be one of {_NIRSPEC_GRATINGS}.'
             raise ValueError(msg)
 
         # Normalize r_source to 'uniform' or 'point'

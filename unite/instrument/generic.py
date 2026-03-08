@@ -169,10 +169,7 @@ class SimpleDisperser(Disperser):
 
         n_specified = sum(x is not None for x in (R, dlam, dvel))
         if n_specified != 1:
-            msg = (
-                'Exactly one of R, dlam, or dvel must be provided, '
-                f'but {n_specified} were given.'
-            )
+            msg = f'Exactly one of R, dlam, or dvel must be provided, but {n_specified} were given.'
             raise ValueError(msg)
 
         self._wavelength = jnp.asarray(wavelength, dtype=float)
@@ -296,19 +293,13 @@ class GenericSpectrum:
         flux = _ensure_flux_density_quantity(flux, 'flux', ndim=1)
         error = _ensure_flux_density_quantity(error, 'error', ndim=1)
         if not flux.unit.is_equivalent(error.unit):
-            msg = (
-                f'flux and error must have compatible units, '
-                f'got {flux.unit!r} and {error.unit!r}.'
-            )
+            msg = f'flux and error must have compatible units, got {flux.unit!r} and {error.unit!r}.'
             raise ValueError(msg)
         self._flux_unit: u.UnitBase = flux.unit
 
         # -- disperser --------------------------------------------------------
         if not isinstance(disperser, Disperser):
-            msg = (
-                f'disperser must be a Disperser instance, '
-                f'got {type(disperser).__name__}.'
-            )
+            msg = f'disperser must be a Disperser instance, got {type(disperser).__name__}.'
             raise TypeError(msg)
         self.disperser = disperser
 
@@ -317,10 +308,7 @@ class GenericSpectrum:
         high = _ensure_wavelength(high, 'high', ndim=1)
 
         if low.shape != high.shape:
-            msg = (
-                f'low and high must have the same shape, '
-                f'got {low.shape} and {high.shape}.'
-            )
+            msg = f'low and high must have the same shape, got {low.shape} and {high.shape}.'
             raise ValueError(msg)
 
         # Store in the disperser's wavelength unit as JAX arrays.
@@ -336,10 +324,7 @@ class GenericSpectrum:
 
         for arr, label in ((flux_arr, 'flux'), (error_arr, 'error')):
             if arr.shape[0] != npix:
-                msg = (
-                    f'{label} length ({arr.shape[0]}) does not match the '
-                    f'number of pixels ({npix}).'
-                )
+                msg = f'{label} length ({arr.shape[0]}) does not match the number of pixels ({npix}).'
                 raise ValueError(msg)
 
         self._flux = flux_arr

@@ -197,10 +197,4 @@ class Configuration:
         dispersers_repr = (
             repr(self.dispersers) if self.dispersers is not None else 'None'
         )
-        return (
-            f'Configuration(\n'
-            f'  lines={self.lines!r},\n'
-            f'  continuum={cont_repr},\n'
-            f'  dispersers={dispersers_repr}\n'
-            f')'
-        )
+        return f'Configuration(\n  lines={self.lines!r},\n  continuum={cont_repr},\n  dispersers={dispersers_repr}\n)'

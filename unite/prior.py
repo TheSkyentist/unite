@@ -367,10 +367,7 @@ class TruncatedNormal(Prior):
         )
 
     def __repr__(self) -> str:
-        return (
-            f'TruncatedNormal(loc={self.loc!r}, scale={self.scale}, '
-            f'low={self.low!r}, high={self.high!r})'
-        )
+        return f'TruncatedNormal(loc={self.loc!r}, scale={self.scale}, low={self.low!r}, high={self.high!r})'
 
 
 class Fixed(Prior):

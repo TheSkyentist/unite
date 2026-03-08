@@ -162,10 +162,7 @@ class Spectra:
             raise ValueError(msg)
         for i, s in enumerate(spectra):
             if not isinstance(s, GenericSpectrum):
-                msg = (
-                    f'All elements must be GenericSpectrum instances; '
-                    f'element {i} is {type(s).__name__}.'
-                )
+                msg = f'All elements must be GenericSpectrum instances; element {i} is {type(s).__name__}.'
                 raise TypeError(msg)
         self._spectra: list[GenericSpectrum] = list(spectra)
         self._redshift: float = float(redshift)
@@ -180,10 +177,7 @@ class Spectra:
         if canonical_unit is not None:
             canonical_unit = u.Unit(canonical_unit)
             if not canonical_unit.is_equivalent(u.m):
-                msg = (
-                    f'canonical_unit must have wavelength dimensions, '
-                    f'got {canonical_unit!r}.'
-                )
+                msg = f'canonical_unit must have wavelength dimensions, got {canonical_unit!r}.'
                 raise u.UnitConversionError(msg)
             self._canonical_unit: u.UnitBase = canonical_unit
         else:
@@ -221,10 +215,7 @@ class Spectra:
         # Validate unit: must be flux_density * wavelength (integrated flux).
         ref = u.erg / u.s / u.cm**2
         if not value.unit.is_equivalent(ref):
-            msg = (
-                f'line_scale must have integrated flux units '
-                f'(e.g. erg/s/cm^2), got {value.unit!r}.'
-            )
+            msg = f'line_scale must have integrated flux units (e.g. erg/s/cm^2), got {value.unit!r}.'
             raise u.UnitConversionError(msg)
         if value.value <= 0:
             msg = f'line_scale must be > 0, got {value}'
@@ -239,17 +230,11 @@ class Spectra:
     @continuum_scale.setter
     def continuum_scale(self, value: u.Quantity) -> None:
         if not isinstance(value, u.Quantity):
-            msg = (
-                f'continuum_scale must be an astropy Quantity with flux '
-                f'density units, got {type(value).__name__}.'
-            )
+            msg = f'continuum_scale must be an astropy Quantity with flux density units, got {type(value).__name__}.'
             raise TypeError(msg)
         ref = u.erg / u.s / u.cm**2 / u.AA
         if not value.unit.is_equivalent(ref):
-            msg = (
-                f'continuum_scale must have flux density units '
-                f'(e.g. erg/s/cm^2/Angstrom), got {value.unit!r}.'
-            )
+            msg = f'continuum_scale must have flux density units (e.g. erg/s/cm^2/Angstrom), got {value.unit!r}.'
             raise u.UnitConversionError(msg)
         if value.value <= 0:
             msg = f'continuum_scale must be > 0, got {value}'
@@ -680,7 +665,6 @@ class Spectra:
             label = s.name or f'#{i}'
             cal = ' [calibrated]' if s.has_calibration_priors else ''
             lines.append(
-                f'  [{i}] {label}: {s.npix} px, '
-                f'λ ∈ [{lo:.4g}, {hi:.4g}] {unit_str}{cal}'
+                f'  [{i}] {label}: {s.npix} px, λ ∈ [{lo:.4g}, {hi:.4g}] {unit_str}{cal}'
             )
         return '\n'.join(lines)
