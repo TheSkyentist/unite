@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 from astropy import units as u
 
-from unite.disperser.base import RScale
-from unite.disperser.generic import GenericDisperser, SimpleDisperser
+from unite.instrument.base import RScale
+from unite.instrument.generic import GenericDisperser, SimpleDisperser
 
 # ---------------------------------------------------------------------------
 # GenericDisperser

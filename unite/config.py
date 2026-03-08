@@ -2,7 +2,7 @@
 
 :class:`Configuration` bundles a :class:`~unite.line.LineConfiguration`,
 an optional :class:`~unite.continuum.ContinuumConfiguration`, and an optional
-:class:`~unite.disperser.config.DispersersConfiguration` into a single
+:class:`~unite.instrument.config.InstrumentConfig` into a single
 serializable object.
 
 All sub-configs can still be serialized individually via their own
@@ -15,8 +15,8 @@ Build and save:
 
 >>> from unite.line import LineConfiguration, Redshift, FWHM
 >>> from unite.continuum import ContinuumConfiguration
->>> from unite.disperser import DispersersConfiguration, RScale
->>> from unite.instruments.nirspec import G235H, G395H
+>>> from unite.instrument import InstrumentConfig, RScale
+>>> from unite.instrument.nirspec import G235H, G395H
 >>> from unite.prior import TruncatedNormal
 >>> import astropy.units as u
 >>> z, w = Redshift('nlr'), FWHM('nlr')
@@ -24,7 +24,7 @@ Build and save:
 >>> lines.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm=w)
 >>> cont = ContinuumConfiguration.from_lines(lines.wavelengths)
 >>> r = RScale(prior=TruncatedNormal(1.0, 0.05, 0.8, 1.2))
->>> dispersers = DispersersConfiguration([G235H(r_scale=r), G395H(r_scale=r)])
+>>> dispersers = InstrumentConfig([G235H(r_scale=r), G395H(r_scale=r)])
 >>> cfg = Configuration(lines, cont, dispersers=dispersers)
 >>> cfg.save('config.yaml')
 
@@ -34,7 +34,7 @@ Load and inspect:
 >>> cfg2.lines
 LineConfiguration: ...
 >>> cfg2.dispersers
-DispersersConfiguration: 2 disperser(s) ...
+InstrumentConfig: 2 disperser(s) ...
 """
 
 from __future__ import annotations
@@ -56,10 +56,10 @@ class Configuration:
         Emission line configuration.
     continuum : ContinuumConfiguration, optional
         Continuum configuration.  ``None`` if not used.
-    dispersers : DispersersConfiguration, optional
-        Dispersers configuration describing instrument models and calibration
+    dispersers : InstrumentConfig, optional
+        Instrument configuration describing disperser models and calibration
         tokens.  When provided,
-        :meth:`~unite.disperser.config.DispersersConfiguration.validate`
+        :meth:`~unite.instrument.config.InstrumentConfig.validate`
         is called immediately and :class:`UserWarning` is issued if any
         calibration axis lacks a fixed anchor.
 
@@ -67,7 +67,7 @@ class Configuration:
     ----------
     lines : LineConfiguration
     continuum : ContinuumConfiguration or None
-    dispersers : DispersersConfiguration or None
+    dispersers : InstrumentConfig or None
     """
 
     def __init__(
@@ -115,7 +115,7 @@ class Configuration:
         -------
         Configuration
         """
-        from unite.disperser.config import DispersersConfiguration
+        from unite.instrument.config import InstrumentConfig
 
         lines = LineConfiguration.from_dict(d['lines'])
         continuum = None
@@ -123,7 +123,7 @@ class Configuration:
             continuum = ContinuumConfiguration.from_dict(d['continuum'])
         dispersers = None
         if 'dispersers' in d:
-            dispersers = DispersersConfiguration.from_dict(d['dispersers'])
+            dispersers = InstrumentConfig.from_dict(d['dispersers'])
         # Bypass validate() on load — the config was already validated when saved.
         obj = cls.__new__(cls)
         obj.lines = lines

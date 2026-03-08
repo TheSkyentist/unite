@@ -1,4 +1,4 @@
-"""SDSS spectrum loader."""
+"""SDSS spectrum class."""
 
 from __future__ import annotations
 
@@ -8,33 +8,34 @@ from typing import TYPE_CHECKING
 import numpy as np
 from astropy import units as u
 
+from unite.instrument.generic import GenericSpectrum
+
 if TYPE_CHECKING:
-    from unite.instruments.sdss.disperser import SDSSDisperser
-    from unite.spectrum.spectrum import Spectrum
+    from unite.instrument.sdss.disperser import SDSSDisperser
 
 
-class SDSSSpectrum:
-    """Loader for SDSS optical spectra.
+class SDSSSpectrum(GenericSpectrum):
+    """An SDSS optical spectrum.
 
-    Provides class methods to create :class:`~unite.spectrum.spectrum.Spectrum`
-    objects from SDSS data, attaching an :class:`SDSSDisperser` that carries
-    the R(λ) curve derived from the ``wdisp`` column.
+    Extends :class:`~unite.instrument.generic.GenericSpectrum` with loaders for
+    SDSS data formats.  Can be constructed directly via :meth:`from_arrays` or
+    :meth:`from_fits`, or instantiated like any
+    :class:`~unite.instrument.generic.GenericSpectrum` if you already have the
+    array data.
 
-    This class is not instantiated directly — use :meth:`from_fits` or
-    :meth:`from_arrays`.
+    Parameters
+    ----------
+    low, high, flux, error, disperser, name
+        See :class:`~unite.instrument.generic.GenericSpectrum`.
 
     Examples
     --------
     Load from a standard SDSS spec file:
 
-    >>> from unite.instruments.sdss import SDSSDisperser, SDSSSpectrum
+    >>> from unite.instrument.sdss import SDSSDisperser, SDSSSpectrum
     >>> disperser = SDSSDisperser()
     >>> spec = SDSSSpectrum.from_fits('spec-1678-53433-0425.fits', disperser)
     """
-
-    def __new__(cls, *args, **kwargs) -> None:
-        msg = 'SDSSSpectrum is a loader class and cannot be instantiated.'
-        raise TypeError(msg)
 
     @classmethod
     def from_arrays(
@@ -46,8 +47,8 @@ class SDSSSpectrum:
         disperser: SDSSDisperser,
         *,
         name: str = '',
-    ) -> Spectrum:
-        """Create a :class:`~unite.spectrum.spectrum.Spectrum` from pre-loaded arrays.
+    ) -> SDSSSpectrum:
+        """Create an :class:`SDSSSpectrum` from pre-loaded arrays.
 
         Parameters
         ----------
@@ -66,11 +67,9 @@ class SDSSSpectrum:
 
         Returns
         -------
-        Spectrum
+        SDSSSpectrum
         """
-        from unite.spectrum.spectrum import Spectrum
-
-        return Spectrum(
+        return cls(
             low=low,
             high=high,
             flux=flux,
@@ -81,9 +80,9 @@ class SDSSSpectrum:
 
     @classmethod
     def from_fits(
-        cls, path: str | Path, disperser: SDSSDisperser, *, name: str = '', hdu: int = 1
-    ) -> Spectrum:
-        """Create a :class:`~unite.spectrum.spectrum.Spectrum` from an SDSS FITS file.
+        cls, path: str | Path, disperser: SDSSDisperser, *, name: str = '', cache=False
+    ) -> SDSSSpectrum:
+        """Create an :class:`SDSSSpectrum` from an SDSS FITS file.
 
         Reads a standard SDSS ``spec-*.fits`` file (DR7-DR17 format).
         The coadded spectrum is in HDU 1 with columns ``flux``,
@@ -102,12 +101,12 @@ class SDSSSpectrum:
             FITS data.
         name : str, optional
             Human-readable label.  Defaults to ``disperser.name``.
-        hdu : int, optional
-            HDU index containing the coadded spectrum.  Default ``1``.
+        cache : bool, optional
+            Whether to use astropy's caching when reading the file. Defaults to False.
 
         Returns
         -------
-        Spectrum
+        SDSSSpectrum
 
         Raises
         ------
@@ -116,13 +115,9 @@ class SDSSSpectrum:
         KeyError
             If the expected columns are not found.
         """
-        from astropy.io import fits
         from astropy.table import Table
 
-        path = Path(path)
-
-        with fits.open(path) as hdul:
-            data = Table(hdul[hdu].data)
+        data = Table.read(path, hdu='COADD', cache=cache)
 
         # Log-linear wavelength grid (loglam is log10(λ/Å))
         loglam = np.asarray(data['loglam'], dtype=float)

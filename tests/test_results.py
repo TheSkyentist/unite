@@ -8,9 +8,9 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import line, model, prior
-from unite.disperser.generic import SimpleDisperser
+from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument.spectrum import Spectra
 from unite.results import make_hdul, make_parameter_table, make_spectra_tables
-from unite.spectrum import Spectra, Spectrum
 
 
 def _setup():
@@ -29,7 +29,7 @@ def _setup():
     flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
     error = np.full(len(wavelength), 1.0) * flux_unit
 
-    spectrum = Spectrum(
+    spectrum = GenericSpectrum(
         low=low,
         high=high,
         flux=flux,

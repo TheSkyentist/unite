@@ -2,10 +2,9 @@
 
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from astropy import units as u
 
-from unite.instruments.sdss import SDSSDisperser, SDSSSpectrum
+from unite.instrument.sdss import SDSSDisperser, SDSSSpectrum
 
 
 class TestSDSSDisperser:
@@ -46,7 +45,7 @@ class TestSDSSDisperser:
         np.testing.assert_allclose(d.R(jnp.asarray(wl)), 2000.0)
 
     def test_calibration_tokens(self):
-        from unite.disperser.base import FluxScale, RScale
+        from unite.instrument.base import FluxScale, RScale
 
         r = RScale()
         f = FluxScale()
@@ -68,9 +67,10 @@ class TestSDSSDisperser:
 class TestSDSSSpectrum:
     """Tests for SDSSSpectrum loader."""
 
-    def test_cannot_instantiate(self):
-        with pytest.raises(TypeError, match='loader class'):
-            SDSSSpectrum()
+    def test_is_generic_spectrum_subclass(self):
+        from unite.instrument.generic import GenericSpectrum
+
+        assert issubclass(SDSSSpectrum, GenericSpectrum)
 
     def test_from_arrays(self):
         npix = 50

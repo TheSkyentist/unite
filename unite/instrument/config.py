@@ -1,9 +1,9 @@
-"""Dispersers configuration: instrument models with calibration tokens.
+"""Instrument configuration: disperser models with calibration tokens.
 
-:class:`DispersersConfiguration` collects one :class:`~unite.disperser.base.Disperser`
+:class:`InstrumentConfig` collects one :class:`~unite.instrument.base.Disperser`
 per observing configuration.  Each disperser carries optional
-:class:`~unite.disperser.base.RScale` / :class:`~unite.disperser.base.FluxScale` /
-:class:`~unite.disperser.base.PixOffset` tokens (``r_scale``, ``flux_scale``,
+:class:`~unite.instrument.base.RScale` / :class:`~unite.instrument.base.FluxScale` /
+:class:`~unite.instrument.base.PixOffset` tokens (``r_scale``, ``flux_scale``,
 ``pix_offset``) for shared calibration parameters.
 
 Sharing tokens
@@ -11,12 +11,12 @@ Sharing tokens
 Pass the **same** token instance to multiple dispersers to share a single
 parameter in the fitted model::
 
-    from unite.disperser import DispersersConfiguration, RScale
-    from unite.instruments.nirspec import G235H, G395H
+    from unite.instrument import InstrumentConfig, RScale
+    from unite.instrument.nirspec import G235H, G395H
     from unite.prior import TruncatedNormal
 
     r = RScale(prior=TruncatedNormal(1.0, 0.05, 0.8, 1.2))
-    cfg = DispersersConfiguration([
+    cfg = InstrumentConfig([
         G235H(r_scale=r),
         G395H(r_scale=r),   # same r — shared parameter
     ])
@@ -38,12 +38,12 @@ reconstructed for both entries.
 
 Examples
 --------
->>> from unite.disperser import DispersersConfiguration, RScale, FluxScale
->>> from unite.instruments.nirspec import G235H, G395H
+>>> from unite.instrument import InstrumentConfig, RScale, FluxScale
+>>> from unite.instrument.nirspec import G235H, G395H
 >>> from unite.prior import TruncatedNormal
 >>> r = RScale(prior=TruncatedNormal(1.0, 0.05, 0.8, 1.2))
 >>> flux_0 = FluxScale(prior=TruncatedNormal(1.0, 0.1, 0.5, 2.0))
->>> cfg = DispersersConfiguration([
+>>> cfg = InstrumentConfig([
 ...     G235H(r_scale=r),
 ...     G395H(r_scale=r, flux_scale=flux_0),
 ... ])
@@ -58,10 +58,9 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import yaml
-from astropy import units as u
 
-from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
-from unite.instruments.nirspec.disperser import (
+from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.nirspec.disperser import (
     G140H,
     G140M,
     G235H,
@@ -70,7 +69,7 @@ from unite.instruments.nirspec.disperser import (
     G395M,
     PRISM,
 )
-from unite.instruments.sdss.disperser import SDSSDisperser
+from unite.instrument.sdss.disperser import SDSSDisperser
 from unite.prior import Parameter, prior_from_dict
 
 # ---------------------------------------------------------------------------
@@ -191,29 +190,29 @@ def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disp
 # ---------------------------------------------------------------------------
 
 _FLUX_DEGENERACY_WARNING = (
-    'DispersersConfiguration: no disperser has flux_scale=None (fixed). '
+    'InstrumentConfig: no disperser has flux_scale=None (fixed). '
     'Relative flux scales are degenerate — set flux_scale=None on one '
     'disperser to anchor the flux calibration.'
 )
 
 _PIX_DEGENERACY_WARNING = (
-    'DispersersConfiguration: no disperser has pix_offset=None (fixed). '
+    'InstrumentConfig: no disperser has pix_offset=None (fixed). '
     'Pixel-offset (dispersion) scales are degenerate — set pix_offset=None '
     'on one disperser to anchor the wavelength solution.'
 )
 
 
 # ---------------------------------------------------------------------------
-# DispersersConfiguration
+# InstrumentConfig
 # ---------------------------------------------------------------------------
 
 
-class DispersersConfiguration:
+class InstrumentConfig:
     """Configuration for a multi-disperser spectral dataset.
 
-    An ordered collection of :class:`~unite.disperser.base.Disperser` objects,
+    An ordered collection of :class:`~unite.instrument.base.Disperser` objects,
     one per observing disperser.  Each disperser carries optional
-    :class:`~unite.disperser.base.CalibParam` tokens for calibration parameters.
+    :class:`~unite.instrument.base.CalibParam` tokens for calibration parameters.
 
     The configuration is **data-free**: it describes which dispersers are used
     and how they are calibrated.  Actual spectral data arrays are attached
@@ -241,7 +240,7 @@ class DispersersConfiguration:
             raise ValueError(msg)
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
-            msg = f'Duplicate disperser name(s) in DispersersConfiguration: {dupes}'
+            msg = f'Duplicate disperser name(s) in InstrumentConfig: {dupes}'
             raise ValueError(msg)
         self._dispersers: list[Disperser] = list(dispersers)
 
@@ -258,51 +257,6 @@ class DispersersConfiguration:
                 warnings.warn(_FLUX_DEGENERACY_WARNING, UserWarning, stacklevel=2)
             if all(d.pix_offset is not None for d in self._dispersers):
                 warnings.warn(_PIX_DEGENERACY_WARNING, UserWarning, stacklevel=2)
-
-    # -- data loading --------------------------------------------------------
-
-    def make_spectrum(
-        self,
-        name: str,
-        low: u.Quantity,
-        high: u.Quantity,
-        flux: u.Quantity,
-        error: u.Quantity,
-    ):
-        """Create a :class:`~unite.spectrum.spectrum.Spectrum` from data arrays.
-
-        Looks up the disperser by *name* and creates a Spectrum with it
-        attached.  Calibration tokens on the disperser are accessible via
-        ``spectrum.disperser.r_scale`` etc.
-
-        Parameters
-        ----------
-        name : str
-            Disperser name as registered in this configuration.
-        low : astropy.units.Quantity
-            Lower pixel-edge wavelengths (1-D, wavelength dimensions).
-        high : astropy.units.Quantity
-            Upper pixel-edge wavelengths.  Same shape as *low*.
-        flux : astropy.units.Quantity
-            Flux density values per pixel (f_lambda).
-        error : astropy.units.Quantity
-            Flux density uncertainty per pixel (same unit as *flux*).
-
-        Returns
-        -------
-        Spectrum
-
-        Raises
-        ------
-        KeyError
-            If *name* is not found in this configuration.
-        """
-        from unite.spectrum.spectrum import Spectrum
-
-        disperser = self[name]
-        return Spectrum(
-            low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
-        )
 
     # -- names ---------------------------------------------------------------
 
@@ -327,7 +281,7 @@ class DispersersConfiguration:
             for d in self._dispersers:
                 if d.name == key:
                     return d
-            msg = f'No disperser named {key!r} in DispersersConfiguration.'
+            msg = f'No disperser named {key!r} in InstrumentConfig.'
             raise KeyError(msg)
         return self._dispersers[key]
 
@@ -336,7 +290,7 @@ class DispersersConfiguration:
     def to_dict(self) -> dict:
         """Serialize to a YAML-safe dictionary.
 
-        Shared :class:`~unite.disperser.base.CalibParam` tokens are hoisted to a
+        Shared :class:`~unite.instrument.base.CalibParam` tokens are hoisted to a
         top-level ``calib_params`` section.  Disperser entries reference
         tokens by name, so sharing is preserved on round-trip.
 
@@ -359,7 +313,7 @@ class DispersersConfiguration:
         return {'calib_params': calib_params, 'entries': entries}
 
     @classmethod
-    def from_dict(cls, d: dict) -> DispersersConfiguration:
+    def from_dict(cls, d: dict) -> InstrumentConfig:
         """Deserialize from a dictionary.
 
         Parameters
@@ -369,7 +323,7 @@ class DispersersConfiguration:
 
         Returns
         -------
-        DispersersConfiguration
+        InstrumentConfig
         """
         # Reconstruct token registry (name → CalibParam).
         token_registry: dict[str, Parameter] = {}
@@ -394,7 +348,7 @@ class DispersersConfiguration:
         return yaml.dump(self.to_dict(), default_flow_style=False, sort_keys=False)
 
     @classmethod
-    def from_yaml(cls, text: str) -> DispersersConfiguration:
+    def from_yaml(cls, text: str) -> InstrumentConfig:
         """Deserialize from a YAML string.
 
         Parameters
@@ -404,7 +358,7 @@ class DispersersConfiguration:
 
         Returns
         -------
-        DispersersConfiguration
+        InstrumentConfig
         """
         return cls.from_dict(yaml.safe_load(text))
 
@@ -421,7 +375,7 @@ class DispersersConfiguration:
         Path(path).write_text(self.to_yaml())
 
     @classmethod
-    def load(cls, path: str | Path) -> DispersersConfiguration:
+    def load(cls, path: str | Path) -> InstrumentConfig:
         """Load from a YAML file.
 
         Parameters
@@ -431,7 +385,7 @@ class DispersersConfiguration:
 
         Returns
         -------
-        DispersersConfiguration
+        InstrumentConfig
         """
         return cls.from_yaml(Path(path).read_text())
 
@@ -440,9 +394,9 @@ class DispersersConfiguration:
     def __repr__(self) -> str:
         """Return a multi-line summary of this configuration."""
         if not self._dispersers:
-            return 'DispersersConfiguration: empty'
+            return 'InstrumentConfig: empty'
 
-        header = f'DispersersConfiguration: {len(self._dispersers)} disperser(s)'
+        header = f'InstrumentConfig: {len(self._dispersers)} disperser(s)'
 
         def _tok_name(token: Parameter | None) -> str:
             if token is None:

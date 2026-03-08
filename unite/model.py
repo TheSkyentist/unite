@@ -18,10 +18,11 @@ from numpyro import distributions as dist
 
 from unite._utils import C_KMS, _wavelength_conversion_factor
 from unite.continuum.config import ContinuumConfiguration
+from unite.instrument.generic import GenericSpectrum
+from unite.instrument.spectrum import Spectra
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.line.profiles import integrate_lines
 from unite.prior import Fixed, Parameter, Prior, topological_sort
-from unite.spectrum.spectrum import Spectra, Spectrum
 
 # ------------------------------------------------------------------
 # ModelArgs — data bundle for the numpyro model function
@@ -39,7 +40,7 @@ class ModelArgs:
     #: Precomputed parameter matrices and line metadata.
     matrices: ConfigMatrices
     #: Individual spectra.
-    spectra: list[Spectrum]
+    spectra: list[GenericSpectrum]
     #: Systemic redshift.
     redshift: float
     #: Continuum configuration, or ``None`` if not used.
@@ -390,7 +391,7 @@ class ModelBuilder:
         # array sizes passed to JAX.
         z = self._spectra.redshift
         if self._cont_config is not None:
-            trimmed_spectra: list[Spectrum] = []
+            trimmed_spectra: list[GenericSpectrum] = []
             for s in self._spectra:
                 mask = jnp.zeros(s.npix, dtype=bool)
                 for region in self._cont_config:
@@ -494,14 +495,14 @@ class ModelBuilder:
 # ------------------------------------------------------------------
 
 
-def _compute_norm_factor(spectrum: Spectrum) -> float:
+def _compute_norm_factor(spectrum: GenericSpectrum) -> float:
     """Robust scale factor to bring a spectrum's flux to ~O(1).
 
     Uses the median of the absolute non-zero flux values.
 
     Parameters
     ----------
-    spectrum : Spectrum
+    spectrum : GenericSpectrum
 
     Returns
     -------

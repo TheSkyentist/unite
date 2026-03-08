@@ -19,10 +19,10 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import model
-from unite.disperser.generic import SimpleDisperser
+from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument.spectrum import Spectra
 from unite.line.config import FWHM, Flux, LineConfiguration, Redshift
 from unite.prior import ParameterRef, TruncatedNormal, Uniform, topological_sort
-from unite.spectrum import Spectra, Spectrum
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +39,7 @@ def _make_spectrum(wl_range=(6400, 6700), npix=200, name='test'):
     rng = np.random.default_rng(42)
     flux = (10.0 + rng.normal(0, 1, npix)) * flux_unit
     error = np.full(npix, 1.0) * flux_unit
-    return Spectrum(
+    return GenericSpectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
     )
 

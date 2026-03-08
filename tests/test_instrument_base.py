@@ -3,7 +3,7 @@
 import pytest
 from astropy import units as u
 
-from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
 from unite.prior import Fixed, TruncatedNormal, Uniform
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ class TestDisperserTypeValidation:
     """Tests for Disperser base class type checking."""
 
     def test_wrong_type_r_scale(self):
-        from unite.disperser.generic import GenericDisperser
+        from unite.instrument.generic import GenericDisperser
 
         with pytest.raises(TypeError, match='r_scale must be an RScale'):
             GenericDisperser(
@@ -94,7 +94,7 @@ class TestDisperserTypeValidation:
             )
 
     def test_wrong_type_flux_scale(self):
-        from unite.disperser.generic import GenericDisperser
+        from unite.instrument.generic import GenericDisperser
 
         with pytest.raises(TypeError, match='flux_scale must be a FluxScale'):
             GenericDisperser(
@@ -105,7 +105,7 @@ class TestDisperserTypeValidation:
             )
 
     def test_wrong_type_pix_offset(self):
-        from unite.disperser.generic import GenericDisperser
+        from unite.instrument.generic import GenericDisperser
 
         with pytest.raises(TypeError, match='pix_offset must be a PixOffset'):
             GenericDisperser(
@@ -116,7 +116,7 @@ class TestDisperserTypeValidation:
             )
 
     def test_has_calibration_params_false(self):
-        from unite.disperser.generic import GenericDisperser
+        from unite.instrument.generic import GenericDisperser
 
         d = GenericDisperser(
             R_func=lambda w: w * 0 + 1000, dlam_dpix_func=lambda w: w / 1000, unit=u.AA
@@ -124,7 +124,7 @@ class TestDisperserTypeValidation:
         assert not d.has_calibration_params
 
     def test_has_calibration_params_true(self):
-        from unite.disperser.generic import GenericDisperser
+        from unite.instrument.generic import GenericDisperser
 
         d = GenericDisperser(
             R_func=lambda w: w * 0 + 1000,

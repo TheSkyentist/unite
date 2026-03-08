@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from astropy import units as u
 
-from unite.instruments.nirspec import (
+from unite.instrument.nirspec import (
     G140H,
     G140M,
     G235H,
@@ -185,7 +185,7 @@ class TestNIRSpecCalibration:
         assert d.pix_offset is None
 
     def test_r_scale_token(self):
-        from unite.disperser.base import RScale
+        from unite.instrument.base import RScale
 
         r = RScale()
         d = G235H(r_scale=r)
@@ -193,7 +193,7 @@ class TestNIRSpecCalibration:
         assert d.r_scale is r
 
     def test_flux_scale_token(self):
-        from unite.disperser.base import FluxScale
+        from unite.instrument.base import FluxScale
 
         f = FluxScale()
         d = G235H(flux_scale=f)
@@ -201,7 +201,7 @@ class TestNIRSpecCalibration:
         assert d.flux_scale is f
 
     def test_pix_offset_token(self):
-        from unite.disperser.base import PixOffset
+        from unite.instrument.base import PixOffset
 
         p = PixOffset()
         d = G235H(pix_offset=p)
@@ -210,7 +210,7 @@ class TestNIRSpecCalibration:
 
     def test_shared_token_identity(self):
         """Two dispersers sharing a token should reference the same object."""
-        from unite.disperser.base import RScale
+        from unite.instrument.base import RScale
 
         r = RScale()
         d1 = G235H(r_scale=r)
@@ -226,9 +226,10 @@ class TestNIRSpecCalibration:
 class TestNIRSpecSpectrum:
     """Tests for NIRSpecSpectrum loader class."""
 
-    def test_cannot_instantiate(self):
-        with pytest.raises(TypeError, match='loader class'):
-            NIRSpecSpectrum()
+    def test_is_generic_spectrum_subclass(self):
+        from unite.instrument.generic import GenericSpectrum
+
+        assert issubclass(NIRSpecSpectrum, GenericSpectrum)
 
     def test_from_arrays(self):
         npix = 200

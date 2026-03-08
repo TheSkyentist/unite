@@ -10,8 +10,8 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import line, model, prior
-from unite.disperser.generic import SimpleDisperser
-from unite.spectrum import Spectra, Spectrum
+from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument.spectrum import Spectra
 
 
 def create_simple_spectrum():
@@ -44,7 +44,7 @@ def create_simple_spectrum():
     error = np.full(len(wavelength), 2.0) * flux_unit
 
     # Create spectrum
-    spectrum = Spectrum(
+    spectrum = GenericSpectrum(
         low=low,
         high=high,
         flux=flux,
@@ -340,7 +340,7 @@ class TestWavelengthUnitConsistency:
         flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
         flux = (line_flux + noise) * flux_unit
         error = np.full(len(wl), 2.0) * flux_unit
-        return Spectrum(
+        return GenericSpectrum(
             low=low,
             high=high,
             flux=flux,
@@ -385,7 +385,7 @@ class TestWavelengthUnitConsistency:
         flux = np.full(50, 1.5) * flux_unit
         error = np.full(50, 0.3) * flux_unit
 
-        spectrum = Spectrum(
+        spectrum = GenericSpectrum(
             low=low,
             high=high,
             flux=flux,
@@ -473,7 +473,7 @@ class TestFluxUnitValidation:
         flux = np.ones(10) * flux_unit
         error = np.ones(10) * flux_unit
 
-        spectrum = Spectrum(
+        spectrum = GenericSpectrum(
             low=low, high=high, flux=flux, error=error, disperser=disperser
         )
         assert spectrum.flux_unit == flux_unit
@@ -486,7 +486,7 @@ class TestFluxUnitValidation:
         high = wl + 0.5 * np.gradient(wl)
 
         with pytest.raises(ValueError, match='spectral flux density'):
-            Spectrum(
+            GenericSpectrum(
                 low=low,
                 high=high,
                 flux=np.ones(10) * u.Jy,
@@ -502,7 +502,7 @@ class TestFluxUnitValidation:
         high = wl + 0.5 * np.gradient(wl)
 
         with pytest.raises(TypeError, match='flux must be an astropy Quantity'):
-            Spectrum(
+            GenericSpectrum(
                 low=low,
                 high=high,
                 flux=np.ones(10),

@@ -1,7 +1,7 @@
 """SDSS spectrograph disperser implementation.
 
 Provides :class:`SDSSDisperser`, a concrete
-:class:`~unite.disperser.base.Disperser` for SDSS optical spectra.
+:class:`~unite.instrument.base.Disperser` for SDSS optical spectra.
 The resolving power *R(λ)* is derived from the ``wdisp`` column
 (wavelength dispersion per pixel, in Angstroms) of standard SDSS
 ``spec-*.fits`` files at load time via :meth:`SDSSSpectrum.from_fits`.
@@ -12,7 +12,7 @@ to be configured and the disperser configuration to be serialized.
 
 Examples
 --------
->>> from unite.instruments.sdss import SDSSDisperser
+>>> from unite.instrument.sdss import SDSSDisperser
 >>> d = SDSSDisperser()
 >>> d.unit
 Unit("Angstrom")
@@ -24,7 +24,7 @@ import jax.numpy as jnp
 from astropy import units as u
 from jax.typing import ArrayLike
 
-from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
 
 
 class SDSSDisperser(Disperser):

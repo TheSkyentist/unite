@@ -1,4 +1,4 @@
-"""NIRSpec spectrum loader."""
+"""NIRSpec spectrum class."""
 
 from __future__ import annotations
 
@@ -8,45 +8,40 @@ from typing import TYPE_CHECKING
 import numpy as np
 from astropy import units as u
 
+from unite.instrument.generic import GenericSpectrum
+
 if TYPE_CHECKING:
-    from unite.instruments.nirspec.disperser import NIRSpecDisperser
-    from unite.spectrum.spectrum import Spectrum
+    from unite.instrument.nirspec.disperser import NIRSpecDisperser
 
 
-class NIRSpecSpectrum:
-    """Loader for JWST NIRSpec spectra.
+class NIRSpecSpectrum(GenericSpectrum):
+    """A JWST NIRSpec spectrum.
 
-    Provides class methods to create :class:`~unite.spectrum.spectrum.Spectrum`
-    objects from NIRSpec data, attaching a :class:`NIRSpecDisperser` that
-    carries any calibration tokens the user has configured.
-
-    This class is not instantiated directly — use :meth:`from_fits` or
-    :meth:`from_arrays`.
+    Extends :class:`~unite.instrument.generic.GenericSpectrum` with loaders for
+    NIRSpec data formats.  Can be constructed directly via
+    :meth:`from_arrays` or :meth:`from_DJA`, or instantiated like any
+    :class:`~unite.instrument.generic.GenericSpectrum` if you already have the
+    array data.
 
     Parameters
     ----------
-    None
-        This class is not instantiated.
+    low, high, flux, error, disperser, name
+        See :class:`~unite.instrument.generic.GenericSpectrum`.
 
     Examples
     --------
     Create from pre-loaded arrays:
 
     >>> from astropy import units as u
-    >>> from unite.instruments.nirspec import G235H, NIRSpecSpectrum
+    >>> from unite.instrument.nirspec import G235H, NIRSpecSpectrum
     >>> import numpy as np
     >>> disperser = G235H()
     >>> n = 300
     >>> low = np.linspace(1.66, 3.17, n + 1)[:-1] * u.um
     >>> high = np.linspace(1.66, 3.17, n + 1)[1:] * u.um
-    >>> flux = np.ones(n)
-    >>> error = np.full(n, 0.1)
-    >>> spec = NIRSpecSpectrum.from_arrays(low, high, flux, error, disperser)
+    >>> flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
+    >>> spec = NIRSpecSpectrum.from_arrays(low, high, np.ones(n) * flux_unit, np.full(n, 0.1) * flux_unit, disperser)
     """
-
-    def __new__(cls, *args, **kwargs) -> None:
-        msg = 'NIRSpecSpectrum is a loader class and cannot be instantiated.'
-        raise TypeError(msg)
 
     @classmethod
     def from_arrays(
@@ -58,8 +53,8 @@ class NIRSpecSpectrum:
         disperser: NIRSpecDisperser,
         *,
         name: str = '',
-    ) -> Spectrum:
-        """Create a :class:`~unite.spectrum.spectrum.Spectrum` from pre-loaded arrays.
+    ) -> NIRSpecSpectrum:
+        """Create a :class:`NIRSpecSpectrum` from pre-loaded arrays.
 
         Parameters
         ----------
@@ -83,11 +78,9 @@ class NIRSpecSpectrum:
 
         Returns
         -------
-        Spectrum
+        NIRSpecSpectrum
         """
-        from unite.spectrum.spectrum import Spectrum
-
-        return Spectrum(
+        return cls(
             low=low,
             high=high,
             flux=flux,
@@ -98,10 +91,14 @@ class NIRSpecSpectrum:
 
     @classmethod
     def from_DJA(
-        cls, path: str | Path, disperser: NIRSpecDisperser, *, name: str = ''
-    ) -> Spectrum:
-        """
-        Create a :class:`~unite.spectrum.spectrum.Spectrum` from a DJA FITS file (or URL).
+        cls,
+        path: str | Path,
+        disperser: NIRSpecDisperser,
+        *,
+        name: str = '',
+        cache=False,
+    ) -> NIRSpecSpectrum:
+        """Create a :class:`NIRSpecSpectrum` from a DJA FITS file (or URL).
 
         Parameters
         ----------
@@ -111,10 +108,12 @@ class NIRSpecSpectrum:
             The NIRSpec disperser associated with this spectrum.
         name : str, optional
             Human-readable label.  Defaults to ``disperser.name``.
+        cache : bool, optional
+            Whether to use astropy's caching when reading the file. Defaults to False.
 
         Returns
         -------
-        Spectrum
+        NIRSpecSpectrum
 
         Raises
         ------
@@ -126,7 +125,7 @@ class NIRSpecSpectrum:
         from astropy.table import Table
 
         # Load spectrum
-        spec = Table.read(path, hdu='SPEC1D')
+        spec = Table.read(path, hdu='SPEC1D', cache=cache)
 
         # Convert to correct units
         λ = u.Quantity(spec['wave']).to(u.AA)

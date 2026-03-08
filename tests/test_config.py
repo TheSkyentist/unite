@@ -6,9 +6,9 @@ from astropy import units as u
 
 from unite.config import Configuration
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.disperser.base import FluxScale, RScale
-from unite.disperser.config import DispersersConfiguration
-from unite.instruments.nirspec import G235H, G395H
+from unite.instrument.base import FluxScale, RScale
+from unite.instrument.config import InstrumentConfig
+from unite.instrument.nirspec import G235H, G395H
 from unite.line import FWHM, LineConfiguration, Redshift
 from unite.prior import TruncatedNormal, Uniform
 
@@ -33,7 +33,7 @@ def _make_continuum_config():
 def _make_dispersers_config():
     """Create a dispersers config with shared token."""
     r = RScale(prior=TruncatedNormal(1.0, 0.05, 0.8, 1.2), name='r_shared')
-    return DispersersConfiguration([G235H(r_scale=r), G395H(r_scale=r)])
+    return InstrumentConfig([G235H(r_scale=r), G395H(r_scale=r)])
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ class TestConfigurationConstruction:
         """Configuration should call validate() on dispersers."""
         f1 = FluxScale()
         f2 = FluxScale()
-        dc = DispersersConfiguration([G235H(flux_scale=f1), G395H(flux_scale=f2)])
+        dc = InstrumentConfig([G235H(flux_scale=f1), G395H(flux_scale=f2)])
         lc = _make_line_config()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter('always')

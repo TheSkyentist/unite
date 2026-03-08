@@ -1,7 +1,7 @@
 """JWST NIRSpec disperser implementations.
 
 This module provides :class:`NIRSpecDisperser`, a concrete
-:class:`~unite.disperser.base.Disperser` for every NIRSpec grating/prism
+:class:`~unite.instrument.base.Disperser` for every NIRSpec grating/prism
 configuration.  Two resolving-power calibrations are available:
 
 * ``"uniform"`` or ``"uniformly-illuminated"`` — the official JDOX tabulated *R(λ)* curves shipped with the
@@ -32,7 +32,7 @@ import jax.numpy as jnp
 from astropy import units as u
 from astropy.io import fits
 
-from unite.disperser.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
 
 # ---------------------------------------------------------------------------
 # Valid grating names
@@ -113,7 +113,7 @@ def _load_uniform_disp(grating: str) -> dict[str, jnp.ndarray]:
         (dimensionless), each as a 1-D ``jnp.ndarray``.
     """
     filename = f'jwst_nirspec_{grating}_disp.fits'
-    ref = resources.files('unite.instruments.nirspec.data').joinpath(filename)
+    ref = resources.files('unite.instrument.nirspec.data').joinpath(filename)
     with resources.as_file(ref) as path, fits.open(path) as hdul:
         data = hdul[1].data
         return {
