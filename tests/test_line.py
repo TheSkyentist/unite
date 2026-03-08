@@ -4,6 +4,16 @@ import pytest
 from astropy import units as u
 
 from unite.line.config import FWHM, Flux, LineConfiguration, Param, Redshift
+from unite.line.profiles import (
+    Cauchy,
+    Gaussian,
+    GaussHermite,
+    Laplace,
+    PseudoVoigt,
+    SEMG,
+    SplitNormal,
+    profile_from_dict,
+)
 from unite.prior import Fixed, TruncatedNormal, Uniform
 
 # ---------------------------------------------------------------------------
@@ -470,3 +480,118 @@ class TestSaveLoad:
         lc.save(path)
         lc2 = LineConfiguration.load(path)
         assert len(lc2) == 1
+
+
+# ---------------------------------------------------------------------------
+# Profile.integrate() method (direct call covers lines 97-101)
+# ---------------------------------------------------------------------------
+
+_PROFILE_PARAMS = [
+    (Gaussian(), {'fwhm_gauss': 100.0}),
+    (Cauchy(), {'fwhm_lorentzian': 100.0}),
+    (PseudoVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0}),
+    (Laplace(), {'fwhm_exp': 100.0}),
+    (SEMG(), {'fwhm_gauss': 80.0, 'fwhm_exp': 50.0}),
+    (GaussHermite(), {'fwhm_gauss': 80.0, 'h3': 0.1, 'h4': 0.05}),
+    (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
+]
+
+
+class TestProfileIntegrateMethod:
+    """Test Profile.integrate() dispatches correctly via jax_branch()."""
+
+    @pytest.mark.parametrize('profile,extra_kwargs', _PROFILE_PARAMS)
+    def test_integrate_sums_to_near_unity(self, profile, extra_kwargs):
+        import jax.numpy as jnp
+
+        low = jnp.linspace(4500.0, 5500.0, 500)[:-1]
+        high = jnp.linspace(4500.0, 5500.0, 500)[1:]
+        result = profile.integrate(low, high, center=5000.0, lsf_fwhm=5.0, **extra_kwargs)
+        # Cauchy has heavy tails so allow wider tolerance
+        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=0.1)
+
+    @pytest.mark.parametrize('profile,extra_kwargs', _PROFILE_PARAMS)
+    def test_integrate_returns_nonneg(self, profile, extra_kwargs):
+        import jax.numpy as jnp
+
+        low = jnp.linspace(4900.0, 5100.0, 50)[:-1]
+        high = jnp.linspace(4900.0, 5100.0, 50)[1:]
+        result = profile.integrate(low, high, center=5000.0, lsf_fwhm=5.0, **extra_kwargs)
+        assert jnp.all(result >= 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Profile serialization: to_dict / from_dict
+# ---------------------------------------------------------------------------
+
+_ALL_PROFILES = [
+    Gaussian(),
+    Cauchy(),
+    PseudoVoigt(),
+    Laplace(),
+    SEMG(),
+    GaussHermite(),
+    SplitNormal(),
+]
+
+
+class TestProfileSerialization:
+    @pytest.mark.parametrize('profile', _ALL_PROFILES)
+    def test_roundtrip(self, profile):
+        d = profile.to_dict()
+        restored = profile_from_dict(d)
+        assert type(restored) is type(profile)
+
+    @pytest.mark.parametrize('profile', _ALL_PROFILES)
+    def test_repr_contains_class_name(self, profile):
+        assert type(profile).__name__ in repr(profile)
+
+
+# ---------------------------------------------------------------------------
+# Profile equality and hashing
+# ---------------------------------------------------------------------------
+
+_ALL_PROFILE_CLASSES = [Gaussian, Cauchy, PseudoVoigt, Laplace, SEMG, GaussHermite, SplitNormal]
+
+
+class TestProfileEqHash:
+    @pytest.mark.parametrize('profile_cls', _ALL_PROFILE_CLASSES)
+    def test_same_type_equal(self, profile_cls):
+        assert profile_cls() == profile_cls()
+
+    def test_different_types_not_equal(self):
+        assert Gaussian() != Cauchy()
+        assert PseudoVoigt() != Laplace()
+
+    @pytest.mark.parametrize('profile_cls', _ALL_PROFILE_CLASSES)
+    def test_hashable(self, profile_cls):
+        p = profile_cls()
+        assert isinstance(hash(p), int)
+
+    def test_can_be_used_as_dict_key(self):
+        d = {Gaussian(): 'gauss', Cauchy(): 'cauchy'}
+        assert d[Gaussian()] == 'gauss'
+
+
+# ---------------------------------------------------------------------------
+# resolve_profile: TypeError for invalid input (lines 507-508)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_profile_invalid_type_raises():
+    from unite.line.profiles import resolve_profile
+
+    with pytest.raises(TypeError, match='str or Profile'):
+        resolve_profile(42)
+
+
+# ---------------------------------------------------------------------------
+# SEMG.default_priors (profiles.py line 348)
+# ---------------------------------------------------------------------------
+
+
+def test_semg_default_priors():
+    """SEMG.default_priors() returns a dict with fwhm_gauss and fwhm_exp (line 348)."""
+    priors = SEMG().default_priors()
+    assert 'fwhm_gauss' in priors
+    assert 'fwhm_exp' in priors

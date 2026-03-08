@@ -1,5 +1,7 @@
 """Tests for NIRSpec disperser and spectrum loader."""
 
+from unittest.mock import patch
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -276,3 +278,86 @@ class TestNIRSpecSpectrum:
         assert spec.npix == npix
         # Internal storage should be in um (disperser unit)
         assert spec.unit == u.um
+
+
+# ---------------------------------------------------------------------------
+# NIRSpecSpectrum.from_DJA — mocked FITS loading
+# ---------------------------------------------------------------------------
+
+
+class _FakeFluxCol:
+    """Minimal column-like object with .to() and .mask, mimicking DJA masked columns."""
+
+    def __init__(self, data, unit, mask=None):
+        self._data = data
+        self._unit = unit
+        self.mask = mask if mask is not None else np.zeros(len(data), dtype=bool)
+
+    def to(self, unit, equivalencies=None):
+        q = u.Quantity(self._data, self._unit)
+        return q.to(unit, equivalencies=equivalencies)
+
+
+def _make_nirspec_dja_table(n=50, n_masked=0):
+    """Create a minimal fake DJA SPEC1D table."""
+    fλ_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
+    wave_aa = np.linspace(16000, 20000, n)  # Angstroms
+    flux_vals = np.ones(n) * 1.0
+    err_vals = np.ones(n) * 0.1
+    mask = np.zeros(n, dtype=bool)
+    if n_masked > 0:
+        mask[:n_masked] = True
+
+    class FakeDJATable:
+        def __getitem__(self, key):
+            if key == 'wave':
+                return wave_aa * u.AA
+            elif key == 'flux':
+                return _FakeFluxCol(flux_vals, fλ_unit, mask)
+            elif key == 'err':
+                return _FakeFluxCol(err_vals, fλ_unit, mask)
+            raise KeyError(key)
+
+    return FakeDJATable()
+
+
+class TestNIRSpecFromDJA:
+    """Tests for NIRSpecSpectrum.from_DJA using mocked Table.read."""
+
+    def test_from_dja_basic(self):
+        """from_DJA constructs a valid spectrum from mocked DJA FITS."""
+        fake_table = _make_nirspec_dja_table(n=50)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = G235H()
+            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser)
+
+        assert spec.npix == 50
+        assert spec.unit == u.um  # NIRSpec uses microns
+
+    def test_from_dja_mask_applied(self):
+        """from_DJA removes masked pixels from the output."""
+        fake_table = _make_nirspec_dja_table(n=50, n_masked=5)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = G235H()
+            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser)
+
+        # 5 pixels masked → 45 remaining
+        assert spec.npix == 45
+
+    def test_from_dja_custom_name(self):
+        """from_DJA uses the provided name."""
+        fake_table = _make_nirspec_dja_table(n=50)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = G235H()
+            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser, name='MyGalaxy')
+
+        assert spec.name == 'MyGalaxy'
+
+    def test_from_dja_default_name_is_disperser(self):
+        """from_DJA defaults name to disperser.name when not provided."""
+        fake_table = _make_nirspec_dja_table(n=50)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = G235H()
+            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser)
+
+        assert spec.name == disperser.name

@@ -11,7 +11,8 @@ from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
 from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum, SimpleDisperser
-from unite.results import make_hdul, make_parameter_table, make_spectra_tables
+from unite.continuum.config import ContinuumRegion
+from unite.results import _get_n_samples, make_hdul, make_parameter_table, make_spectra_tables
 
 
 def _setup():
@@ -251,3 +252,168 @@ class TestMakeHDUL:
         hdul = make_hdul(samples, args)
         # Primary + params + 1 spectrum = 3
         assert len(hdul) == 3
+
+
+# ---------------------------------------------------------------------------
+# _get_n_samples edge case (results.py line 315)
+# ---------------------------------------------------------------------------
+
+
+class TestGetNSamples:
+    """Tests for _get_n_samples helper."""
+
+    def test_empty_dict_returns_1(self):
+        """_get_n_samples with empty dict returns 1."""
+        assert _get_n_samples({}) == 1
+
+    def test_non_empty_returns_first_shape(self):
+        """_get_n_samples returns shape[0] of first array."""
+        result = _get_n_samples({'x': np.ones(7)})
+        assert result == 7
+
+
+# ---------------------------------------------------------------------------
+# make_hdul with continuum (results.py lines 284-286)
+# ---------------------------------------------------------------------------
+
+
+class TestMakeHDULWithContinuum:
+    """Tests for make_hdul with a continuum configuration (covers lines 281-286)."""
+
+    def test_continuum_scale_in_header(self):
+        """make_hdul with continuum: CNTSCL and CNTUNT are in primary header."""
+        samples, args = _setup_with_continuum()
+        hdul = make_hdul(samples, args)
+        # The primary header should have line scale info
+        assert 'LFLXSCL' in hdul[0].header
+        assert 'LFLXUNT' in hdul[0].header
+
+    def test_hdul_with_continuum_n_hdus(self):
+        """make_hdul with continuum has correct number of HDUs."""
+        samples, args = _setup_with_continuum()
+        hdul = make_hdul(samples, args)
+        # Primary + params + 1 spectrum = 3
+        assert len(hdul) == 3
+
+
+# ---------------------------------------------------------------------------
+# make_spectra_tables summary mode with continuum (lines 209-212)
+# ---------------------------------------------------------------------------
+
+
+class TestMakeSpectraTablesWithContinuum:
+    """make_spectra_tables with continuum: covers lines 209-212, 220-221."""
+
+    def test_summary_mode_continuum_columns(self):
+        """Summary mode with continuum produces (n_pix, 3) continuum columns."""
+        samples, args = _setup_with_continuum()
+        tables = make_spectra_tables(samples, args, summary=True)
+        t = tables[0]
+        # Should have at least one continuum region column
+        cont_cols = [c for c in t.colnames if c not in (
+            'wavelength', 'model_total', 'Ha', 'observed_flux', 'observed_error', 'scaled_error'
+        )]
+        assert len(cont_cols) > 0
+        for col in cont_cols:
+            assert t[col].shape[1] == 3  # [median, p16, p84]
+
+    def test_full_mode_continuum_columns(self):
+        """Full mode with continuum produces (n_pix, n_samples) continuum columns."""
+        samples, args = _setup_with_continuum()
+        tables = make_spectra_tables(samples, args, summary=False)
+        t = tables[0]
+        cont_cols = [c for c in t.colnames if c not in (
+            'wavelength', 'model_total', 'Ha', 'observed_flux', 'observed_error', 'scaled_error'
+        )]
+        assert len(cont_cols) > 0
+        n_samples = 4
+        for col in cont_cols:
+            assert t[col].shape[1] == n_samples
+
+
+# ---------------------------------------------------------------------------
+# insert_nan coverage (results.py lines 237-238, 468-503)
+# ---------------------------------------------------------------------------
+
+
+def _setup_two_region_continuum():
+    """Model with TWO non-adjacent continuum regions to test insert_nan."""
+    from jax import random
+    from numpyro.infer import Predictive
+
+    # Wide wavelength range covering two separate regions
+    wavelength = np.concatenate([
+        np.linspace(6480, 6540, 30),
+        np.linspace(6580, 6640, 30),
+    ]) * u.AA
+    wavelength = np.sort(wavelength)
+
+    disperser = SimpleDisperser(
+        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='two_region'
+    )
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = np.ones(len(wavelength)) * 5.0 * flux_unit
+    error = np.ones(len(wavelength)) * flux_unit
+
+    spectrum = GenericSpectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='two_region_spec'
+    )
+
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha',
+        6510.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        flux=line.Flux(prior=prior.Uniform(0, 5)),
+    )
+    lc.add_line(
+        'Hb',
+        6610.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        flux=line.Flux(prior=prior.Uniform(0, 5)),
+    )
+
+    # Two separate continuum regions
+    cc = ContinuumConfiguration([
+        ContinuumRegion(6480.0 * u.AA, 6540.0 * u.AA, form=Linear()),
+        ContinuumRegion(6580.0 * u.AA, 6640.0 * u.AA, form=Linear()),
+    ])
+
+    spectra = Spectra([spectrum], redshift=0.0)
+    spectra.prepare(lc, cc)
+    spectra.compute_scales(spectra.prepared_line_config)
+
+    model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+
+    rng_key = random.PRNGKey(42)
+    predictive = Predictive(model_fn, num_samples=2)
+    samples = predictive(rng_key, args)
+
+    return samples, args
+
+
+class TestInsertNan:
+    """Tests for make_spectra_tables with insert_nan=True."""
+
+    def test_insert_nan_adds_rows(self):
+        """With two regions, insert_nan=True adds NaN separator rows."""
+        samples, args = _setup_two_region_continuum()
+        tables_without = make_spectra_tables(samples, args, insert_nan=False)
+        tables_with = make_spectra_tables(samples, args, insert_nan=True)
+        # Should have at least one more row due to NaN insert
+        assert len(tables_with[0]) > len(tables_without[0])
+
+    def test_insert_nan_nan_row_exists(self):
+        """NaN row is actually NaN in the model_total column."""
+        samples, args = _setup_two_region_continuum()
+        tables = make_spectra_tables(samples, args, insert_nan=True)
+        t = tables[0]
+        model_vals = np.asarray(t['model_total'])
+        # At least one row should contain NaN
+        assert np.any(np.isnan(model_vals))

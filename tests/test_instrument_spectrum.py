@@ -272,3 +272,193 @@ class TestPrepare:
         spectra = Spectra([spectrum], redshift=0.0)
         _fl, fc = spectra.prepare(lc, cont, drop_empty_regions=False)
         assert len(fc) == 2
+
+
+# ---------------------------------------------------------------------------
+# ScaleDiagnosticList: string lookup and slice (spectrum.py lines 71-78)
+# ---------------------------------------------------------------------------
+
+
+class TestScaleDiagnosticList:
+    """Tests for ScaleDiagnosticList string-key lookup and slicing."""
+
+    def _get_diagnostics(self):
+        spectrum = _make_spectrum()
+        lc = _make_line_config()
+        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.prepare(lc, cont)
+        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+        return spectra.scale_diagnostics
+
+    def test_string_lookup(self):
+        """ScaleDiagnosticList['name'] returns the matching diagnostic."""
+        diags = self._get_diagnostics()
+        d = diags['test']
+        assert d.name == 'test'
+
+    def test_string_lookup_missing_raises(self):
+        """ScaleDiagnosticList['missing'] raises KeyError."""
+        diags = self._get_diagnostics()
+        with pytest.raises(KeyError):
+            _ = diags['no_such_spectrum']
+
+    def test_integer_lookup(self):
+        """ScaleDiagnosticList[0] returns the first item."""
+        diags = self._get_diagnostics()
+        assert diags[0].name == 'test'
+
+    def test_slice_returns_scale_diagnostic_list(self):
+        """ScaleDiagnosticList[:] returns a ScaleDiagnosticList instance (line 77-78)."""
+        from unite.instrument.spectrum import ScaleDiagnosticList
+
+        diags = self._get_diagnostics()
+        sliced = diags[:]
+        assert isinstance(sliced, ScaleDiagnosticList)
+
+
+# ---------------------------------------------------------------------------
+# Spectra with explicit canonical_unit (spectrum.py lines 177-182)
+# ---------------------------------------------------------------------------
+
+
+class TestSpectraCanonicalUnit:
+    """Tests for Spectra with explicit canonical_unit parameter."""
+
+    def test_explicit_canonical_unit(self):
+        """Spectra with canonical_unit=u.um uses that unit."""
+        spectrum = _make_spectrum(unit=u.AA)
+        spectra = Spectra([spectrum], redshift=0.0, canonical_unit=u.um)
+        assert spectra.canonical_unit == u.um
+
+    def test_explicit_canonical_unit_non_wavelength_raises(self):
+        """Spectra raises UnitConversionError for non-wavelength canonical_unit."""
+        spectrum = _make_spectrum()
+        with pytest.raises(u.UnitConversionError):
+            Spectra([spectrum], redshift=0.0, canonical_unit=u.km / u.s)
+
+
+# ---------------------------------------------------------------------------
+# Spectra constructor validation (spectrum.py lines 161-166)
+# ---------------------------------------------------------------------------
+
+
+class TestSpectraConstruction:
+    """Tests for Spectra constructor validation."""
+
+    def test_empty_spectra_raises_value_error(self):
+        """Spectra([]) raises ValueError (line 161-162)."""
+        with pytest.raises(ValueError, match='at least one spectrum'):
+            Spectra([])
+
+    def test_non_generic_spectrum_raises_type_error(self):
+        """Spectra([object()]) raises TypeError (line 165-166)."""
+        with pytest.raises(TypeError, match='GenericSpectrum'):
+            Spectra([object()])
+
+    def test_getitem_string_lookup(self):
+        """Spectra['name'] returns the matching spectrum (lines 652-655)."""
+        spectrum = _make_spectrum(name='myspec')
+        spectra = Spectra([spectrum], redshift=0.0)
+        result = spectra['myspec']
+        assert result is spectrum
+
+    def test_getitem_string_missing_raises(self):
+        """Spectra['missing'] raises KeyError (lines 656-657)."""
+        spectra = Spectra([_make_spectrum(name='foo')], redshift=0.0)
+        with pytest.raises(KeyError):
+            _ = spectra['bar']
+
+    def test_getitem_integer(self):
+        """Spectra[0] returns the first spectrum (line 658)."""
+        spectrum = _make_spectrum()
+        spectra = Spectra([spectrum], redshift=0.0)
+        assert spectra[0] is spectrum
+
+    def test_repr(self):
+        """Spectra.__repr__ returns a string (lines 660-670)."""
+        spectrum = _make_spectrum(name='test')
+        spectra = Spectra([spectrum], redshift=0.0)
+        r = repr(spectra)
+        assert 'Spectra' in r
+        assert 'test' in r
+
+
+# ---------------------------------------------------------------------------
+# continuum_scale setter validation (spectrum.py lines 232-242)
+# ---------------------------------------------------------------------------
+
+
+class TestContinuumScaleSetter:
+    """Tests for continuum_scale setter validation paths."""
+
+    def test_continuum_scale_setter_validates_type(self):
+        """continuum_scale = 1.0 raises TypeError (line 232-234)."""
+        spectra = Spectra([_make_spectrum()], redshift=0.0)
+        with pytest.raises(TypeError, match='astropy Quantity'):
+            spectra.continuum_scale = 1.0
+
+    def test_continuum_scale_setter_validates_unit(self):
+        """continuum_scale = km/s raises UnitConversionError (line 236-238)."""
+        spectra = Spectra([_make_spectrum()], redshift=0.0)
+        with pytest.raises(u.UnitConversionError):
+            spectra.continuum_scale = 1.0 * u.km / u.s
+
+    def test_continuum_scale_setter_success(self):
+        """continuum_scale setter with valid value sets the scale (line 242)."""
+        spectra = Spectra([_make_spectrum()], redshift=0.0)
+        val = 5.0 * u.erg / u.s / u.cm**2 / u.AA
+        spectra.continuum_scale = val
+        assert spectra.continuum_scale == val
+
+    def test_line_scale_setter_success(self):
+        """line_scale setter with valid value sets the scale (line 223)."""
+        spectra = Spectra([_make_spectrum()], redshift=0.0)
+        val = 1e-17 * u.erg / u.s / u.cm**2
+        spectra.line_scale = val
+        assert spectra.line_scale == val
+
+
+# ---------------------------------------------------------------------------
+# compute_scales: region outside spectrum coverage (spectrum.py line 387)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeScalesEdgeCases:
+    """Edge cases in compute_scales."""
+
+    def test_region_outside_spectrum_coverage_skipped(self):
+        """Continuum region outside spectrum wavelength range is skipped (line 387)."""
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        lc = _make_line_config()
+        # Region far from spectrum coverage
+        from unite.continuum.config import ContinuumRegion
+        from unite.continuum.library import Linear
+
+        cont = ContinuumConfiguration([
+            ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),  # in coverage
+            ContinuumRegion(5000.0 * u.AA, 5100.0 * u.AA, Linear()),  # out of coverage
+        ])
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.prepare(lc, cont, drop_empty_regions=False)
+        # Should not raise; the out-of-coverage region is simply skipped
+        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+        assert spectra.line_scale is not None
+
+    def test_region_too_few_pixels_fit_returns_none(self):
+        """Region with too few pixels causes fit to return None (line 348)."""
+        # Very narrow region with only 1-2 pixels
+        spectrum = _make_spectrum(npix=100, wl_range=(6500, 6600))
+        lc = _make_line_config()
+        from unite.continuum.config import ContinuumRegion
+        from unite.continuum.library import Linear
+
+        # A tiny region that will have too few good pixels after line masking
+        cont = ContinuumConfiguration([
+            ContinuumRegion(6562.0 * u.AA, 6564.0 * u.AA, Linear()),  # inside line mask
+        ])
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.prepare(lc, cont, drop_empty_regions=False)
+        # Should not raise; the failed fit returns None model_region
+        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+        # No line_scale from this test (line in region is masked out)

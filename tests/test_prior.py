@@ -4,9 +4,12 @@ import pytest
 
 from unite.prior import (
     Fixed,
+    Parameter,
     ParameterRef,
     TruncatedNormal,
     Uniform,
+    _deserialize_bound,
+    _serialize_bound,
     prior_from_dict,
     topological_sort,
 )
@@ -101,6 +104,66 @@ def test_parameter_ref_unsupported_type_returns_not_implemented():
     ref = ParameterRef(tok)
     assert ref.__mul__('bad') is NotImplemented
     assert ref.__add__('bad') is NotImplemented
+
+
+def test_parameter_ref_truediv_not_implemented():
+    """ParameterRef.__truediv__ returns NotImplemented for non-numeric (line 85)."""
+    tok = _Tok('x')
+    ref = ParameterRef(tok)
+    assert ref.__truediv__('bad') is NotImplemented
+
+
+def test_parameter_ref_sub_not_implemented():
+    """ParameterRef.__sub__ returns NotImplemented for non-numeric (line 98)."""
+    tok = _Tok('x')
+    ref = ParameterRef(tok)
+    assert ref.__sub__('bad') is NotImplemented
+
+
+def test_parameter_ref_rsub_not_implemented():
+    """ParameterRef.__rsub__ returns NotImplemented for non-numeric (line 103)."""
+    tok = _Tok('x')
+    ref = ParameterRef(tok)
+    assert ref.__rsub__('bad') is NotImplemented
+
+
+def test_parameter_ref_repr_with_negative_offset():
+    """ParameterRef.__repr__ with negative offset shows minus sign (lines 114-115)."""
+    tok = _Tok('x')
+    tok.name = 'x'
+    ref = ParameterRef(tok, scale=1.0, offset=-5.0)
+    r = repr(ref)
+    assert '-' in r or '5' in r
+
+
+def test_parameter_ref_repr_default():
+    """ParameterRef.__repr__ with scale=1.0, offset=0.0 shows only label."""
+    tok = _Tok('x')
+    tok.name = 'x'
+    ref = ParameterRef(tok, scale=1.0, offset=0.0)
+    r = repr(ref)
+    assert 'x' in r
+    assert '+' not in r
+
+
+def test_parameter_ref_repr_with_scale():
+    """ParameterRef.__repr__ with scale != 1.0 shows scale * label (line 109)."""
+    tok = _Tok('x')
+    tok.name = 'x'
+    ref = ParameterRef(tok, scale=2.5, offset=0.0)
+    r = repr(ref)
+    assert '2.5' in r
+    assert '*' in r
+
+
+def test_parameter_ref_repr_with_positive_offset():
+    """ParameterRef.__repr__ with positive offset shows '+ offset' (line 113)."""
+    tok = _Tok('x')
+    tok.name = 'x'
+    ref = ParameterRef(tok, scale=1.0, offset=10.0)
+    r = repr(ref)
+    assert '+' in r
+    assert '10' in r
 
 
 # ---------------------------------------------------------------------------
@@ -340,3 +403,134 @@ def test_topological_sort_circular_raises():
     param_to_name = {a: 'a', b: 'b'}
     with pytest.raises(ValueError, match='Circular'):
         topological_sort(named_priors, param_to_name)
+
+
+def test_topological_sort_external_dependency_ignored():
+    """dep_obj not in param_to_name → dep_name is None → silently ignored (line 577)."""
+    from unite.prior import ParameterRef
+
+    a = _make_tok('a')
+    external = _make_tok('external')  # Not in named_priors or param_to_name
+    a.prior = Uniform(low=ParameterRef(external), high=1000)
+    named_priors = {'a': a.prior}
+    param_to_name = {a: 'a'}  # external not registered
+    # Should not raise; external dep is silently ignored
+    order = topological_sort(named_priors, param_to_name)
+    assert 'a' in order
+
+
+# ---------------------------------------------------------------------------
+# Parameter arithmetic and repr (prior.py lines 499-539)
+# ---------------------------------------------------------------------------
+
+
+def test_parameter_repr_with_name():
+    """Parameter.__repr__ includes the name when name is set."""
+    p = Parameter('my_param', prior=Uniform(0, 1))
+    assert 'my_param' in repr(p)
+
+
+def test_parameter_repr_without_name():
+    """Parameter.__repr__ skips name when name is None (line 499 branch)."""
+    p = Parameter(None, prior=Uniform(0, 1))
+    r = repr(p)
+    assert 'prior=' in r
+    assert 'None' not in r
+
+
+def test_parameter_mul_not_implemented():
+    """Parameter.__mul__ returns NotImplemented for non-numeric (line 507)."""
+    p = Parameter('x', prior=Uniform(0, 1))
+    assert p.__mul__('bad') is NotImplemented
+
+
+def test_parameter_rmul():
+    """Parameter.__rmul__ delegates to __mul__ (line 512)."""
+    p = Parameter('x', prior=Uniform(0, 1))
+    ref = p.__rmul__(3)
+    assert isinstance(ref, ParameterRef)
+    assert ref.scale == pytest.approx(3.0)
+
+
+def test_parameter_truediv_not_implemented():
+    """Parameter.__truediv__ returns NotImplemented for non-numeric (line 517)."""
+    p = Parameter('x', prior=Uniform(0, 1))
+    assert p.__truediv__('bad') is NotImplemented
+
+
+def test_parameter_add_not_implemented():
+    """Parameter.__add__ returns NotImplemented for non-numeric (line 523)."""
+    p = Parameter('x', prior=Uniform(0, 1))
+    assert p.__add__('bad') is NotImplemented
+
+
+def test_parameter_radd():
+    """Parameter.__radd__ delegates to __add__ (line 528)."""
+    p = Parameter('x', prior=Uniform(0, 1))
+    ref = p.__radd__(5)
+    assert isinstance(ref, ParameterRef)
+    assert ref.offset == pytest.approx(5.0)
+
+
+def test_parameter_sub_not_implemented():
+    """Parameter.__sub__ returns NotImplemented for non-numeric (line 533)."""
+    p = Parameter('x', prior=Uniform(0, 1))
+    assert p.__sub__('bad') is NotImplemented
+
+
+def test_parameter_rsub_not_implemented():
+    """Parameter.__rsub__ returns NotImplemented for non-numeric (line 539)."""
+    p = Parameter('x', prior=Uniform(0, 1))
+    assert p.__rsub__('bad') is NotImplemented
+
+
+# ---------------------------------------------------------------------------
+# _serialize_bound / _deserialize_bound with ParameterRef (lines 206-214, 229-236)
+# ---------------------------------------------------------------------------
+
+
+def test_serialize_bound_float():
+    """_serialize_bound on a float returns the float unchanged."""
+    assert _serialize_bound(3.14, None) == pytest.approx(3.14)
+
+
+def test_serialize_bound_parameter_ref():
+    """_serialize_bound on ParameterRef returns a dict with 'ref' key."""
+    tok = _make_tok('alpha')
+    ref = ParameterRef(tok, scale=2.0, offset=0.5)
+    namer = {tok: 'alpha'}
+    d = _serialize_bound(ref, namer)
+    assert isinstance(d, dict)
+    assert d['ref'] == 'alpha'
+    assert d['scale'] == pytest.approx(2.0)
+    assert d['offset'] == pytest.approx(0.5)
+
+
+def test_serialize_bound_parameter_ref_no_namer_raises():
+    """_serialize_bound with ParameterRef and no namer raises ValueError."""
+    tok = _make_tok('alpha')
+    ref = ParameterRef(tok)
+    with pytest.raises(ValueError, match='param_namer'):
+        _serialize_bound(ref, None)
+
+
+def test_deserialize_bound_float():
+    """_deserialize_bound on a float returns float."""
+    assert _deserialize_bound(3.14, None) == pytest.approx(3.14)
+
+
+def test_deserialize_bound_dict():
+    """_deserialize_bound on a dict returns a ParameterRef (line 229)."""
+    tok = _make_tok('alpha')
+    registry = {'alpha': tok}
+    ref = _deserialize_bound({'ref': 'alpha', 'scale': 2.0, 'offset': 0.5}, registry)
+    assert isinstance(ref, ParameterRef)
+    assert ref.param is tok
+    assert ref.scale == pytest.approx(2.0)
+    assert ref.offset == pytest.approx(0.5)
+
+
+def test_deserialize_bound_dict_no_registry_raises():
+    """_deserialize_bound with dict and no registry raises ValueError."""
+    with pytest.raises(ValueError, match='token_registry'):
+        _deserialize_bound({'ref': 'alpha'}, None)

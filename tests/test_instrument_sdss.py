@@ -1,10 +1,36 @@
 """Tests for SDSS disperser."""
 
+from unittest.mock import patch
+
 import jax.numpy as jnp
 import numpy as np
 from astropy import units as u
+from astropy.table import Table
 
 from unite.instrument.sdss import SDSSDisperser, SDSSSpectrum
+
+
+def _make_sdss_table(n=50, include_and_mask=True, has_bad_ivar=False):
+    """Build a minimal fake SDSS COADD table."""
+    loglam = np.log10(np.linspace(4000, 8000, n))
+    flux = np.ones(n) * 5.0
+    ivar = np.ones(n) * 4.0  # error = 0.5
+    if has_bad_ivar:
+        ivar[10] = 0.0  # one bad pixel
+    wdisp = np.ones(n) * 0.5
+
+    data = {
+        'loglam': loglam,
+        'flux': flux,
+        'ivar': ivar,
+        'wdisp': wdisp,
+    }
+    if include_and_mask:
+        and_mask = np.zeros(n, dtype=int)
+        and_mask[20] = 1  # one masked pixel
+        data['and_mask'] = and_mask
+
+    return Table(data)
 
 
 class TestSDSSDisperser:
@@ -84,3 +110,57 @@ class TestSDSSSpectrum:
         spec = SDSSSpectrum.from_arrays(low, high, flux, error, d)
         assert spec.npix == npix
         assert spec.name == 'SDSS'
+
+
+class TestSDSSFromFits:
+    """Tests for SDSSSpectrum.from_fits using mocked Table.read."""
+
+    def test_from_fits_basic(self):
+        """from_fits loads a standard SDSS spec file with and_mask."""
+        fake_table = _make_sdss_table(n=50, include_and_mask=True)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = SDSSDisperser()
+            spec = SDSSSpectrum.from_fits('fake.fits', disperser)
+
+        # and_mask pixel 20 is masked, so npix < 50
+        assert spec.npix < 50
+        assert spec.npix > 0
+
+    def test_from_fits_without_and_mask(self):
+        """from_fits works when and_mask column is absent (line 156-157)."""
+        fake_table = _make_sdss_table(n=50, include_and_mask=False)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = SDSSDisperser()
+            spec = SDSSSpectrum.from_fits('fake.fits', disperser)
+
+        # All pixels have ivar > 0, so all should be kept
+        assert spec.npix == 50
+
+    def test_from_fits_bad_ivar(self):
+        """from_fits masks pixels with ivar=0 and sets large error."""
+        fake_table = _make_sdss_table(n=50, include_and_mask=False, has_bad_ivar=True)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = SDSSDisperser()
+            spec = SDSSSpectrum.from_fits('fake.fits', disperser)
+
+        # Pixel 10 has ivar=0 and is masked by and_mask=False path (ivar > 0 filter)
+        assert spec.npix == 49  # one bad pixel excluded
+
+    def test_from_fits_updates_disperser(self):
+        """from_fits updates the disperser's wavelength grid."""
+        fake_table = _make_sdss_table(n=50, include_and_mask=False)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = SDSSDisperser()
+            SDSSSpectrum.from_fits('fake.fits', disperser)
+
+        assert disperser._has_data
+        assert disperser._wavelength_grid is not None
+
+    def test_from_fits_custom_name(self):
+        """from_fits uses the provided name."""
+        fake_table = _make_sdss_table(n=50, include_and_mask=False)
+        with patch('astropy.table.Table.read', return_value=fake_table):
+            disperser = SDSSDisperser()
+            spec = SDSSSpectrum.from_fits('fake.fits', disperser, name='MySpec')
+
+        assert spec.name == 'MySpec'

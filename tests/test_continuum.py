@@ -1179,3 +1179,184 @@ class TestPrepare:
         prepared = f._prepare(u.AA, u.um)
         assert prepared._knots[4] == pytest.approx(10000.0)
         assert prepared._n_basis == f._n_basis
+
+
+# ---------------------------------------------------------------------------
+# is_linear property
+# ---------------------------------------------------------------------------
+
+_FLUX_UNIT = u.erg / (u.s * u.cm**2 * u.AA)
+_WL_UNIT = u.um
+_LINEAR_FORMS = [Linear(), Polynomial(2), Chebyshev(2, 0.1),
+                 BSpline(jnp.array([0.9]*4 + [1.0] + [1.1]*4), degree=3),
+                 Bernstein(3, 0.9, 1.1)]
+_NONLINEAR_FORMS = [PowerLaw(), Blackbody(), ModifiedBlackbody(), AttenuatedBlackbody()]
+
+
+class TestIsLinear:
+    @pytest.mark.parametrize('form', _LINEAR_FORMS)
+    def test_linear_forms_return_true(self, form):
+        assert form.is_linear is True
+
+    @pytest.mark.parametrize('form', _NONLINEAR_FORMS)
+    def test_nonlinear_forms_return_false(self, form):
+        assert form.is_linear is False
+
+
+# ---------------------------------------------------------------------------
+# param_units method
+# ---------------------------------------------------------------------------
+
+
+class TestParamUnits:
+    @pytest.mark.parametrize('form', [
+        Linear(), PowerLaw(),
+        Polynomial(2),
+        Chebyshev(2, 0.1),
+        BSpline(jnp.array([0.9]*4 + [1.0] + [1.1]*4), degree=3),
+        Bernstein(3, 0.9, 1.1),
+        Blackbody(), ModifiedBlackbody(), AttenuatedBlackbody(),
+    ])
+    def test_param_units_returns_dict(self, form):
+        pu = form.param_units(_FLUX_UNIT, _WL_UNIT)
+        assert isinstance(pu, dict)
+        assert 'scale' in pu
+        # scale should have apply_cs=True and flux_unit
+        apply_cs, phys_unit = pu['scale']
+        assert apply_cs is True
+
+    def test_linear_slope_unit(self):
+        pu = Linear().param_units(_FLUX_UNIT, _WL_UNIT)
+        _, slope_unit = pu['slope']
+        assert slope_unit.is_equivalent(_FLUX_UNIT / _WL_UNIT)
+
+    def test_powerlaw_beta_dimensionless(self):
+        pu = PowerLaw().param_units(_FLUX_UNIT, _WL_UNIT)
+        _, beta_unit = pu['beta']
+        assert beta_unit is None
+
+    def test_blackbody_temperature_unit(self):
+        pu = Blackbody().param_units(_FLUX_UNIT, _WL_UNIT)
+        _, temp_unit = pu['temperature']
+        assert temp_unit == u.K
+
+
+# ---------------------------------------------------------------------------
+# default_priors for parameterized forms
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultPriors:
+    def test_chebyshev_default_priors_order2(self):
+        priors = Chebyshev(order=2).default_priors(region_center=1.5)
+        assert 'c1' in priors
+        assert 'c2' in priors
+        assert isinstance(priors['normalization_wavelength'], Fixed)
+        assert priors['normalization_wavelength'].value == pytest.approx(1.5)
+
+    def test_polynomial_default_priors_degree2(self):
+        priors = Polynomial(degree=2).default_priors(region_center=2.0)
+        assert 'c1' in priors
+        assert 'c2' in priors
+
+    def test_bspline_default_priors(self):
+        knots = jnp.array([0.9]*4 + [1.0, 1.05, 1.1] + [1.1]*4)
+        b = BSpline(knots, degree=3)
+        priors = b.default_priors(region_center=1.0)
+        assert 'scale' in priors
+        for i in range(1, b.n_basis):
+            assert f'coeff_{i}' in priors
+
+    def test_bernstein_default_priors(self):
+        b = Bernstein(degree=3, wavelength_min=0.9, wavelength_max=1.1)
+        priors = b.default_priors(region_center=1.0)
+        assert 'scale' in priors
+        assert 'coeff_1' in priors
+
+
+# ---------------------------------------------------------------------------
+# __eq__ cross-type (NotImplemented) and __hash__ for all forms
+# ---------------------------------------------------------------------------
+
+
+class TestFormEqHash:
+    @pytest.mark.parametrize('form', [
+        Linear(), PowerLaw(), Polynomial(2), Chebyshev(2, 0.1),
+        Blackbody(), ModifiedBlackbody(), AttenuatedBlackbody(),
+        BSpline(jnp.array([0.9]*4 + [1.0] + [1.1]*4), degree=3),
+        Bernstein(3, 0.9, 1.1),
+    ])
+    def test_hashable(self, form):
+        assert isinstance(hash(form), int)
+
+    def test_different_types_not_equal(self):
+        # ContinuumForm base __eq__ returns NotImplemented for different types
+        assert Linear() != PowerLaw()
+        assert Blackbody() != ModifiedBlackbody()
+        assert Polynomial(2) != Chebyshev(2)
+
+    def test_polynomial_eq_hash(self):
+        assert Polynomial(2) == Polynomial(2)
+        assert Polynomial(2) != Polynomial(3)
+        assert hash(Polynomial(2)) == hash(Polynomial(2))
+
+    def test_chebyshev_eq_hash(self):
+        assert Chebyshev(2, 0.1) == Chebyshev(2, 0.1)
+        assert Chebyshev(2, 0.1) != Chebyshev(2, 0.2)
+        assert isinstance(hash(Chebyshev(2, 0.1)), int)
+
+    def test_attenuated_blackbody_eq_hash(self):
+        assert AttenuatedBlackbody(0.55) == AttenuatedBlackbody(0.55)
+        assert AttenuatedBlackbody(0.55) != AttenuatedBlackbody(0.50)
+        assert isinstance(hash(AttenuatedBlackbody(0.55)), int)
+
+    def test_bspline_eq_hash(self):
+        knots = jnp.array([0.9]*4 + [1.0] + [1.1]*4)
+        b1 = BSpline(knots, degree=3)
+        b2 = BSpline(knots, degree=3)
+        assert b1 == b2
+        assert isinstance(hash(b1), int)
+
+    def test_bernstein_eq_hash(self):
+        b1 = Bernstein(3, 0.9, 1.1)
+        b2 = Bernstein(3, 0.9, 1.1)
+        assert b1 == b2
+        assert isinstance(hash(b1), int)
+
+
+# ---------------------------------------------------------------------------
+# _adapt_for_observed_region
+# ---------------------------------------------------------------------------
+
+
+class TestAdaptForObservedRegion:
+    def test_linear_returns_self(self):
+        f = Linear()
+        assert f._adapt_for_observed_region(1.0, 2.0) is f
+
+    def test_chebyshev_updates_half_width(self):
+        f = Chebyshev(order=2, half_width=0.5)
+        adapted = f._adapt_for_observed_region(0.9, 1.1)
+        assert adapted._half_width == pytest.approx((1.1 - 0.9) / 2.0)
+        assert adapted._order == 2
+
+    def test_bspline_rescales_knots(self):
+        knots = jnp.array([0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0])
+        f = BSpline(knots, degree=3)
+        adapted = f._adapt_for_observed_region(0.9, 1.1)
+        assert float(adapted._knots[0]) == pytest.approx(0.9)
+        assert float(adapted._knots[-1]) == pytest.approx(1.1)
+
+    def test_bspline_identity_knots(self):
+        # If all knots are equal, should return self (no rescaling possible)
+        knots = jnp.array([1.0, 1.0, 1.0, 1.0, 1.0])
+        f = BSpline(knots, degree=3)
+        adapted = f._adapt_for_observed_region(0.9, 1.1)
+        assert adapted is f
+
+    def test_bernstein_updates_bounds(self):
+        f = Bernstein(degree=3, wavelength_min=0.0, wavelength_max=1.0)
+        adapted = f._adapt_for_observed_region(0.9, 1.1)
+        assert adapted._wavelength_min == pytest.approx(0.9)
+        assert adapted._wavelength_max == pytest.approx(1.1)
+        assert adapted._degree == 3

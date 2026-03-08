@@ -487,15 +487,19 @@ def _insert_nan_between_regions(
     for mid in midpoints:
         idx = int(np.searchsorted(wl, mid))
         segments.append(table[prev_idx:idx])
-        nan_tbl = Table()
+        nan_tbl = type(table)()  # QTable or Table, matching the input
         for col in table.colnames:
-            col_arr = np.asarray(table[col])
+            col_obj = table[col]
+            col_arr = np.asarray(col_obj)
+            col_unit = getattr(col_obj, 'unit', None)
             if col == 'wavelength':
-                nan_tbl[col] = [mid]
+                val = u.Quantity([mid], unit=col_unit) if col_unit else [mid]
             elif col_arr.ndim == 1:
-                nan_tbl[col] = [np.nan]
+                val = u.Quantity([np.nan], unit=col_unit) if col_unit else [np.nan]
             else:
-                nan_tbl[col] = [np.full(col_arr.shape[1], np.nan)]
+                arr = np.full((1, col_arr.shape[1]), np.nan)
+                val = u.Quantity(arr, unit=col_unit) if col_unit else arr
+            nan_tbl[col] = val
         segments.append(nan_tbl)
         prev_idx = idx
     segments.append(table[prev_idx:])

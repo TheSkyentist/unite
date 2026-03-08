@@ -319,8 +319,6 @@ class Spectra:
             mask = jnp.zeros(spectrum.npix, dtype=bool)
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
-                if lam_obs <= 0:
-                    continue
                 lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
                 user_hw = lam_obs * fwhm_kms / C_KMS / 2.0  # half of FWHM
                 half_width = float(jnp.sqrt(user_hw**2 + (lsf_fwhm / 2.0) ** 2))
@@ -434,8 +432,6 @@ class Spectra:
             # Line scale: peak above continuum within ±total_fwhm of each line.
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
-                if lam_obs <= 0:
-                    continue
                 lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
                 user_fwhm = lam_obs * max_fwhm_kms / C_KMS
                 total_fwhm = float(jnp.sqrt(user_fwhm**2 + lsf_fwhm**2))
