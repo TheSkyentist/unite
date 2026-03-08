@@ -365,7 +365,7 @@ class LineConfiguration:
         strength: int | float = 1.0,
         **param_kwargs: Parameter | None,
     ) -> None:
-        """Add one spectral line.
+        r"""Add one spectral line.
 
         Parameters
         ----------
@@ -384,7 +384,7 @@ class LineConfiguration:
             the number of centers.  Default ``1.0``.
         profile : str or Profile, optional
             Line profile.  Default ``'gaussian'``.
-        **param_kwargs : Parameter
+        \*\*param_kwargs : Parameter
             Named parameter tokens keyed by the profile's
             :meth:`~unite.profile.base.Profile.param_names`.  Missing
             parameters are filled from
@@ -461,7 +461,7 @@ class LineConfiguration:
         strength: int | float | Sequence[int | float] = 1.0,
         **param_kwargs,
     ) -> None:
-        """Add multiple lines sharing the same name and profile.
+        r"""Add multiple lines sharing the same name and profile.
 
         Each entry in *centers* becomes one line.  All other arguments
         may be supplied as a single value (broadcast to every line) or
@@ -482,7 +482,7 @@ class LineConfiguration:
             Flux token(s).  Same broadcasting rule as *redshift*.
         strength : float or sequence of float, optional
             Relative flux strengths.  Default ``1.0``.
-        **param_kwargs : Parameter or sequence of Parameter
+        \*\*param_kwargs : Parameter or sequence of Parameter
             Profile parameter tokens.  Each value follows the same
             broadcasting rule.
 

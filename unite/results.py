@@ -43,6 +43,10 @@ def make_parameter_table(
         * Continuum ``scale`` parameters — ``flux_unit``
         * Continuum ``slope`` / polynomial coefficients — ``flux_unit / wl_unit^n``
         * Shape / index parameters (``beta``, ``temperature``, …) — raw values
+        * Rest equivalent width columns (``{line_label}_rew``) —
+          ``canonical_wl_unit``.  One column per line whose rest-frame
+          wavelength falls within a continuum region.  Appended after all
+          model parameters when a continuum is present.
     """
     table = QTable()
 
@@ -108,6 +112,23 @@ def make_parameter_table(
             else:
                 arr = np.asarray(samples[pname])
                 table[pname] = _to_column(pname, arr)
+
+    # Add rest equivalent width columns.
+    rew_cols = _compute_rew_columns(samples, args)
+    if rew_cols:
+        if summary:
+            for col_name, rew_arr in rew_cols.items():
+                summary_arr = np.array(
+                    [
+                        np.nanmedian(rew_arr),
+                        np.nanpercentile(rew_arr, 16),
+                        np.nanpercentile(rew_arr, 84),
+                    ]
+                )
+                table[col_name] = u.Quantity(summary_arr, unit=canonical_unit)
+        else:
+            for col_name, rew_arr in rew_cols.items():
+                table[col_name] = u.Quantity(rew_arr, unit=canonical_unit)
 
     # Add metadata (short keys for FITS compatibility).
     lsq = args.line_scale_quantity
@@ -303,6 +324,127 @@ def _summarize(arr: np.ndarray) -> np.ndarray:
             np.percentile(arr, 84, axis=0),
         ]
     )
+
+
+def _compute_rew_columns(
+    samples: dict[str, np.ndarray], args: ModelArgs
+) -> dict[str, np.ndarray]:
+    """Compute rest equivalent width per line per posterior sample.
+
+    For each line whose rest-frame wavelength falls within a continuum
+    region, the rest EW is::
+
+        REW = F_line / (C_obs * (1 + z_total))
+
+    where ``F_line`` is the physical integrated line flux
+    (``flux_unit * canonical_wl_unit``), ``C_obs`` is the continuum flux
+    density evaluated at the observed-frame line centre (``flux_unit``),
+    and the ``(1 + z_total)`` factor converts the observer-frame equivalent
+    width to rest frame.  The result is in rest-frame canonical wavelength
+    units.
+
+    Parameters
+    ----------
+    samples : dict of str to ndarray
+        Posterior samples.
+    args : ModelArgs
+        Model arguments from :meth:`ModelBuilder.build`.
+
+    Returns
+    -------
+    dict of str to ndarray
+        Mapping of ``'{line_label}_rew'`` → ``(n_samples,)`` array.
+        Lines without a covering continuum region are omitted.
+    """
+    if args.cont_config is None or args.cont_resolved_params is None:
+        return {}
+
+    cm = args.matrices
+    n_samples = _get_n_samples(samples)
+    n_lines = int(cm.wavelengths.shape[0])
+    z_sys = args.redshift
+
+    # --- flux per line: (n_samples, n_lines) ---
+    flux_vecs = np.column_stack(
+        [
+            np.full(n_samples, float(args.all_priors[n].value))
+            if isinstance(args.all_priors[n], Fixed)
+            else np.asarray(samples[n])
+            for n in cm.flux_names
+        ]
+    )
+    flux_per_line = flux_vecs @ np.asarray(cm.flux_matrix) * np.asarray(cm.strengths)
+
+    # --- redshift per line: (n_samples, n_lines) ---
+    if cm.z_names:
+        z_vecs = np.column_stack(
+            [
+                np.full(n_samples, float(args.all_priors[n].value))
+                if isinstance(args.all_priors[n], Fixed)
+                else np.asarray(samples[n])
+                for n in cm.z_names
+            ]
+        )
+        z_per_line = z_vecs @ np.asarray(cm.z_matrix)
+    else:
+        z_per_line = np.zeros((n_samples, n_lines))
+
+    line_flux_scale = args.line_flux_scales[0]
+    cont_scale = args.continuum_scales[0]
+
+    result: dict[str, np.ndarray] = {}
+
+    for j in range(n_lines):
+        label = args.line_labels[j]
+        rest_wl = float(cm.wavelengths[j])  # rest-frame, canonical unit
+
+        # Find the first continuum region whose rest-frame bounds cover this line.
+        covering_k = None
+        for k in range(len(args.cont_config)):
+            if args.cont_low[k] <= rest_wl <= args.cont_high[k]:
+                covering_k = k
+                break
+
+        if covering_k is None:
+            continue
+
+        k = covering_k
+        form = args.cont_forms[k]
+        obs_center = float(args.cont_center[k]) * (1.0 + z_sys)
+
+        # Build cont_p with (n_samples,) arrays, mirroring evaluate.py.
+        cont_p: dict[str, np.ndarray] = {}
+        for pn, tok in args.cont_resolved_params[k].items():
+            prior = args.all_priors[tok.name]
+            val: np.ndarray = (
+                np.full(n_samples, float(prior.value))
+                if isinstance(prior, Fixed)
+                else np.asarray(samples[tok.name])
+            )
+            if pn == 'normalization_wavelength':
+                val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
+            cont_p[pn] = val
+
+        # Observed-frame line centre per sample: (n_samples,)
+        z_j = z_per_line[:, j]
+        obs_wl_j = rest_wl * (1.0 + z_sys + z_j)
+
+        # Continuum flux density at line centre (un-scaled, from form.evaluate).
+        cont_val = np.asarray(form.evaluate(obs_wl_j, obs_center, cont_p))
+
+        # Physical quantities.
+        cont_physical = cont_val * cont_scale  # flux_unit
+        flux_physical = (
+            flux_per_line[:, j] * line_flux_scale
+        )  # flux_unit * canonical_unit
+
+        # Rest EW = obs EW / (1 + z_total).
+        z_total = z_sys + z_j
+        rew = flux_physical / (cont_physical * (1.0 + z_total))  # canonical_unit
+
+        result[f'{label}_rew'] = rew
+
+    return result
 
 
 def _insert_nan_between_regions(

@@ -71,7 +71,7 @@ class Profile(ABC):
         lsf_fwhm: ArrayLike,
         **params: ArrayLike,
     ) -> Array:
-        """Integrate the profile over wavelength bins.
+        r"""Integrate the profile over wavelength bins.
 
         Delegates to :meth:`jax_branch` by mapping keyword arguments to
         positional slots (p0, p1, p2) in :meth:`param_names` order.
@@ -86,7 +86,7 @@ class Profile(ABC):
             Line center wavelength.
         lsf_fwhm : ArrayLike
             Instrumental line spread function FWHM at the line center.
-        **params : ArrayLike
+        \*\*params : ArrayLike
             Parameter values, keyed by the names from :meth:`param_names`.
 
         Returns

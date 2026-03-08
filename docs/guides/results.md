@@ -41,6 +41,48 @@ table = make_parameter_table(samples, model_args, summary=True)
 print(table['stat', 'Ha_flux'])
 ```
 
+### Column units
+
+All columns carry physical {class}`~astropy.units.Quantity` units where known:
+
+| Column type | Unit |
+|-------------|------|
+| Line flux | `flux_unit * canonical_unit` |
+| FWHM | km/s |
+| Continuum `scale` | `flux_unit` |
+| Continuum `slope` / polynomial coefficients | `flux_unit / canonical_unit^n` |
+| Shape / index parameters (`beta`, `temperature`, …) | dimensionless or K |
+| **Rest equivalent width** (`{line_label}_rew`) | `canonical_unit` (rest frame) |
+
+The **canonical unit** is the wavelength unit of the first spectrum's disperser (e.g.
+`u.AA` or `u.um`).  It can be overridden when constructing `Spectra`.  See
+{doc}`spectra` for details.
+
+### Rest equivalent widths
+
+When a continuum is included in the fit, `make_parameter_table` automatically appends one
+rest equivalent width (REW) column per emission line.  Columns are named
+`{line_label}_rew` — e.g. `Ha_rew`, `[NII]_6585_rew`.
+
+The REW is computed per posterior sample as:
+
+$$\mathrm{REW}_j = \frac{F_j}{C_j^\mathrm{obs} \,(1 + z_j)}$$
+
+where $F_j$ is the physical integrated line flux (in `flux_unit * canonical_unit`),
+$C_j^\mathrm{obs}$ is the continuum flux density evaluated at the observed-frame line centre
+(in `flux_unit`), and the $(1 + z_j)$ factor (with $z_j = z_\mathrm{sys} + \Delta z_j$)
+converts the observer-frame equivalent width to **rest frame**.  The result is in
+`canonical_unit`.
+
+A few things to keep in mind:
+
+- **Sign follows line flux** — emission lines yield positive REW; absorption lines (negative
+  flux) yield negative REW.  This matches the standard spectroscopic sign convention.
+- **Lines without continuum coverage are omitted** — if a line's rest-frame wavelength falls
+  outside every continuum region, no `_rew` column is produced for it.
+- **No continuum, no REW** — if the model was built without a continuum, no `_rew` columns
+  appear at all.
+
 ### Table metadata
 
 The table carries useful metadata:

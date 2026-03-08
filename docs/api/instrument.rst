@@ -30,7 +30,6 @@ Spectrum Collection
 
 .. automodule:: unite.instrument.spectrum
    :members:
-   :undoc-members:
    :show-inheritance:
 
 NIRSpec Dispersers

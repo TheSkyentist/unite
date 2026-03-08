@@ -249,14 +249,14 @@ def form_from_dict(d: dict) -> ContinuumForm:
 
 
 def get_form(name_or_form: str | ContinuumForm, **kwargs) -> ContinuumForm:
-    """Get a :class:`ContinuumForm` by name or pass through an existing instance.
+    r"""Get a :class:`ContinuumForm` by name or pass through an existing instance.
 
     Parameters
     ----------
     name_or_form : str or ContinuumForm
         A registered form name (e.g. ``'Linear'``, ``'PowerLaw'``,
         ``'Polynomial'``) or an existing :class:`ContinuumForm` instance.
-    **kwargs
+    \*\*kwargs
         Passed to the form constructor when *name_or_form* is a string
         (e.g. ``get_form('Polynomial', degree=3)``).
 
@@ -428,6 +428,7 @@ class Polynomial(ContinuumForm):
       Default prior: ``Uniform(-10, 10)`` each.
     * ``normalization_wavelength`` — Reference wavelength.
       Default prior: ``Fixed(region_center)``.
+
     """
 
     def __init__(self, degree: int = 1) -> None:
@@ -538,6 +539,7 @@ class Chebyshev(ContinuumForm):
       Default prior: ``Uniform(-10, 10)`` each.
     * ``normalization_wavelength`` — Reference wavelength defining ``x = 0``.
       Default prior: ``Fixed(region_center)``.
+
     """
 
     def __init__(self, order: int = 2, half_width: float = 1.0) -> None:
@@ -814,6 +816,7 @@ class AttenuatedBlackbody(ContinuumForm):
       short λ).  Default prior: ``Uniform(-2, 0)``.
     * ``normalization_wavelength`` — Reference wavelength.
       Default prior: ``Fixed(region_center)``.
+
     """
 
     def __init__(self, lambda_v_micron: float | u.Quantity = 0.55) -> None:
@@ -928,6 +931,7 @@ class BSpline(ContinuumForm):
       not alter BSpline evaluation (the wavelength mapping is defined
       by the knot vector).
       Default prior: ``Fixed(region_center)``.
+
     """
 
     def __init__(self, knots, degree: int = 3) -> None:
@@ -1057,6 +1061,7 @@ class Bernstein(ContinuumForm):
       not alter Bernstein evaluation (the wavelength mapping is defined
       by ``wavelength_min/max``).
       Default prior: ``Fixed(region_center)``.
+
     """
 
     def __init__(

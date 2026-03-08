@@ -14,7 +14,6 @@ release = unite.__version__
 
 extensions = [
     'sphinx.ext.autodoc',
-    'sphinx.ext.napoleon',
     'sphinx.ext.intersphinx',
     'sphinx.ext.viewcode',
     'sphinx.ext.mathjax',
@@ -56,12 +55,7 @@ autodoc_default_options = {
 }
 autodoc_typehints = 'description'
 
-# -- Options for napoleon / numpydoc -----------------------------------------
-
-napoleon_google_docstring = False
-napoleon_numpy_docstring = True
-napoleon_use_param = True
-napoleon_use_rtype = True
+# -- Options for numpydoc ----------------------------------------------------
 
 numpydoc_show_class_members = False  # let autodoc handle member listing
 

@@ -89,6 +89,28 @@ The `redshift` argument shifts all line centres to the observed frame before cov
 filtering. Essential when fitting high-redshift sources where lines fall far from their
 rest-frame wavelengths.
 
+### Canonical Wavelength Unit
+
+All internal model computations — line centre arrays, continuum bounds, pixel integration,
+and output quantities — use a single **canonical wavelength unit**.  By default this is the
+wavelength unit of the **first spectrum's disperser** (e.g. `u.AA` for Å, `u.um` for
+microns).  When mixing spectra from different instruments with different native units, the
+first spectrum therefore sets the unit for everything.
+
+You can override this explicitly:
+
+```python
+spectra = Spectra([g235h_spectrum, g395h_spectrum], redshift=5.28, canonical_unit=u.um)
+```
+
+The canonical unit propagates to all output tables and FITS files.  In particular:
+
+- Line flux columns are in `flux_unit * canonical_unit` (integrated flux).
+- Rest equivalent width columns (see {doc}`results`) are in `canonical_unit`.
+- The `wavelength` column in per-spectrum tables is in `canonical_unit`.
+
+When in doubt, inspect `spectra.canonical_unit` before running the model.
+
 ---
 
 ## The Prepare → Scale → Build Pipeline
