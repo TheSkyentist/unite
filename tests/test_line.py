@@ -5,12 +5,12 @@ from astropy import units as u
 
 from unite.line.config import FWHM, Flux, LineConfiguration, Param, Redshift
 from unite.line.profiles import (
+    SEMG,
     Cauchy,
-    Gaussian,
     GaussHermite,
+    Gaussian,
     Laplace,
     PseudoVoigt,
-    SEMG,
     SplitNormal,
     profile_from_dict,
 )
@@ -506,7 +506,9 @@ class TestProfileIntegrateMethod:
 
         low = jnp.linspace(4500.0, 5500.0, 500)[:-1]
         high = jnp.linspace(4500.0, 5500.0, 500)[1:]
-        result = profile.integrate(low, high, center=5000.0, lsf_fwhm=5.0, **extra_kwargs)
+        result = profile.integrate(
+            low, high, center=5000.0, lsf_fwhm=5.0, **extra_kwargs
+        )
         # Cauchy has heavy tails so allow wider tolerance
         assert float(jnp.sum(result)) == pytest.approx(1.0, rel=0.1)
 
@@ -516,7 +518,9 @@ class TestProfileIntegrateMethod:
 
         low = jnp.linspace(4900.0, 5100.0, 50)[:-1]
         high = jnp.linspace(4900.0, 5100.0, 50)[1:]
-        result = profile.integrate(low, high, center=5000.0, lsf_fwhm=5.0, **extra_kwargs)
+        result = profile.integrate(
+            low, high, center=5000.0, lsf_fwhm=5.0, **extra_kwargs
+        )
         assert jnp.all(result >= 0.0)
 
 
@@ -551,7 +555,15 @@ class TestProfileSerialization:
 # Profile equality and hashing
 # ---------------------------------------------------------------------------
 
-_ALL_PROFILE_CLASSES = [Gaussian, Cauchy, PseudoVoigt, Laplace, SEMG, GaussHermite, SplitNormal]
+_ALL_PROFILE_CLASSES = [
+    Gaussian,
+    Cauchy,
+    PseudoVoigt,
+    Laplace,
+    SEMG,
+    GaussHermite,
+    SplitNormal,
+]
 
 
 class TestProfileEqHash:

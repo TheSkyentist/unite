@@ -133,7 +133,12 @@ def _setup_fixed():
     error = np.ones(len(wavelength)) * flux_unit
 
     spectrum = GenericSpectrum(
-        low=low, high=high, flux=flux, error=error, disperser=disperser, name='fixed_spec'
+        low=low,
+        high=high,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        name='fixed_spec',
     )
 
     lc = line.LineConfiguration()
@@ -149,7 +154,7 @@ def _setup_fixed():
     spectra.prepare(lc)
     spectra.compute_scales(spectra.prepared_line_config)
 
-    model_fn, args = model.ModelBuilder(
+    _model_fn, args = model.ModelBuilder(
         spectra.prepared_line_config, None, spectra
     ).build()
 
@@ -217,7 +222,7 @@ def _setup_pix_offset():
     spectra.prepare(lc)
     spectra.compute_scales(spectra.prepared_line_config)
 
-    model_fn, args = model.ModelBuilder(
+    _model_fn, args = model.ModelBuilder(
         spectra.prepared_line_config, None, spectra
     ).build()
 
@@ -255,7 +260,12 @@ def _setup_continuum():
     error = np.ones(len(wavelength)) * flux_unit
 
     spectrum = GenericSpectrum(
-        low=low, high=high, flux=flux, error=error, disperser=disperser, name='cont_spec'
+        low=low,
+        high=high,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        name='cont_spec',
     )
 
     lc = line.LineConfiguration()
@@ -267,9 +277,9 @@ def _setup_continuum():
         flux=line.Flux(prior=prior.Fixed(1.0)),
     )
 
-    cc = ContinuumConfiguration([
-        ContinuumRegion(6490.0 * u.AA, 6620.0 * u.AA, form=Linear())
-    ])
+    cc = ContinuumConfiguration(
+        [ContinuumRegion(6490.0 * u.AA, 6620.0 * u.AA, form=Linear())]
+    )
 
     spectra = Spectra([spectrum], redshift=0.0)
     spectra.prepare(lc, cc)

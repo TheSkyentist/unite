@@ -1187,9 +1187,13 @@ class TestPrepare:
 
 _FLUX_UNIT = u.erg / (u.s * u.cm**2 * u.AA)
 _WL_UNIT = u.um
-_LINEAR_FORMS = [Linear(), Polynomial(2), Chebyshev(2, 0.1),
-                 BSpline(jnp.array([0.9]*4 + [1.0] + [1.1]*4), degree=3),
-                 Bernstein(3, 0.9, 1.1)]
+_LINEAR_FORMS = [
+    Linear(),
+    Polynomial(2),
+    Chebyshev(2, 0.1),
+    BSpline(jnp.array([0.9] * 4 + [1.0] + [1.1] * 4), degree=3),
+    Bernstein(3, 0.9, 1.1),
+]
 _NONLINEAR_FORMS = [PowerLaw(), Blackbody(), ModifiedBlackbody(), AttenuatedBlackbody()]
 
 
@@ -1209,20 +1213,26 @@ class TestIsLinear:
 
 
 class TestParamUnits:
-    @pytest.mark.parametrize('form', [
-        Linear(), PowerLaw(),
-        Polynomial(2),
-        Chebyshev(2, 0.1),
-        BSpline(jnp.array([0.9]*4 + [1.0] + [1.1]*4), degree=3),
-        Bernstein(3, 0.9, 1.1),
-        Blackbody(), ModifiedBlackbody(), AttenuatedBlackbody(),
-    ])
+    @pytest.mark.parametrize(
+        'form',
+        [
+            Linear(),
+            PowerLaw(),
+            Polynomial(2),
+            Chebyshev(2, 0.1),
+            BSpline(jnp.array([0.9] * 4 + [1.0] + [1.1] * 4), degree=3),
+            Bernstein(3, 0.9, 1.1),
+            Blackbody(),
+            ModifiedBlackbody(),
+            AttenuatedBlackbody(),
+        ],
+    )
     def test_param_units_returns_dict(self, form):
         pu = form.param_units(_FLUX_UNIT, _WL_UNIT)
         assert isinstance(pu, dict)
         assert 'scale' in pu
         # scale should have apply_cs=True and flux_unit
-        apply_cs, phys_unit = pu['scale']
+        apply_cs, _phys_unit = pu['scale']
         assert apply_cs is True
 
     def test_linear_slope_unit(self):
@@ -1260,7 +1270,7 @@ class TestDefaultPriors:
         assert 'c2' in priors
 
     def test_bspline_default_priors(self):
-        knots = jnp.array([0.9]*4 + [1.0, 1.05, 1.1] + [1.1]*4)
+        knots = jnp.array([0.9] * 4 + [1.0, 1.05, 1.1] + [1.1] * 4)
         b = BSpline(knots, degree=3)
         priors = b.default_priors(region_center=1.0)
         assert 'scale' in priors
@@ -1280,12 +1290,20 @@ class TestDefaultPriors:
 
 
 class TestFormEqHash:
-    @pytest.mark.parametrize('form', [
-        Linear(), PowerLaw(), Polynomial(2), Chebyshev(2, 0.1),
-        Blackbody(), ModifiedBlackbody(), AttenuatedBlackbody(),
-        BSpline(jnp.array([0.9]*4 + [1.0] + [1.1]*4), degree=3),
-        Bernstein(3, 0.9, 1.1),
-    ])
+    @pytest.mark.parametrize(
+        'form',
+        [
+            Linear(),
+            PowerLaw(),
+            Polynomial(2),
+            Chebyshev(2, 0.1),
+            Blackbody(),
+            ModifiedBlackbody(),
+            AttenuatedBlackbody(),
+            BSpline(jnp.array([0.9] * 4 + [1.0] + [1.1] * 4), degree=3),
+            Bernstein(3, 0.9, 1.1),
+        ],
+    )
     def test_hashable(self, form):
         assert isinstance(hash(form), int)
 
@@ -1311,7 +1329,7 @@ class TestFormEqHash:
         assert isinstance(hash(AttenuatedBlackbody(0.55)), int)
 
     def test_bspline_eq_hash(self):
-        knots = jnp.array([0.9]*4 + [1.0] + [1.1]*4)
+        knots = jnp.array([0.9] * 4 + [1.0] + [1.1] * 4)
         b1 = BSpline(knots, degree=3)
         b2 = BSpline(knots, degree=3)
         assert b1 == b2

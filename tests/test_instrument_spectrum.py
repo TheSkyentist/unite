@@ -288,7 +288,9 @@ class TestScaleDiagnosticList:
         cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.prepare(lc, cont)
-        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
         return spectra.scale_diagnostics
 
     def test_string_lookup(self):
@@ -435,14 +437,20 @@ class TestComputeScalesEdgeCases:
         from unite.continuum.config import ContinuumRegion
         from unite.continuum.library import Linear
 
-        cont = ContinuumConfiguration([
-            ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),  # in coverage
-            ContinuumRegion(5000.0 * u.AA, 5100.0 * u.AA, Linear()),  # out of coverage
-        ])
+        cont = ContinuumConfiguration(
+            [
+                ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),  # in coverage
+                ContinuumRegion(
+                    5000.0 * u.AA, 5100.0 * u.AA, Linear()
+                ),  # out of coverage
+            ]
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.prepare(lc, cont, drop_empty_regions=False)
         # Should not raise; the out-of-coverage region is simply skipped
-        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
         assert spectra.line_scale is not None
 
     def test_region_too_few_pixels_fit_returns_none(self):
@@ -454,11 +462,17 @@ class TestComputeScalesEdgeCases:
         from unite.continuum.library import Linear
 
         # A tiny region that will have too few good pixels after line masking
-        cont = ContinuumConfiguration([
-            ContinuumRegion(6562.0 * u.AA, 6564.0 * u.AA, Linear()),  # inside line mask
-        ])
+        cont = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    6562.0 * u.AA, 6564.0 * u.AA, Linear()
+                )  # inside line mask
+            ]
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.prepare(lc, cont, drop_empty_regions=False)
         # Should not raise; the failed fit returns None model_region
-        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
         # No line_scale from this test (line in region is masked out)

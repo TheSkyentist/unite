@@ -9,10 +9,15 @@ from numpyro.infer import Predictive
 
 from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
+from unite.continuum.config import ContinuumRegion
 from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum, SimpleDisperser
-from unite.continuum.config import ContinuumRegion
-from unite.results import _get_n_samples, make_hdul, make_parameter_table, make_spectra_tables
+from unite.results import (
+    _get_n_samples,
+    make_hdul,
+    make_parameter_table,
+    make_spectra_tables,
+)
 
 
 def _setup():
@@ -310,9 +315,19 @@ class TestMakeSpectraTablesWithContinuum:
         tables = make_spectra_tables(samples, args, summary=True)
         t = tables[0]
         # Should have at least one continuum region column
-        cont_cols = [c for c in t.colnames if c not in (
-            'wavelength', 'model_total', 'Ha', 'observed_flux', 'observed_error', 'scaled_error'
-        )]
+        cont_cols = [
+            c
+            for c in t.colnames
+            if c
+            not in (
+                'wavelength',
+                'model_total',
+                'Ha',
+                'observed_flux',
+                'observed_error',
+                'scaled_error',
+            )
+        ]
         assert len(cont_cols) > 0
         for col in cont_cols:
             assert t[col].shape[1] == 3  # [median, p16, p84]
@@ -322,9 +337,19 @@ class TestMakeSpectraTablesWithContinuum:
         samples, args = _setup_with_continuum()
         tables = make_spectra_tables(samples, args, summary=False)
         t = tables[0]
-        cont_cols = [c for c in t.colnames if c not in (
-            'wavelength', 'model_total', 'Ha', 'observed_flux', 'observed_error', 'scaled_error'
-        )]
+        cont_cols = [
+            c
+            for c in t.colnames
+            if c
+            not in (
+                'wavelength',
+                'model_total',
+                'Ha',
+                'observed_flux',
+                'observed_error',
+                'scaled_error',
+            )
+        ]
         assert len(cont_cols) > 0
         n_samples = 4
         for col in cont_cols:
@@ -342,10 +367,10 @@ def _setup_two_region_continuum():
     from numpyro.infer import Predictive
 
     # Wide wavelength range covering two separate regions
-    wavelength = np.concatenate([
-        np.linspace(6480, 6540, 30),
-        np.linspace(6580, 6640, 30),
-    ]) * u.AA
+    wavelength = (
+        np.concatenate([np.linspace(6480, 6540, 30), np.linspace(6580, 6640, 30)])
+        * u.AA
+    )
     wavelength = np.sort(wavelength)
 
     disperser = SimpleDisperser(
@@ -358,7 +383,12 @@ def _setup_two_region_continuum():
     error = np.ones(len(wavelength)) * flux_unit
 
     spectrum = GenericSpectrum(
-        low=low, high=high, flux=flux, error=error, disperser=disperser, name='two_region_spec'
+        low=low,
+        high=high,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        name='two_region_spec',
     )
 
     lc = line.LineConfiguration()
@@ -378,10 +408,12 @@ def _setup_two_region_continuum():
     )
 
     # Two separate continuum regions
-    cc = ContinuumConfiguration([
-        ContinuumRegion(6480.0 * u.AA, 6540.0 * u.AA, form=Linear()),
-        ContinuumRegion(6580.0 * u.AA, 6640.0 * u.AA, form=Linear()),
-    ])
+    cc = ContinuumConfiguration(
+        [
+            ContinuumRegion(6480.0 * u.AA, 6540.0 * u.AA, form=Linear()),
+            ContinuumRegion(6580.0 * u.AA, 6640.0 * u.AA, form=Linear()),
+        ]
+    )
 
     spectra = Spectra([spectrum], redshift=0.0)
     spectra.prepare(lc, cc)

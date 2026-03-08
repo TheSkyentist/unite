@@ -3,7 +3,7 @@
 import jax.numpy as jnp
 import pytest
 
-from unite.continuum.fit import ContinuumFitResult, fit_continuum_form, _initial_guess
+from unite.continuum.fit import ContinuumFitResult, _initial_guess, fit_continuum_form
 from unite.continuum.library import (
     Blackbody,
     Chebyshev,
@@ -56,7 +56,9 @@ class TestFitLinear:
         """Passing normalization_wavelength explicitly uses that value."""
         form = Linear()
         flux = jnp.ones(N)
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, normalization_wavelength=0.9)
+        result = fit_continuum_form(
+            form, WL, flux, ERROR, CENTER, normalization_wavelength=0.9
+        )
         assert result.params['normalization_wavelength'] == pytest.approx(0.9)
 
     def test_linear_chi2_red_computed(self):
@@ -129,7 +131,11 @@ class TestFitNonlinear:
     def test_blackbody_fit_converges(self):
         """Blackbody fit converges to reasonable parameters."""
         form = Blackbody()
-        true_params = {'scale': 1e-3, 'temperature': 5000.0, 'normalization_wavelength': CENTER}
+        true_params = {
+            'scale': 1e-3,
+            'temperature': 5000.0,
+            'normalization_wavelength': CENTER,
+        }
         flux = form.evaluate(WL, CENTER, true_params)
 
         result = fit_continuum_form(form, WL, flux, ERROR * 1e-3, CENTER)
@@ -170,7 +176,11 @@ class TestFitNonlinear:
     def test_nonlinear_chi2_red_computed(self):
         """chi2_red is a float (not None) for well-constrained nonlinear fit."""
         form = Blackbody()
-        true_params = {'scale': 1e-3, 'temperature': 5000.0, 'normalization_wavelength': CENTER}
+        true_params = {
+            'scale': 1e-3,
+            'temperature': 5000.0,
+            'normalization_wavelength': CENTER,
+        }
         flux = form.evaluate(WL, CENTER, true_params)
 
         result = fit_continuum_form(form, WL, flux, ERROR * 1e-3, CENTER)
@@ -179,7 +189,11 @@ class TestFitNonlinear:
     def test_nonlinear_explicit_normalization_wavelength(self):
         """Explicit normalization_wavelength is used in nonlinear fit."""
         form = Blackbody()
-        true_params = {'scale': 1e-3, 'temperature': 5000.0, 'normalization_wavelength': 0.9}
+        true_params = {
+            'scale': 1e-3,
+            'temperature': 5000.0,
+            'normalization_wavelength': 0.9,
+        }
         flux = form.evaluate(WL, CENTER, true_params)
 
         result = fit_continuum_form(

@@ -19,12 +19,7 @@ def _make_sdss_table(n=50, include_and_mask=True, has_bad_ivar=False):
         ivar[10] = 0.0  # one bad pixel
     wdisp = np.ones(n) * 0.5
 
-    data = {
-        'loglam': loglam,
-        'flux': flux,
-        'ivar': ivar,
-        'wdisp': wdisp,
-    }
+    data = {'loglam': loglam, 'flux': flux, 'ivar': ivar, 'wdisp': wdisp}
     if include_and_mask:
         and_mask = np.zeros(n, dtype=int)
         and_mask[20] = 1  # one masked pixel
