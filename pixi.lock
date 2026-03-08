@@ -5864,11 +5864,11 @@ packages:
 - pypi: ./
   name: unite
   version: 1.1.1
-  sha256: f1a7c865ee0f21501c574226eda7eca44eaf3fc8963bccc2ae4fa4db4ba7b686
+  sha256: 3d1045c13074fc0ecc1626512c3f4dfc0bf2c301d26bb237fbd4191bdacb8f0d
   requires_dist:
-  - numpyro>=0.15.0,<0.21
-  - astropy>=6.0.0,<8
-  - pyyaml>=6.0.0,<7
+  - numpyro>=0.20.0,<0.21
+  - astropy>=7.2.0,<8
+  - pyyaml>=6.0.1,<7
   - pytest>=8.0 ; extra == 'test'
   - pytest-cov>=6.0 ; extra == 'test'
   - sphinx>=8.0 ; extra == 'docs'

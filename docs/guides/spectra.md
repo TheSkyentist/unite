@@ -141,6 +141,45 @@ for spec in spectra:
     print(spec.name, spec.error_scale)
 ```
 
+#### Inspecting the Continuum Fit
+
+After calling `compute_scales`, the fitted continuum model and per-region diagnostics are
+available via `Spectra.scale_diagnostics`. This is a list of
+`SpectrumScaleDiagnostic` objects — one per spectrum — each containing:
+
+| Attribute | Description |
+|---|---|
+| `wavelength` | Pixel-centre wavelengths (disperser unit) |
+| `flux` / `error` | Observed flux and uncertainty arrays |
+| `line_mask` | Boolean array — `True` where a pixel was excluded near an emission line |
+| `continuum_model` | Full-length continuum model array; `NaN` outside any fitted region |
+| `regions` | List of `RegionDiagnostic` objects, one per continuum region |
+
+Each `RegionDiagnostic` holds `obs_low`, `obs_high`, `in_region`, `good_mask`,
+`model_on_region`, `chi2_red`, and `fit_params`.
+
+A typical inspection loop:
+
+```python
+spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
+
+import numpy as np
+for diag in spectra.scale_diagnostics:
+    wl = np.asarray(diag.wavelength)
+    flux = np.asarray(diag.flux)
+    cont = np.asarray(diag.continuum_model)   # NaN outside regions
+    mask = np.asarray(diag.line_mask)
+
+    for rinfo in diag.regions:
+        good = np.asarray(rinfo.good_mask)
+        model = np.asarray(rinfo.model_on_region)  # evaluated on in_region pixels
+        print(f'  chi2_red = {rinfo.chi2_red:.2f}')
+```
+
+See `examples/scale_diagnostic_example.py` for a complete plotting script that renders
+three-panel figures (spectrum + fit, residuals in σ, residual histogram) for every
+continuum region in every spectrum.
+
 ### 3. ModelBuilder.build()
 
 ```python

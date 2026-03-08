@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
@@ -286,6 +287,87 @@ class Spectrum:
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
+# Scale diagnostics dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RegionDiagnostic:
+    """Diagnostics for a single continuum region fit.
+
+    Attributes
+    ----------
+    obs_low : float
+        Observed-frame lower bound of the region (disperser's unit).
+    obs_high : float
+        Observed-frame upper bound of the region (disperser's unit).
+    in_region : jnp.ndarray
+        Boolean mask of shape ``(npix,)`` selecting all pixels inside the
+        region bounds.
+    good_mask : jnp.ndarray
+        Boolean mask of shape ``(npix,)`` selecting pixels used for
+        fitting (``in_region & ~line_mask``).
+    model_on_region : jnp.ndarray or None
+        Best-fit continuum model evaluated at the ``in_region`` pixels.
+        ``None`` if the fit failed (too few unmasked pixels).
+    chi2_red : float or None
+        Reduced chi-squared of the fit, or ``None`` if the fit failed.
+    fit_params : dict of str to float
+        Best-fit parameter dict returned by :func:`~unite.continuum.fit.fit_continuum_form`.
+        Empty if the fit failed.
+    """
+
+    obs_low: float
+    obs_high: float
+    in_region: jnp.ndarray
+    good_mask: jnp.ndarray
+    model_on_region: jnp.ndarray | None
+    chi2_red: float | None
+    fit_params: dict = field(default_factory=dict)
+
+
+@dataclass
+class SpectrumScaleDiagnostic:
+    """Diagnostics for one spectrum produced by :meth:`Spectra.compute_scales`.
+
+    Attributes
+    ----------
+    name : str
+        Spectrum name (from :attr:`Spectrum.name`).
+    wavelength : jnp.ndarray
+        Pixel-centre wavelengths (disperser's unit), shape ``(npix,)``.
+    flux : jnp.ndarray
+        Observed flux values, shape ``(npix,)``.
+    error : jnp.ndarray
+        Flux uncertainty values, shape ``(npix,)``.
+    line_mask : jnp.ndarray
+        Boolean mask of shape ``(npix,)``; ``True`` where a pixel was
+        excluded because it lies near an emission line.
+    continuum_model : jnp.ndarray
+        Full-spectrum continuum model array of shape ``(npix,)``.
+        Pixels not covered by any continuum region are ``NaN``.
+    regions : list of RegionDiagnostic
+        Per-region fit diagnostics (one entry per region that overlaps
+        this spectrum).
+    flux_unit : astropy.units.UnitBase
+        Flux density unit of *flux* and *error*.
+    wavelength_unit : astropy.units.UnitBase
+        Wavelength unit of *wavelength*.
+    """
+
+    name: str
+    wavelength: jnp.ndarray
+    flux: jnp.ndarray
+    error: jnp.ndarray
+    line_mask: jnp.ndarray
+    continuum_model: jnp.ndarray
+    regions: list
+    flux_unit: object
+    wavelength_unit: object
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Spectra collection
 # ---------------------------------------------------------------------------
 
@@ -339,6 +421,7 @@ class Spectra:
         self._is_prepared: bool = False
         self._prepared_line_config: LineConfiguration | None = None
         self._prepared_cont_config: ContinuumConfiguration | None = None
+        self._scale_diagnostics: list[SpectrumScaleDiagnostic] | None = None
 
         # Canonical wavelength unit: default to the first spectrum's unit.
         if canonical_unit is not None:
@@ -420,6 +503,17 @@ class Spectra:
             raise ValueError(msg)
         self._continuum_scale = value
 
+    @property
+    def scale_diagnostics(self) -> list[SpectrumScaleDiagnostic] | None:
+        """Per-spectrum diagnostics from the most recent :meth:`compute_scales` call.
+
+        Returns a list of :class:`SpectrumScaleDiagnostic` objects (one per
+        spectrum), each holding the line mask, the fitted continuum model
+        array, and per-region fit details.  ``None`` if :meth:`compute_scales`
+        has not been called yet.
+        """
+        return self._scale_diagnostics
+
     def compute_scales(
         self,
         line_config: LineConfiguration,
@@ -500,8 +594,9 @@ class Spectra:
         def _fit_continuum_region(wl, flux, error, obs_low, obs_high, line_mask, form):
             """Fit the region's continuum form to unmasked pixels.
 
-            Returns (model_values_on_region, good_mask, chi2_red).
-            model_values_on_region covers all pixels in_region.
+            Returns (model_on_region, in_region, good, chi2_red, fit_params).
+            model_on_region covers all pixels in_region; good is the
+            unmasked pixel mask used for fitting.
             """
             from unite.continuum.fit import fit_continuum_form
 
@@ -511,7 +606,7 @@ class Spectra:
 
             min_params = form.n_params  # includes normalization_wavelength
             if n_good < max(min_params + 1, 3):
-                return None, in_region, None
+                return None, in_region, good, None, {}
 
             center = float((obs_low + obs_high) / 2.0)
             adapted_form = form._adapt_for_observed_region(obs_low, obs_high)
@@ -522,7 +617,7 @@ class Spectra:
             # Evaluate on all in-region pixels.
             model_region = adapted_form.evaluate(wl[in_region], center, result.params)
 
-            return model_region, in_region, result.chi2_red
+            return model_region, in_region, good, result.chi2_red, result.params
 
         # --- Line scale (with continuum subtraction when available) ---
         max_line_scale = 0.0
@@ -550,7 +645,7 @@ class Spectra:
                         line_mask,
                         region.form,
                     )
-                    model_region, in_region, _ = result
+                    model_region, in_region, _good, _, _ = result
                     if model_region is not None:
                         continuum_est = continuum_est.at[in_region].set(model_region)
 
@@ -612,7 +707,7 @@ class Spectra:
                             line_mask,
                             region.form,
                         )
-                        _, fit_region, chi2_red = result
+                        _, fit_region, _good, chi2_red, _ = result
                         if chi2_red is not None:
                             all_chi2_reds.append(chi2_red)
                             region_scale = float(jnp.sqrt(jnp.maximum(chi2_red, 1.0)))
@@ -633,6 +728,66 @@ class Spectra:
 
             cont_scale_val = max_cont_scale if max_cont_scale > 0 else 1.0
             self._continuum_scale = cont_scale_val * ref_flux_unit
+
+        # --- Collect diagnostics ---
+        diag_list = []
+        for spectrum in self._spectra:
+            wl = spectrum.wavelength
+            line_mask = _build_line_mask(spectrum, mask_fwhm_kms)
+            continuum_model_full = jnp.full(spectrum.npix, jnp.nan)
+            region_diags: list[RegionDiagnostic] = []
+
+            if continuum_config is not None:
+                for region in continuum_config:
+                    conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
+                    obs_low = region.low * conv * (1.0 + z)
+                    obs_high = region.high * conv * (1.0 + z)
+
+                    in_region = (wl >= obs_low) & (wl <= obs_high)
+                    if not jnp.any(in_region):
+                        continue
+
+                    model_region, in_region, good, chi2_red, fit_params = (
+                        _fit_continuum_region(
+                            wl,
+                            spectrum.flux,
+                            spectrum.error,
+                            obs_low,
+                            obs_high,
+                            line_mask,
+                            region.form,
+                        )
+                    )
+                    if model_region is not None:
+                        continuum_model_full = continuum_model_full.at[in_region].set(
+                            model_region
+                        )
+                    region_diags.append(
+                        RegionDiagnostic(
+                            obs_low=float(obs_low),
+                            obs_high=float(obs_high),
+                            in_region=in_region,
+                            good_mask=good,
+                            model_on_region=model_region,
+                            chi2_red=chi2_red,
+                            fit_params=fit_params,
+                        )
+                    )
+
+            diag_list.append(
+                SpectrumScaleDiagnostic(
+                    name=spectrum.name,
+                    wavelength=wl,
+                    flux=spectrum.flux,
+                    error=spectrum.error,
+                    line_mask=line_mask,
+                    continuum_model=continuum_model_full,
+                    regions=region_diags,
+                    flux_unit=spectrum.flux_unit,
+                    wavelength_unit=spectrum.unit,
+                )
+            )
+        self._scale_diagnostics = diag_list
 
     # -- preparation ----------------------------------------------------------
 
