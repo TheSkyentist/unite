@@ -229,4 +229,4 @@ When fitting multiple gratings simultaneously:
 ## Complete Script
 
 The full runnable version of this tutorial is in
-[`examples/nirspec_workflow.py`](https://github.com/rhviding/unite/blob/main/examples/nirspec_workflow.py).
+[`examples/nirspec_workflow.py`](https://github.com/TheSkyentist/unite/blob/main/examples/nirspec_workflow.py).

@@ -15,7 +15,7 @@ pixi add unite --pypi
 Clone the repository and install with all extras:
 
 ```bash
-git clone https://github.com/rhviding/unite.git
+git clone https://github.com/TheSkyentist/unite.git
 cd unite
 pip install -e ".[dev]"
 ```
@@ -25,7 +25,7 @@ pip install -e ".[dev]"
 [Pixi](https://pixi.sh/) manages both the Python environment and common tasks:
 
 ```bash
-git clone https://github.com/rhviding/unite.git
+git clone https://github.com/TheSkyentist/unite.git
 cd unite
 pixi install
 ```

@@ -4,7 +4,7 @@
 #   https://docs.pypi.org/trusted-publishers/adding-a-publisher/
 #
 #   Publisher:  GitHub Actions
-#   Owner:     rhviding
+#   Owner:     TheSkyentist
 #   Repo:      unite
 #   Workflow:  publish.yml
 #   Environment: pypi
@@ -59,7 +59,7 @@ jobs:
       url: https://pypi.org/p/unite
 
     permissions:
-      id-token: write  # required for trusted publishing
+      id-token: write # required for trusted publishing
 
     steps:
       - name: Download distribution artifacts
