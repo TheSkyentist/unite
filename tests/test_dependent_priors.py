@@ -611,12 +611,8 @@ class TestEndToEndDeepDependencies:
         predictive = Predictive(unite_model, num_samples=50)
         samples = predictive(rng_key, unite_args)
 
-        # Find the FWHM parameter keys
-        narrow_key = next(k for k in samples if 'fwhm_narrow' in k)
-        broad_key = next(k for k in samples if 'fwhm_broad' in k)
-
         # For ALL samples, broad > narrow + 200 (the prior constraint)
-        assert jnp.all(samples[broad_key] >= samples[narrow_key] + 200)
+        assert jnp.all(samples['fwhm_broad'] >= samples['fwhm_narrow'] + 200)
 
     def test_three_level_fwhm_model_respects_ordering(self):
         """Verify A < B < C ordering in sampled values."""
@@ -638,12 +634,8 @@ class TestEndToEndDeepDependencies:
         predictive = Predictive(unite_model, num_samples=50)
         samples = predictive(rng_key, unite_args)
 
-        a_key = next(k for k in samples if 'fwhm_a' in k)
-        b_key = next(k for k in samples if 'fwhm_b' in k)
-        c_key = next(k for k in samples if 'fwhm_c' in k)
-
-        assert jnp.all(samples[b_key] >= samples[a_key] + 50)
-        assert jnp.all(samples[c_key] >= samples[b_key] + 50)
+        assert jnp.all(samples['fwhm_b'] >= samples['fwhm_a'] + 50)
+        assert jnp.all(samples['fwhm_c'] >= samples['fwhm_b'] + 50)
 
     def test_redshift_hierarchy_model(self):
         """Verify redshift hierarchy produces valid samples."""
@@ -667,9 +659,6 @@ class TestEndToEndDeepDependencies:
         predictive = Predictive(unite_model, num_samples=50)
         samples = predictive(rng_key, unite_args)
 
-        sys_key = next(k for k in samples if 'z_sys' in k)
-        nlr_key = next(k for k in samples if 'z_nlr' in k)
-
         # z_nlr should be within z_sys ± 0.003
-        assert jnp.all(samples[nlr_key] >= samples[sys_key] - 0.003 - 1e-6)
-        assert jnp.all(samples[nlr_key] <= samples[sys_key] + 0.003 + 1e-6)
+        assert jnp.all(samples['z_nlr'] >= samples['z_sys'] - 0.003 - 1e-6)
+        assert jnp.all(samples['z_nlr'] <= samples['z_sys'] + 0.003 + 1e-6)

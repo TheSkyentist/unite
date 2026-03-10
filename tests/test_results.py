@@ -94,6 +94,21 @@ class TestMakeParameterTable:
         assert 'LFLXSCL' in table.meta
         assert 'ZSYS' in table.meta
 
+    def test_percentiles_mode(self):
+        samples, args = _setup()
+        percentiles = np.array([0.16, 0.5, 0.84])
+        table = make_parameter_table(samples, args, percentiles=percentiles)
+        assert 'percentile' in table.colnames
+        assert len(table) == 3  # 3 percentiles
+        assert np.allclose(table['percentile'], percentiles)
+
+    def test_percentiles_mode_has_parameters(self):
+        samples, args = _setup()
+        percentiles = np.array([0.16, 0.5, 0.84])
+        table = make_parameter_table(samples, args, percentiles=percentiles)
+        for pname in args.dependency_order:
+            assert pname in table.colnames
+
 
 class TestMakeSpectraTables:
     """Tests for make_spectra_tables."""
@@ -130,13 +145,14 @@ class TestMakeSpectraTables:
         assert 'SPECNAME' in t.meta
         assert 'NORMFAC' in t.meta
 
-    def test_summary_mode(self):
+    def test_percentiles_mode(self):
         samples, args = _setup()
-        tables = make_spectra_tables(samples, args, summary=True)
+        percentiles = np.array([0.16, 0.5, 0.84])
+        tables = make_spectra_tables(samples, args, percentiles=percentiles)
         t = tables[0]
-        # Summary gives (n_pixels, 3) for model columns
+        # Percentiles gives (n_pixels, n_percentiles) for model columns
         assert t['model_total'].shape[0] == len(t['wavelength'])
-        assert t['model_total'].shape[1] == 3  # median, p16, p84
+        assert t['model_total'].shape[1] == 3  # 3 percentiles
 
 
 def _setup_with_continuum():
@@ -213,11 +229,14 @@ class TestRestEquivalentWidths:
         table = make_parameter_table(samples, args)
         assert np.all(np.isfinite(np.asarray(table['Ha_rew'])))
 
-    def test_rew_summary_mode(self):
+    def test_rew_percentiles_mode(self):
         samples, args = _setup_with_continuum()
-        table = make_parameter_table(samples, args, summary=True)
+        percentiles = np.array([0.16, 0.5, 0.84])
+        table = make_parameter_table(samples, args, percentiles=percentiles)
         assert 'Ha_rew' in table.colnames
-        assert len(table['Ha_rew']) == 3  # median, p16, p84
+        assert len(table['Ha_rew']) == 3  # 3 percentiles
+        assert 'percentile' in table.colnames
+        assert np.allclose(table['percentile'], percentiles)
 
     def test_no_rew_without_continuum(self):
         samples, args = _setup()
@@ -309,10 +328,11 @@ class TestMakeHDULWithContinuum:
 class TestMakeSpectraTablesWithContinuum:
     """make_spectra_tables with continuum: covers lines 209-212, 220-221."""
 
-    def test_summary_mode_continuum_columns(self):
-        """Summary mode with continuum produces (n_pix, 3) continuum columns."""
+    def test_percentiles_mode_continuum_columns(self):
+        """Percentiles mode with continuum produces (n_pix, n_percentiles) continuum columns."""
         samples, args = _setup_with_continuum()
-        tables = make_spectra_tables(samples, args, summary=True)
+        percentiles = np.array([0.16, 0.5, 0.84])
+        tables = make_spectra_tables(samples, args, percentiles=percentiles)
         t = tables[0]
         # Should have at least one continuum region column
         cont_cols = [
@@ -330,12 +350,12 @@ class TestMakeSpectraTablesWithContinuum:
         ]
         assert len(cont_cols) > 0
         for col in cont_cols:
-            assert t[col].shape[1] == 3  # [median, p16, p84]
+            assert t[col].shape[1] == 3  # 3 percentiles
 
     def test_full_mode_continuum_columns(self):
-        """Full mode with continuum produces (n_pix, n_samples) continuum columns."""
+        """Full mode (percentiles=None) with continuum produces (n_pix, n_samples) continuum columns."""
         samples, args = _setup_with_continuum()
-        tables = make_spectra_tables(samples, args, summary=False)
+        tables = make_spectra_tables(samples, args, percentiles=None)
         t = tables[0]
         cont_cols = [
             c

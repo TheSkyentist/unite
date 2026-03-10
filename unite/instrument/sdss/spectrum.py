@@ -80,7 +80,12 @@ class SDSSSpectrum(GenericSpectrum):
 
     @classmethod
     def from_fits(
-        cls, path: str | Path, disperser: SDSSDisperser, *, name: str = '', cache=False
+        cls,
+        path: str | Path,
+        disperser: SDSSDisperser,
+        *,
+        name: str = '',
+        cache: bool = False,
     ) -> SDSSSpectrum:
         """Create an :class:`SDSSSpectrum` from an SDSS FITS file.
 

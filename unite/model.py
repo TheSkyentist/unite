@@ -505,6 +505,59 @@ class ModelBuilder:
         )
         return unite_model, args
 
+    def fit(
+        self,
+        num_warmup: int = 250,
+        num_samples: int = 1000,
+        num_chains: int = 1,
+        seed: int = 0,
+        progress_bar: bool = True,
+    ) -> dict:
+        """Fit the model using NUTS sampling (convenience wrapper).
+
+        This method builds the model, runs MCMC with the NUTS kernel, and
+        returns the posterior samples. For more control over the sampler
+        (e.g., custom kernel, SVI, nested sampling), call :meth:`build`
+        directly and use numpyro's inference APIs.
+
+        Parameters
+        ----------
+        num_warmup : int, optional
+            Number of warmup iterations per chain (default: 1000).
+        num_samples : int, optional
+            Number of posterior samples per chain (default: 1000).
+        num_chains : int, optional
+            Number of MCMC chains to run in parallel (default: 1).
+        seed : int, optional
+            Random seed for JAX's PRNG (default: 0).
+        progress_bar : bool, optional
+            Whether to display a progress bar (default: True).
+
+        Returns
+        -------
+        dict
+            Posterior samples as a dictionary with parameter names as keys.
+            Shape is ``(num_chains, num_samples)`` per parameter.
+
+        Examples
+        --------
+        >>> samples = builder.fit(num_warmup=200, num_samples=500, num_chains=4)
+        """
+        import jax
+        from numpyro import infer
+
+        model_fn, model_args = self.build()
+        mcmc = infer.MCMC(
+            infer.NUTS(model_fn, dense_mass=True),
+            num_warmup=num_warmup,
+            num_samples=num_samples,
+            num_chains=num_chains,
+            progress_bar=progress_bar,
+        )
+        mcmc.run(jax.random.PRNGKey(seed), model_args)
+        samples = mcmc.get_samples()
+        return samples, model_args
+
 
 # ------------------------------------------------------------------
 # Normalization helpers

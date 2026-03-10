@@ -448,7 +448,7 @@ class GenericSpectrum:
         jnp.ndarray
             Boolean array of shape ``(npix,)``.
         """
-        return (self._high > low) & (self._low < high)
+        return (self._low > low) & (self._high < high)
 
     # -- slicing (internal) ---------------------------------------------------
 

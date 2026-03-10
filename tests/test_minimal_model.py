@@ -466,6 +466,132 @@ class TestWavelengthUnitConsistency:
         assert args.cont_high[0] == pytest.approx(6600.0, rel=1e-3)
 
 
+class TestModelBuilderFit:
+    """Test suite for ModelBuilder.fit() convenience method."""
+
+    @pytest.mark.slow
+    def test_fit_basic(self):
+        """Test that fit() runs and returns samples."""
+        spectrum = create_simple_spectrum()
+        line_config = create_minimal_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        spectra.prepare(line_config, None)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+        builder = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        )
+        samples, _args = builder.fit(
+            num_warmup=10, num_samples=15, num_chains=1, seed=42
+        )
+
+        # Check that samples dictionary has expected keys
+        flux_key = next(k for k in samples if 'flux' in k and 'scale' not in k)
+        z_key = next(k for k in samples if k.endswith('-z'))
+        fwhm_key = next(k for k in samples if 'fwhm' in k)
+
+        assert len(samples[flux_key]) == 15  # num_samples
+        assert len(samples[z_key]) == 15
+        assert len(samples[fwhm_key]) == 15
+
+    @pytest.mark.slow
+    def test_fit_with_continuum(self):
+        """Test fit() with continuum configuration."""
+        from unite.continuum import ContinuumConfiguration, Linear
+
+        spectrum = create_simple_spectrum()
+        line_config = create_minimal_config()
+        cont_config = ContinuumConfiguration.from_lines(
+            [6563.0] * u.AA, pad=0.1, form=Linear()
+        )
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        spectra.prepare(line_config, cont_config)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+        builder = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        )
+        samples, _args = builder.fit(num_warmup=10, num_samples=15, seed=43)
+
+        # Check that we have samples for both line and continuum parameters
+        assert 'H_alpha-6563.0-redshift' in samples or next(
+            (k for k in samples if 'z' in k), None
+        )
+        assert next((k for k in samples if 'cont_' in k), None) is not None
+
+    @pytest.mark.slow
+    def test_fit_multiple_chains(self):
+        """Test fit() with multiple chains."""
+        spectrum = create_simple_spectrum()
+        line_config = create_minimal_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        spectra.prepare(line_config, None)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+        builder = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        )
+
+        # Suppress numpyro's device warning when running on CPU
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore', message='.*There are not enough devices.*'
+            )
+            samples, _args = builder.fit(
+                num_warmup=5, num_samples=10, num_chains=2, seed=44, progress_bar=False
+            )
+
+        # With 2 chains * 10 samples, should have 20 samples total per parameter
+        # (shape may be (2, 10) or (20,) depending on device availability)
+        flux_key = next(k for k in samples if 'flux' in k and 'scale' not in k)
+        assert samples[flux_key].size == 20
+
+    @pytest.mark.slow
+    def test_fit_reproducible_seed(self):
+        """Test that fit() with same seed produces same results."""
+        spectrum = create_simple_spectrum()
+        line_config = create_minimal_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        # First fit
+        spectra.prepare(line_config, None)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+        builder1 = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        )
+        samples1, _args = builder1.fit(
+            num_warmup=10, num_samples=20, num_chains=1, seed=999, progress_bar=False
+        )
+
+        # Second fit with same config (need fresh spectrum and line config for fresh tokens)
+        spectrum2 = create_simple_spectrum()
+        line_config2 = create_minimal_config()
+        spectra2 = Spectra([spectrum2], redshift=0.0)
+        spectra2.prepare(line_config2, None)
+        spectra2.compute_scales(
+            spectra2.prepared_line_config, spectra2.prepared_cont_config
+        )
+        builder2 = model.ModelBuilder(
+            spectra2.prepared_line_config, spectra2.prepared_cont_config, spectra2
+        )
+        samples2, _args = builder2.fit(
+            num_warmup=10, num_samples=20, num_chains=1, seed=999, progress_bar=False
+        )
+
+        # Samples should be identical (same seed, same data)
+        flux_key = next(k for k in samples1 if 'flux' in k and 'scale' not in k)
+        flux_key2 = next(k for k in samples2 if 'flux' in k and 'scale' not in k)
+        assert jnp.allclose(samples1[flux_key], samples2[flux_key2], rtol=1e-6)
+
+
 class TestFluxUnitValidation:
     """Tests for Spectrum flux/error Quantity validation."""
 

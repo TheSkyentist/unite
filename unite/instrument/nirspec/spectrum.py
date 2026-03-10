@@ -96,7 +96,7 @@ class NIRSpecSpectrum(GenericSpectrum):
         disperser: NIRSpecDisperser,
         *,
         name: str = '',
-        cache=False,
+        cache: bool = False,
     ) -> NIRSpecSpectrum:
         """Create a :class:`NIRSpecSpectrum` from a DJA FITS file (or URL).
 
@@ -128,9 +128,9 @@ class NIRSpecSpectrum(GenericSpectrum):
         spec = Table.read(path, hdu='SPEC1D', cache=cache)
 
         # Convert to correct units
-        λ = u.Quantity(spec['wave']).to(u.AA)
+        λ = u.Quantity(spec['wave']).to(u.um)
         equiv = u.equivalencies.spectral_density(λ)
-        fλ_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
+        fλ_unit = 1e-16 * u.erg / (u.s * u.cm**2 * u.um)
         fλ = spec['flux'].to(fλ_unit, equivalencies=equiv)
         eλ = spec['err'].to(fλ_unit, equivalencies=equiv)
 

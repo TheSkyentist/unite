@@ -17,25 +17,33 @@ from unite.prior import Fixed
 
 
 def make_parameter_table(
-    samples: dict[str, np.ndarray], args: ModelArgs, *, summary: bool = False
+    samples: dict[str, np.ndarray],
+    args: ModelArgs,
+    *,
+    percentiles: np.ndarray | None = None,
 ) -> QTable:
     """Build an Astropy table of posterior parameter samples in physical units.
 
     Parameters
     ----------
     samples : dict of str to ndarray
-        Posterior samples (e.g. from ``mcmc.get_samples()``).
+        Posterior samples in physical space.  When using :meth:`ModelBuilder.fit`,
+        samples are already transformed.  When calling ``mcmc.get_samples()``
+        directly, first pass through :func:`~unite.model.transform_reparam_samples`
+        to convert any reparameterized (unit-space) parameters back to physical values.
     args : ModelArgs
         Model arguments from :meth:`ModelBuilder.build`.
-    summary : bool
-        If ``True``, return a 3-row table with columns ``stat``
-        (``'median'``, ``'p16'``, ``'p84'``) and one column per
-        parameter.  Default ``False`` returns one row per sample.
+    percentiles : ndarray of float or None
+        Array of percentile values in range (0, 1), e.g. ``[0.16, 0.5, 0.84]``.
+        If provided, returns one row per percentile with percentile values.
+        If ``None`` (default), returns one row per posterior sample.
 
     Returns
     -------
     astropy.table.QTable
-        One row per posterior sample (full mode) or 3 rows (summary mode).
+        If ``percentiles`` is ``None``: one row per posterior sample.
+        If ``percentiles`` is provided: one row per percentile with a ``percentile``
+        column and one column per parameter.
         Columns carry physical units where known:
 
         * Line flux parameters — ``flux_unit * canonical_wl_unit``
@@ -90,19 +98,18 @@ def make_parameter_table(
             return u.Quantity(phys, unit=phys_unit) if phys_unit is not None else phys
         return arr  # calibration or other dimensionless param
 
-    if summary:
-        table['stat'] = ['median', 'p16', 'p84']
+    if percentiles is not None:
+        percentiles_arr = np.asarray(percentiles)
+        table['percentile'] = percentiles_arr
         for pname in args.dependency_order:
             prior = args.all_priors[pname]
             if isinstance(prior, Fixed):
                 val = float(prior.value)
-                table[pname] = _to_column(pname, np.array([val, val, val]))
+                table[pname] = _to_column(pname, np.full(len(percentiles_arr), val))
             else:
                 arr = np.asarray(samples[pname])
-                summary_arr = np.array(
-                    [np.median(arr), np.percentile(arr, 16), np.percentile(arr, 84)]
-                )
-                table[pname] = _to_column(pname, summary_arr)
+                percentile_vals = np.percentile(arr, percentiles_arr * 100)
+                table[pname] = _to_column(pname, percentile_vals)
     else:
         n_samples = _get_n_samples(samples)
         for pname in args.dependency_order:
@@ -116,16 +123,11 @@ def make_parameter_table(
     # Add rest equivalent width columns.
     rew_cols = _compute_rew_columns(samples, args)
     if rew_cols:
-        if summary:
+        if percentiles is not None:
+            percentiles_arr = np.asarray(percentiles)
             for col_name, rew_arr in rew_cols.items():
-                summary_arr = np.array(
-                    [
-                        np.nanmedian(rew_arr),
-                        np.nanpercentile(rew_arr, 16),
-                        np.nanpercentile(rew_arr, 84),
-                    ]
-                )
-                table[col_name] = u.Quantity(summary_arr, unit=canonical_unit)
+                percentile_vals = np.nanpercentile(rew_arr, percentiles_arr * 100)
+                table[col_name] = u.Quantity(percentile_vals, unit=canonical_unit)
         else:
             for col_name, rew_arr in rew_cols.items():
                 table[col_name] = u.Quantity(rew_arr, unit=canonical_unit)
@@ -148,7 +150,7 @@ def make_spectra_tables(
     args: ModelArgs,
     *,
     insert_nan: bool = False,
-    summary: bool = False,
+    percentiles: np.ndarray | None = None,
 ) -> list[Table]:
     """Build per-spectrum tables of model decompositions.
 
@@ -161,9 +163,11 @@ def make_spectra_tables(
     insert_nan : bool
         If ``True``, insert one NaN row at the midpoint wavelength between
         each pair of consecutive continuum regions.  Default ``False``.
-    summary : bool
-        If ``True``, collapse the sample dimension to ``[median, p16, p84]``
-        (shape ``(3, n_pixels)``).  Default ``False``.
+    percentiles : ndarray of float or None
+        Array of percentile values in range (0, 1), e.g. ``[0.16, 0.5, 0.84]``.
+        If provided, collapses the sample dimension to those percentiles
+        (shape ``(n_percentiles, n_pixels)``).
+        If ``None`` (default), returns all samples (shape ``(n_samples, n_pixels)``).
 
     Returns
     -------
@@ -197,18 +201,21 @@ def make_spectra_tables(
 
         t['wavelength'] = u.Quantity(wl[pixel_mask], unit=wl_unit)
 
-        if summary:
-            # _summarize returns (3, n_pixels) → trim → transpose to (n_pixels, 3)
+        if percentiles is not None:
+            # _compute_percentiles returns (n_percentiles, n_pixels) → trim → transpose to (n_pixels, n_percentiles)
             t['model_total'] = u.Quantity(
-                _summarize(pred.total[:, pixel_mask]).T, unit=spec_flux_unit
+                _compute_percentiles(pred.total[:, pixel_mask], percentiles).T,
+                unit=spec_flux_unit,
             )
             for name, arr in pred.lines.items():
                 t[name] = u.Quantity(
-                    _summarize(arr[:, pixel_mask]).T, unit=spec_flux_unit
+                    _compute_percentiles(arr[:, pixel_mask], percentiles).T,
+                    unit=spec_flux_unit,
                 )
             for name, arr in pred.continuum_regions.items():
                 t[name] = u.Quantity(
-                    _summarize(arr[:, pixel_mask]).T, unit=spec_flux_unit
+                    _compute_percentiles(arr[:, pixel_mask], percentiles).T,
+                    unit=spec_flux_unit,
                 )
         else:
             # (n_samples, n_pixels) → trim → transpose to (n_pixels, n_samples)
@@ -247,7 +254,7 @@ def make_hdul(
     args: ModelArgs,
     *,
     insert_nan: bool = False,
-    summary: bool = False,
+    percentiles: np.ndarray | None = None,
 ) -> fits.HDUList:
     """Build a FITS HDU list from posterior samples.
 
@@ -259,8 +266,10 @@ def make_hdul(
         Model arguments from :meth:`ModelBuilder.build`.
     insert_nan : bool
         Insert NaN rows between continuum regions.  Default ``False``.
-    summary : bool
-        Collapse samples to ``[median, p16, p84]``.  Default ``False``.
+    percentiles : ndarray of float or None
+        Array of percentile values in range (0, 1).
+        If provided, output tables contain percentile rows/columns.
+        If ``None`` (default), output tables contain all samples.
 
     Returns
     -------
@@ -269,9 +278,9 @@ def make_hdul(
         HDU 1: BinTableHDU from parameter table.
         HDU 2+: BinTableHDU per spectrum.
     """
-    param_table = make_parameter_table(samples, args, summary=summary)
+    param_table = make_parameter_table(samples, args, percentiles=percentiles)
     spectra_tables = make_spectra_tables(
-        samples, args, insert_nan=insert_nan, summary=summary
+        samples, args, insert_nan=insert_nan, percentiles=percentiles
     )
 
     primary = fits.PrimaryHDU()
@@ -315,15 +324,25 @@ def _get_n_samples(samples: dict[str, np.ndarray]) -> int:
     return 1
 
 
-def _summarize(arr: np.ndarray) -> np.ndarray:
-    """Collapse (n_samples, n_pixels) to (3, n_pixels): [median, p16, p84]."""
-    return np.array(
-        [
-            np.median(arr, axis=0),
-            np.percentile(arr, 16, axis=0),
-            np.percentile(arr, 84, axis=0),
-        ]
-    )
+def _compute_percentiles(
+    arr: np.ndarray, percentiles: np.ndarray | list[float]
+) -> np.ndarray:
+    """Collapse (n_samples, n_pixels) to (n_percentiles, n_pixels).
+
+    Parameters
+    ----------
+    arr : ndarray
+        Shape (n_samples, n_pixels).
+    percentiles : array-like of float
+        Percentile values in range (0, 1), e.g., [0.16, 0.5, 0.84].
+
+    Returns
+    -------
+    ndarray
+        Shape (n_percentiles, n_pixels) with percentile values.
+    """
+    percentiles_arr = np.asarray(percentiles)
+    return np.percentile(arr, percentiles_arr * 100, axis=0)
 
 
 def _compute_rew_columns(
@@ -450,7 +469,10 @@ def _compute_rew_columns(
 def _insert_nan_between_regions(
     table: Table, region_bounds: list[tuple[float, float]]
 ) -> Table:
-    """Insert one NaN row at the midpoint between each pair of consecutive regions.
+    """Insert NaN rows at region boundaries using local pixel spacing.
+
+    For each gap between consecutive regions, inserts NaN rows at synthetic
+    wavelengths estimated from the closest real pixels and their spacing.
 
     Parameters
     ----------
@@ -463,37 +485,60 @@ def _insert_nan_between_regions(
     Returns
     -------
     Table
-        New table with NaN rows inserted at gap midpoints.
+        New table with NaN rows inserted at region boundaries.
     """
     from astropy.table import vstack
 
     # Sort regions and find gaps between consecutive ones.
     sorted_bounds = sorted(region_bounds)
-    midpoints = []
+    wl = np.asarray(table['wavelength'])
+
+    # Collect boundary wavelengths for each gap.
+    boundary_wls = []
     for j in range(len(sorted_bounds) - 1):
         _, high_j = sorted_bounds[j]
         low_next, _ = sorted_bounds[j + 1]
         if low_next > high_j:
-            midpoints.append((high_j + low_next) / 2.0)
+            # Find closest pixel to high_j and estimate boundary wavelength.
+            idx_high = np.argmin(np.abs(wl - high_j))
+            closest_high = wl[idx_high]
+            if idx_high > 0:
+                delta_high = closest_high - wl[idx_high - 1]
+            else:
+                delta_high = wl[1] - wl[0] if len(wl) > 1 else 1.0
+            boundary_wls.append(closest_high + delta_high)
 
-    if not midpoints:
+            # Find closest pixel to low_next and estimate boundary wavelength.
+            idx_low = np.argmin(np.abs(wl - low_next))
+            closest_low = wl[idx_low]
+            if idx_low < len(wl) - 1:
+                delta_low = wl[idx_low + 1] - closest_low
+            else:
+                delta_low = wl[-1] - wl[-2] if len(wl) > 1 else 1.0
+            boundary_wls.append(closest_low - delta_low)
+
+    if not boundary_wls:
         return table
 
-    wl = np.asarray(table['wavelength'])
+    # Sort by wavelength to maintain order in table.
+    boundary_wls.sort()
 
-    # Build segments separated by NaN rows at each midpoint.
+    # Build segments with NaN rows at boundaries.
     segments = []
     prev_idx = 0
-    for mid in midpoints:
-        idx = int(np.searchsorted(wl, mid))
+
+    for wl_val in boundary_wls:
+        idx = int(np.searchsorted(wl, wl_val))
         segments.append(table[prev_idx:idx])
+
+        # Insert NaN row at boundary wavelength.
         nan_tbl = type(table)()  # QTable or Table, matching the input
         for col in table.colnames:
             col_obj = table[col]
             col_arr = np.asarray(col_obj)
             col_unit = getattr(col_obj, 'unit', None)
             if col == 'wavelength':
-                val = u.Quantity([mid], unit=col_unit) if col_unit else [mid]
+                val = u.Quantity([wl_val], unit=col_unit) if col_unit else [wl_val]
             elif col_arr.ndim == 1:
                 val = u.Quantity([np.nan], unit=col_unit) if col_unit else [np.nan]
             else:
@@ -501,7 +546,9 @@ def _insert_nan_between_regions(
                 val = u.Quantity(arr, unit=col_unit) if col_unit else arr
             nan_tbl[col] = val
         segments.append(nan_tbl)
+
         prev_idx = idx
+
     segments.append(table[prev_idx:])
 
     return vstack(segments)
