@@ -143,7 +143,7 @@ class TestMinimalModel:
 
         # Create simple continuum (note: must pass Quantity with units)
         cont_config = ContinuumConfiguration.from_lines(
-            [6563.0] * u.AA, pad=0.1, form=Linear()
+            [6563.0] * u.AA, width=30_000 * u.km / u.s, form=Linear()
         )
 
         spectra = Spectra([spectrum], redshift=0.0)
@@ -504,7 +504,7 @@ class TestModelBuilderFit:
         spectrum = create_simple_spectrum()
         line_config = create_minimal_config()
         cont_config = ContinuumConfiguration.from_lines(
-            [6563.0] * u.AA, pad=0.1, form=Linear()
+            [6563.0] * u.AA, width=60_000 * u.km / u.s, form=Linear()
         )
         spectra = Spectra([spectrum], redshift=0.0)
 
@@ -590,6 +590,96 @@ class TestModelBuilderFit:
         flux_key = next(k for k in samples1 if 'flux' in k and 'scale' not in k)
         flux_key2 = next(k for k in samples2 if 'flux' in k and 'scale' not in k)
         assert jnp.allclose(samples1[flux_key], samples2[flux_key2], rtol=1e-6)
+
+
+class TestFullyMaskedSpectra:
+    """Test graceful handling of spectra with no continuum overlap."""
+
+    def _make_spectrum(self, wl_range, *, name='test'):
+        """Create a test spectrum with the given wavelength range in Angstrom."""
+        wl = np.linspace(*wl_range, 50) * u.AA
+        disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0, name=name)
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        rng = np.random.default_rng(42)
+        flux = rng.normal(10, 2, len(wl)) * flux_unit
+        error = np.full(len(wl), 2.0) * flux_unit
+        return GenericSpectrum(
+            low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
+        )
+
+    def test_one_spectrum_fully_masked_warns(self):
+        """A spectrum with no continuum overlap should be excluded with a warning."""
+        from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
+
+        # Spectrum 1 covers 6500-6600 AA (overlaps continuum).
+        spec_good = self._make_spectrum((6500, 6600), name='good')
+        # Spectrum 2 covers 8000-8100 AA (no overlap with continuum).
+        spec_bad = self._make_spectrum((8000, 8100), name='bad')
+
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+
+        # Continuum only covers 6450-6650 AA.
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6450.0 * u.AA, 6650.0 * u.AA, Linear())]
+        )
+
+        spectra = Spectra([spec_good, spec_bad], redshift=0.0)
+        spectra.prepare(lc, cont)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            unite_model_fn, unite_args = model.ModelBuilder(
+                spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+            ).build()
+
+        # Should warn about the excluded spectrum.
+        msgs = [str(x.message) for x in w]
+        assert any('bad' in m and 'excluded' in m for m in msgs), msgs
+
+        # Only the good spectrum should be in the model.
+        assert len(unite_args.spectra) == 1
+        assert unite_args.spectra[0].name == 'good'
+
+        # Model should still be executable.
+        rng_key = random.PRNGKey(99)
+        predictive = Predictive(unite_model_fn, num_samples=2)
+        samples = predictive(rng_key, unite_args)
+        assert 'obs_good' in samples
+
+    def test_all_spectra_fully_masked_raises(self):
+        """If all spectra are fully masked, build() should raise ValueError."""
+        from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
+
+        # Spectrum covers 8000-8100 AA, but continuum is at 6450-6650 AA.
+        spec = self._make_spectrum((8000, 8100), name='far_away')
+
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6450.0 * u.AA, 6650.0 * u.AA, Linear())]
+        )
+
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc, cont)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+
+        with (
+            pytest.raises(ValueError, match='All spectra are fully masked'),
+            warnings.catch_warnings(),
+        ):
+            warnings.simplefilter('always')
+            model.ModelBuilder(
+                spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+            ).build()
 
 
 class TestFluxUnitValidation:

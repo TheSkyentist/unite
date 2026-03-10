@@ -61,7 +61,7 @@ constraints where numerical precision matters. Enable it before any JAX computat
 
 ```python
 import jax
-jax.config.update('jax_enable_x64', True)
+jax.enable_64(True)
 
 # Now import unite and other JAX-dependent packages
 from unite import line, model, prior

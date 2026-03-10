@@ -11,7 +11,7 @@ import numpy as np
 import yaml
 from astropy import units as u
 
-from unite._utils import _ensure_wavelength
+from unite._utils import C_KMS, _ensure_velocity, _ensure_wavelength
 from unite.continuum.library import ContinuumForm, Linear, form_from_dict, get_form
 from unite.prior import Fixed, Parameter, Prior, Uniform, prior_from_dict
 
@@ -365,22 +365,24 @@ class ContinuumConfiguration:
     def from_lines(
         cls,
         wavelengths: u.Quantity,
-        pad: float = 0.05,
+        width: u.Quantity = 15_000.0 * u.km / u.s,
         form: ContinuumForm | None = None,
     ) -> ContinuumConfiguration:
         """Auto-generate continuum regions from line wavelengths.
 
-        Each line is padded by a fractional amount in wavelength space,
-        and overlapping regions are merged.  All generated regions are
-        independent: each receives its own auto-created parameter tokens.
+        Each line gets a region of total width *width* (i.e. ``±width/2``
+        in velocity space around the line centre).  Overlapping regions
+        are merged.  All generated regions are independent: each receives
+        its own auto-created parameter tokens.
 
         Parameters
         ----------
         wavelengths : astropy.units.Quantity
             Rest-frame wavelengths of spectral lines (must have length units).
-        pad : float
-            Fractional wavelength padding (dimensionless, delta-z
-            equivalent).  Default ``0.05`` corresponds to ~15,000 km/s.
+        width : astropy.units.Quantity, optional
+            Total velocity width of each region (must have velocity units,
+            e.g. ``km/s``).  Each line is padded by ``±width/2``.
+            Defaults to ``3000 km/s``.
         form : ContinuumForm, optional
             Functional form to assign to every region.  Defaults to
             :class:`~unite.continuum.library.Linear`.
@@ -392,11 +394,18 @@ class ContinuumConfiguration:
         Raises
         ------
         TypeError
-            If *wavelengths* is not an astropy Quantity with length units.
+            If *wavelengths* is not an astropy Quantity with length units,
+            or if *width* is not a Quantity with velocity units.
         ValueError
-            If *wavelengths* is empty.
+            If *wavelengths* is empty or *width* is not positive.
         """
         wl_q = _ensure_wavelength(wavelengths, 'wavelengths')
+        width_q = _ensure_velocity(width, 'width')
+        width_kms = float(width_q.to(u.km / u.s).value)
+        if width_kms <= 0:
+            msg = f'width must be positive, got {width_kms} km/s.'
+            raise ValueError(msg)
+
         wl = np.asarray(wl_q.value, dtype=float)
         if wl.size == 0:
             msg = 'wavelengths must not be empty.'
@@ -405,8 +414,11 @@ class ContinuumConfiguration:
         if form is None:
             form = Linear()
 
+        # Convert half-width in velocity to a fractional wavelength offset.
+        half_frac = (width_kms / 2.0) / C_KMS
+
         intervals: list[tuple[float, float]] = sorted(
-            (float(w * (1.0 - pad)), float(w * (1.0 + pad))) for w in wl
+            (float(w * (1.0 - half_frac)), float(w * (1.0 + half_frac))) for w in wl
         )
         merged = _merge_intervals(intervals)
         regions = [

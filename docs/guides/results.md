@@ -32,13 +32,26 @@ import numpy as np
 print(f"Ha_flux: {np.median(table['Ha_flux']):.3f} ± {np.std(table['Ha_flux']):.3f}")
 ```
 
-### Summary (median + 16th/84th percentiles)
+### Percentile summaries
 
 ```python
-table = make_parameter_table(samples, model_args, summary=True)
-# Three rows: 'median', 'p16', 'p84'
+import numpy as np
 
-print(table['stat', 'Ha_flux'])
+# Return median and 68% credible interval
+percentiles = np.array([0.16, 0.5, 0.84])
+table = make_parameter_table(samples, model_args, percentiles=percentiles)
+# Three rows: percentiles [0.16, 0.5, 0.84]
+
+print(table)
+print(table['Ha_flux'])  # shape (3,) for the 3 percentiles
+```
+
+Alternatively, you can return all posterior samples (default):
+
+```python
+table = make_parameter_table(samples, model_args)
+# One row per sample
+print(table.colnames)
 ```
 
 ### Column units
@@ -101,7 +114,14 @@ The table carries useful metadata:
 objects — one per spectrum — with the model decomposed into individual components.
 
 ```python
-tables = make_spectra_tables(samples, model_args, summary=True)
+import numpy as np
+
+# Get all posterior samples
+tables = make_spectra_tables(samples, model_args)
+
+# OR get specific percentiles
+percentiles = np.array([0.16, 0.5, 0.84])
+tables = make_spectra_tables(samples, model_args, percentiles=percentiles)
 
 for t in tables:
     print(t.meta['SPECNAME'])   # spectrum name
@@ -123,9 +143,9 @@ for t in tables:
 
 ### Array shapes
 
-- **Full mode** (default): each column except `wavelength` has shape `(n_pixels, n_samples)`.
-- **Summary mode** (`summary=True`): shape is `(n_pixels, 3)` — columns are
-  `[median, p16, p84]` along the last axis.
+- **All samples (default, `percentiles=None`)**: each model column has shape `(n_pixels, n_samples)`.
+- **Percentile mode** (e.g., `percentiles=[0.16, 0.5, 0.84]`): shape is `(n_pixels, n_percentiles)`.
+  Each sample along the last axis corresponds to one percentile value.
 
 ### NaN separators between regions
 
@@ -134,12 +154,15 @@ row at the wavelength gap between each pair of regions. This is useful for clean
 plots:
 
 ```python
-tables = make_spectra_tables(samples, model_args, summary=True, insert_nan=True)
-
+import numpy as np
 import matplotlib.pyplot as plt
+
+percentiles = np.array([0.16, 0.5, 0.84])
+tables = make_spectra_tables(samples, model_args, percentiles=percentiles, insert_nan=True)
+
 fig, ax = plt.subplots()
 for t in tables:
-    ax.step(t['wavelength'], t['model_total'][:, 0],  # median
+    ax.step(t['wavelength'], t['model_total'][:, 1],  # median (index 1 = 0.5 percentile)
             where='mid', label=t.meta['SPECNAME'])
 ax.set_xlabel('Wavelength')
 ax.legend()
@@ -152,7 +175,14 @@ ax.legend()
 {func}`~unite.results.make_hdul` wraps everything in an {class}`~astropy.io.fits.HDUList`:
 
 ```python
-hdul = make_hdul(samples, model_args, summary=True)
+import numpy as np
+
+# Get all posterior samples
+hdul = make_hdul(samples, model_args)
+
+# OR save specific percentiles to FITS
+percentiles = np.array([0.16, 0.5, 0.84])
+hdul = make_hdul(samples, model_args, percentiles=percentiles)
 hdul.writeto('results.fits', overwrite=True)
 ```
 

@@ -33,16 +33,16 @@ class TestFitLinear:
 
     def test_linear_recovers_params(self):
         """Fit a known linear continuum and check params are close."""
-        # True: scale=2.0, slope=1.0, center=1.0
+        # True: scale=2.0, angle=1.0, center=1.0
         form = Linear()
-        true_params = {'scale': 2.0, 'slope': 1.0, 'normalization_wavelength': CENTER}
+        true_params = {'scale': 2.0, 'angle': 1.0, 'normalization_wavelength': CENTER}
         flux = form.evaluate(WL, CENTER, true_params)
 
         result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
 
         assert isinstance(result, ContinuumFitResult)
         assert result.params['scale'] == pytest.approx(2.0, abs=1e-4)
-        assert result.params['slope'] == pytest.approx(1.0, abs=1e-4)
+        assert result.params['angle'] == pytest.approx(1.0, abs=1e-4)
         assert result.params['normalization_wavelength'] == pytest.approx(CENTER)
 
     def test_linear_normalization_wavelength_default(self):

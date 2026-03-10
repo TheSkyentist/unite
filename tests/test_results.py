@@ -189,7 +189,9 @@ def _setup_with_continuum():
         flux=line.Flux(prior=prior.Uniform(0, 5)),
     )
 
-    cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+    cont = ContinuumConfiguration.from_lines(
+        lc.centers, width=30_000 * u.km / u.s, form=Linear()
+    )
 
     spectra = Spectra([spectrum], redshift=0.0)
     spectra.prepare(lc, cont)

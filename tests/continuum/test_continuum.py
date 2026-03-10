@@ -69,7 +69,7 @@ class TestContinuumScale:
     def test_wrong_slot_raises(self):
         tok = ContinuumScale('s')
         region = ContinuumRegion(
-            1.0 * u.um, 2.0 * u.um, Linear(), params={'slope': tok}
+            1.0 * u.um, 2.0 * u.um, Linear(), params={'angle': tok}
         )
         with pytest.raises(ValueError, match=r'ContinuumScale.*"scale"'):
             ContinuumConfiguration([region])
@@ -184,9 +184,9 @@ class TestContinuumRegion:
         assert isinstance(r.form, Linear)
 
     def test_params_stored(self):
-        p = Parameter('my_slope', prior=Uniform(-5, 5))
-        r = ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), params={'slope': p})
-        assert r.params['slope'] is p
+        p = Parameter('my_angle', prior=Uniform(-5, 5))
+        r = ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), params={'angle': p})
+        assert r.params['angle'] is p
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ class TestResolvedParams:
         resolved = config.resolved_params[0]
         assert 'scale' in resolved
         assert resolved['scale'].name == 'cont_linear_0_scale'
-        assert resolved['slope'].name == 'cont_linear_0_slope'
+        assert resolved['angle'].name == 'cont_linear_0_angle'
         assert (
             resolved['normalization_wavelength'].name
             == 'cont_linear_0_normalization_wavelength'
@@ -412,11 +412,13 @@ class TestFromLines:
         r0 = config.resolved_params[0]
         r1 = config.resolved_params[1]
         assert r0['scale'] is not r1['scale']
-        assert r0['slope'] is not r1['slope']
+        assert r0['angle'] is not r1['angle']
 
     def test_overlapping_lines_merged(self):
         # Two lines close together → their padded windows merge into one region.
-        config = ContinuumConfiguration.from_lines([6549.86, 6585.27] * u.AA, pad=0.05)
+        config = ContinuumConfiguration.from_lines(
+            [6549.86, 6585.27] * u.AA, width=30_000 * u.km / u.s
+        )
         assert len(config) == 1
 
     def test_empty_raises(self):
@@ -652,7 +654,7 @@ _CENTER = 1.0
 
 class TestLinear:
     def test_param_names(self):
-        assert Linear().param_names() == ('scale', 'slope', 'normalization_wavelength')
+        assert Linear().param_names() == ('scale', 'angle', 'normalization_wavelength')
 
     def test_n_params(self):
         assert Linear().n_params == 3
@@ -660,7 +662,7 @@ class TestLinear:
     def test_default_priors_keys(self):
         assert set(Linear().default_priors()) == {
             'scale',
-            'slope',
+            'angle',
             'normalization_wavelength',
         }
 
@@ -672,16 +674,16 @@ class TestLinear:
     def test_evaluate_shape(self):
         params = {
             'scale': jnp.array(1.0),
-            'slope': jnp.array(0.0),
+            'angle': jnp.array(0.0),
             'normalization_wavelength': jnp.array(_CENTER),
         }
         result = Linear().evaluate(_WL, _CENTER, params)
         assert result.shape == _WL.shape
 
-    def test_evaluate_flat_at_zero_slope(self):
+    def test_evaluate_flat_at_zero_angle(self):
         params = {
             'scale': jnp.array(2.0),
-            'slope': jnp.array(0.0),
+            'angle': jnp.array(0.0),
             'normalization_wavelength': jnp.array(_CENTER),
         }
         result = Linear().evaluate(_WL, _CENTER, params)
@@ -691,7 +693,7 @@ class TestLinear:
         nw = 1.05
         params = {
             'scale': jnp.array(3.0),
-            'slope': jnp.array(5.0),
+            'angle': jnp.array(5.0),
             'normalization_wavelength': jnp.array(nw),
         }
         val = Linear().evaluate(jnp.array([nw]), _CENTER, params)
@@ -1235,10 +1237,10 @@ class TestParamUnits:
         apply_cs, _phys_unit = pu['scale']
         assert apply_cs is True
 
-    def test_linear_slope_unit(self):
+    def test_linear_angle_dimensionless(self):
         pu = Linear().param_units(_FLUX_UNIT, _WL_UNIT)
-        _, slope_unit = pu['slope']
-        assert slope_unit.is_equivalent(_FLUX_UNIT / _WL_UNIT)
+        _, angle_unit = pu['angle']
+        assert angle_unit is None
 
     def test_powerlaw_beta_dimensionless(self):
         pu = PowerLaw().param_units(_FLUX_UNIT, _WL_UNIT)

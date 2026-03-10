@@ -26,7 +26,7 @@ def _make_line_config():
 def _make_continuum_config():
     """Create a simple continuum config."""
     return ContinuumConfiguration.from_lines(
-        [6564.61, 6585.27] * u.AA, pad=0.05, form=Linear()
+        [6564.61, 6585.27] * u.AA, width=30_000 * u.km / u.s, form=Linear()
     )
 
 

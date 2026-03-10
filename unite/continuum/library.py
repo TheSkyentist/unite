@@ -316,12 +316,12 @@ class Linear(ContinuumForm):
         return True
 
     def param_names(self) -> tuple[str, ...]:
-        return ('scale', 'slope', 'normalization_wavelength')
+        return ('scale', 'angle', 'normalization_wavelength')
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
-            'scale': Uniform(0, 10),
-            'slope': Uniform(-10, 10),
+            'scale': Uniform(0, 2),
+            'angle': Uniform(-jnp.pi, jnp.pi),
             'normalization_wavelength': Fixed(region_center),
         }
 
@@ -330,7 +330,7 @@ class Linear(ContinuumForm):
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
         return {
             'scale': (True, flux_unit),
-            'slope': (True, flux_unit / wl_unit),
+            'angle': (False, None),
             'normalization_wavelength': (False, wl_unit),
         }
 
@@ -338,7 +338,7 @@ class Linear(ContinuumForm):
         self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
     ) -> Array:
         nw = params['normalization_wavelength']
-        return params['scale'] + params['slope'] * (wavelength - nw)
+        return params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
 
     def to_dict(self) -> dict:
         return {'type': 'Linear'}
@@ -377,7 +377,7 @@ class PowerLaw(ContinuumForm):
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
-            'scale': Uniform(0, 10),
+            'scale': Uniform(0, 2),
             'beta': Uniform(-5, 5),
             'normalization_wavelength': Fixed(region_center),
         }
@@ -456,7 +456,7 @@ class Polynomial(ContinuumForm):
         )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
-        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._degree + 1):
             priors[f'c{i}'] = Uniform(-10, 10)
         priors['normalization_wavelength'] = Fixed(region_center)
@@ -579,7 +579,7 @@ class Chebyshev(ContinuumForm):
         )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
-        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._order + 1):
             priors[f'c{i}'] = Uniform(-10, 10)
         priors['normalization_wavelength'] = Fixed(region_center)
@@ -678,7 +678,7 @@ class Blackbody(ContinuumForm):
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
-            'scale': Uniform(0, 10),
+            'scale': Uniform(0, 2),
             'temperature': Uniform(100, 50000),
             'normalization_wavelength': Fixed(region_center),
         }
@@ -743,7 +743,7 @@ class ModifiedBlackbody(ContinuumForm):
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
-            'scale': Uniform(0, 10),
+            'scale': Uniform(0, 2),
             'temperature': Uniform(100, 50000),
             'beta': Uniform(-4, 4),
             'normalization_wavelength': Fixed(region_center),
@@ -844,7 +844,7 @@ class AttenuatedBlackbody(ContinuumForm):
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
-            'scale': Uniform(0, 10),
+            'scale': Uniform(0, 2),
             'temperature': Uniform(100, 50000),
             'tau_v': Uniform(0, 5),
             'alpha': Uniform(-2, 0),
@@ -971,7 +971,7 @@ class BSpline(ContinuumForm):
         )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
-        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._n_basis):
             priors[f'coeff_{i}'] = Uniform(-10, 10)
         priors['normalization_wavelength'] = Fixed(region_center)
@@ -1108,7 +1108,7 @@ class Bernstein(ContinuumForm):
         )
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
-        priors: dict[str, Prior] = {'scale': Uniform(0, 10)}
+        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._degree + 1):
             priors[f'coeff_{i}'] = Uniform(0, 10)
         priors['normalization_wavelength'] = Fixed(region_center)

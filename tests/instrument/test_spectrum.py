@@ -139,7 +139,9 @@ class TestComputeScales:
     def test_continuum_scale_with_config(self):
         spectrum = _make_spectrum()
         lc = _make_line_config()
-        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+        cont = ContinuumConfiguration.from_lines(
+            lc.centers, width=30_000 * u.km / u.s, form=Linear()
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.compute_scales(lc, cont)
         assert spectra.line_scale is not None
@@ -149,7 +151,9 @@ class TestComputeScales:
     def test_continuum_scale_has_flux_density_units(self):
         spectrum = _make_spectrum()
         lc = _make_line_config()
-        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+        cont = ContinuumConfiguration.from_lines(
+            lc.centers, width=30_000 * u.km / u.s, form=Linear()
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.compute_scales(lc, cont)
         ref = u.erg / u.s / u.cm**2 / u.AA
@@ -194,7 +198,9 @@ class TestComputeScales:
         """error_scale=True should set per-pixel error_scale >= 1."""
         spectrum = _make_spectrum(noise_std=2.0, continuum_level=10.0)
         lc = _make_line_config()
-        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+        cont = ContinuumConfiguration.from_lines(
+            lc.centers, width=30_000 * u.km / u.s, form=Linear()
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.compute_scales(lc, cont, error_scale=True)
         scale = spectrum.error_scale
@@ -285,7 +291,9 @@ class TestScaleDiagnosticList:
     def _get_diagnostics(self):
         spectrum = _make_spectrum()
         lc = _make_line_config()
-        cont = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+        cont = ContinuumConfiguration.from_lines(
+            lc.centers, width=30_000 * u.km / u.s, form=Linear()
+        )
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.prepare(lc, cont)
         spectra.compute_scales(

@@ -153,9 +153,12 @@ def _ensure_wavelength(
         If *ndim* is provided and *value* does not have that many dimensions.
     """
     if not isinstance(value, u.Quantity):
-        raise TypeError(
-            f'{name} must be an astropy Quantity with wavelength units, got {type(value).__name__}.'
-        )
+        if hasattr(value, 'unit'):
+            value = u.Quantity(value)
+        else:
+            raise TypeError(
+                f'{name} must be an astropy Quantity with wavelength units, got {type(value).__name__}.'
+            )
     if not value.unit.is_equivalent(u.m):  # type: ignore[union-attr]
         raise ValueError(
             f'{name} must have wavelength (length) units, got {value.unit!r}.'
@@ -211,9 +214,12 @@ def _ensure_velocity(value: u.Quantity, name: str = 'velocity') -> u.Quantity:
         If *value* does not have velocity units.
     """
     if not isinstance(value, u.Quantity):
-        raise TypeError(
-            f'{name} must be an astropy Quantity with velocity units (e.g. km/s), got {type(value).__name__}.'
-        )
+        if hasattr(value, 'unit'):
+            value = u.Quantity(value)
+        else:
+            raise TypeError(
+                f'{name} must be an astropy Quantity with velocity units (e.g. km/s), got {type(value).__name__}.'
+            )
     if not value.unit.is_equivalent(u.km / u.s):
         raise ValueError(
             f'{name} must have velocity units (e.g. km/s), got {value.unit!r}.'
@@ -274,10 +280,13 @@ def _ensure_flux_density_quantity(
         *ndim* is provided and the array has the wrong dimensionality.
     """
     if not isinstance(value, u.Quantity):
-        raise TypeError(
-            f'{name} must be an astropy Quantity with flux density units '
-            f'(e.g. erg/s/cm^2/Angstrom), got {type(value).__name__}.'
-        )
+        if hasattr(value, 'unit'):
+            value = u.Quantity(value)
+        else:
+            raise TypeError(
+                f'{name} must be an astropy Quantity with flux density units '
+                f'(e.g. erg/s/cm^2/Angstrom), got {type(value).__name__}.'
+            )
     _ensure_flux_density(value.unit)
     if ndim is not None and value.ndim != ndim:
         raise ValueError(f'{name} must be {ndim}-D, got {value.ndim}-D array.')

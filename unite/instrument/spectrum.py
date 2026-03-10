@@ -259,8 +259,8 @@ class Spectra:
         line_config: LineConfiguration,
         continuum_config: ContinuumConfiguration | None = None,
         *,
-        max_fwhm: u.Quantity = 1000.0 * u.km / u.s,
-        line_mask_fwhm: u.Quantity = 1000.0 * u.km / u.s,
+        line_mask_width: u.Quantity = 1000.0 * u.km / u.s,
+        max_width: u.Quantity = 1000.0 * u.km / u.s,
         error_scale: bool = False,
     ) -> None:
         """Estimate characteristic flux scales for lines and continuum.
@@ -303,10 +303,10 @@ class Spectra:
             :attr:`~unite.instrument.generic.GenericSpectrum.error_scale`.
             Default ``False``.
         """
-        max_fwhm = _ensure_velocity(max_fwhm, 'max_fwhm')
-        line_mask_fwhm = _ensure_velocity(line_mask_fwhm, 'line_mask_fwhm')
-        max_fwhm_kms = float(max_fwhm.to(u.km / u.s).value)
-        mask_fwhm_kms = float(line_mask_fwhm.to(u.km / u.s).value)
+        max_width = _ensure_velocity(max_width, 'max_fwhm')
+        line_mask_width = _ensure_velocity(line_mask_width, 'line_mask_fwhm')
+        max_width_kms = float(max_width.to(u.km / u.s).value)
+        mask_width_kms = float(line_mask_width.to(u.km / u.s).value)
         from unite._utils import _wavelength_conversion_factor
 
         z = self._redshift
@@ -368,7 +368,7 @@ class Spectra:
                 spectrum.flux_unit, ref_flux_unit
             )
             wl_conv = _wavelength_conversion_factor(spectrum.unit, ref_wl_unit)
-            line_mask = _build_line_mask(spectrum, mask_fwhm_kms)
+            line_mask = _build_line_mask(spectrum, mask_width_kms)
 
             continuum_model = jnp.full(spectrum.npix, jnp.nan)
             per_pixel_scale = jnp.ones(spectrum.npix)
@@ -433,17 +433,16 @@ class Spectra:
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
                 lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
-                user_fwhm = lam_obs * max_fwhm_kms / C_KMS
-                total_fwhm = float(jnp.sqrt(user_fwhm**2 + lsf_fwhm**2))
-                in_window = (wl >= lam_obs - total_fwhm) & (wl <= lam_obs + total_fwhm)
+                mask_width_lam = lam_obs * mask_width_kms / C_KMS
+                half_width = float(jnp.sqrt(mask_width_lam**2 + lsf_fwhm**2)) / 2
+                in_window = (wl >= lam_obs - half_width) & (wl <= lam_obs + half_width)
                 if not jnp.any(in_window):
                     continue
                 peak_above = float(
-                    jnp.max(
-                        jnp.abs(spectrum.flux[in_window] - continuum_model[in_window])
-                    )
+                    jnp.nanmax(spectrum.flux[in_window] - continuum_model[in_window])
                 )
-                flux_est = peak_above * flux_conv * total_fwhm * wl_conv
+                max_width_lam = max_width_kms * lam_obs / C_KMS
+                flux_est = peak_above * flux_conv * max_width_lam * wl_conv
                 max_line_scale = max(max_line_scale, flux_est)
 
             diag_list.append(

@@ -406,7 +406,24 @@ class ModelBuilder:
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
                     mask = mask | s.pixel_mask(obs_low, obs_high)
-                trimmed_spectra.append(s._sliced(mask))
+                trimmed = s._sliced(mask)
+                if trimmed.npix > 0:
+                    trimmed_spectra.append(trimmed)
+                else:
+                    warnings.warn(
+                        f'Spectrum {s.name!r} has no pixels overlapping '
+                        f'any continuum region and will be excluded from '
+                        f'the fit.',
+                        UserWarning,
+                        stacklevel=2,
+                    )
+            if not trimmed_spectra:
+                msg = (
+                    'All spectra are fully masked after trimming to '
+                    'continuum regions. Check that your continuum '
+                    'configuration covers the observed wavelength range.'
+                )
+                raise ValueError(msg)
         else:
             trimmed_spectra = list(self._spectra)
 
