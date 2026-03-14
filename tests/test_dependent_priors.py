@@ -32,7 +32,7 @@ from unite.prior import ParameterRef, TruncatedNormal, Uniform, topological_sort
 def _make_spectrum(wl_range=(6400, 6700), npix=200, name='test'):
     """Create a test spectrum covering the given range."""
     wl = np.linspace(*wl_range, npix) * u.AA
-    disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0, name=name)
+    disperser = SimpleDisperser(wavelength=wl, R=3000.0, name=name)
     low = wl - 0.5 * np.gradient(wl)
     high = wl + 0.5 * np.gradient(wl)
     flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
@@ -299,7 +299,11 @@ class TestComplexLineConfig:
 
         # Narrow lines
         lc.add_line(
-            'Ha', 6564.61 * u.AA, redshift=z_nlr, fwhm_gauss=fwhm_narrow, flux=f_ha_n
+            'Ha_narrow',
+            6564.61 * u.AA,
+            redshift=z_nlr,
+            fwhm_gauss=fwhm_narrow,
+            flux=f_ha_n,
         )
         lc.add_line(
             'NII_6585',
@@ -318,12 +322,16 @@ class TestComplexLineConfig:
 
         # Broad lines
         lc.add_line(
-            'Ha', 6564.61 * u.AA, redshift=z_blr, fwhm_gauss=fwhm_broad, flux=f_ha_b
+            'Ha_broad',
+            6564.61 * u.AA,
+            redshift=z_blr,
+            fwhm_gauss=fwhm_broad,
+            flux=f_ha_b,
         )
 
         # Outflow lines
         lc.add_line(
-            'Ha', 6564.61 * u.AA, redshift=z_out, fwhm_gauss=fwhm_out, flux=f_ha_out
+            'Ha_out', 6564.61 * u.AA, redshift=z_out, fwhm_gauss=fwhm_out, flux=f_ha_out
         )
 
         return lc
@@ -595,13 +603,13 @@ class TestEndToEndDeepDependencies:
 
     def test_narrow_broad_model_respects_ordering(self):
         """Verify sampled broad FWHM > sampled narrow FWHM + offset."""
-        fwhm_narrow = FWHM('fwhm_narrow', prior=Uniform(50, 300))
-        fwhm_broad = FWHM('fwhm_broad', prior=Uniform(low=fwhm_narrow + 200, high=3000))
+        fwhm_narrow = FWHM('narrow', prior=Uniform(50, 300))
+        fwhm_broad = FWHM('broad', prior=Uniform(low=fwhm_narrow + 200, high=3000))
 
         lc = LineConfiguration()
-        z = Redshift('z', prior=Uniform(-0.005, 0.005))
-        lc.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm_gauss=fwhm_narrow)
-        lc.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm_gauss=fwhm_broad)
+        z = Redshift('sys', prior=Uniform(-0.005, 0.005))
+        lc.add_line('Ha_narrow', 6564.61 * u.AA, redshift=z, fwhm_gauss=fwhm_narrow)
+        lc.add_line('Ha_broad', 6564.61 * u.AA, redshift=z, fwhm_gauss=fwhm_broad)
 
         spec = _make_spectrum()
         spectra = Spectra([spec], redshift=0.0)
@@ -611,17 +619,20 @@ class TestEndToEndDeepDependencies:
         predictive = Predictive(unite_model, num_samples=50)
         samples = predictive(rng_key, unite_args)
 
+        # Site names: fwhm_gauss_narrow, fwhm_gauss_broad
         # For ALL samples, broad > narrow + 200 (the prior constraint)
-        assert jnp.all(samples['fwhm_broad'] >= samples['fwhm_narrow'] + 200)
+        assert jnp.all(
+            samples['fwhm_gauss_broad'] >= samples['fwhm_gauss_narrow'] + 200
+        )
 
     def test_three_level_fwhm_model_respects_ordering(self):
         """Verify A < B < C ordering in sampled values."""
-        a = FWHM('fwhm_a', prior=Uniform(50, 200))
-        b = FWHM('fwhm_b', prior=Uniform(low=a + 50, high=800))
-        c = FWHM('fwhm_c', prior=Uniform(low=b + 50, high=3000))
+        a = FWHM('a', prior=Uniform(50, 200))
+        b = FWHM('b', prior=Uniform(low=a + 50, high=800))
+        c = FWHM('c', prior=Uniform(low=b + 50, high=3000))
 
         lc = LineConfiguration()
-        z = Redshift('z', prior=Uniform(-0.005, 0.005))
+        z = Redshift('sys', prior=Uniform(-0.005, 0.005))
         lc.add_line('L1', 6564.61 * u.AA, redshift=z, fwhm_gauss=a)
         lc.add_line('L2', 6564.61 * u.AA, redshift=z, fwhm_gauss=b)
         lc.add_line('L3', 6564.61 * u.AA, redshift=z, fwhm_gauss=c)
@@ -634,14 +645,15 @@ class TestEndToEndDeepDependencies:
         predictive = Predictive(unite_model, num_samples=50)
         samples = predictive(rng_key, unite_args)
 
-        assert jnp.all(samples['fwhm_b'] >= samples['fwhm_a'] + 50)
-        assert jnp.all(samples['fwhm_c'] >= samples['fwhm_b'] + 50)
+        # Site names: fwhm_gauss_a, fwhm_gauss_b, fwhm_gauss_c
+        assert jnp.all(samples['fwhm_gauss_b'] >= samples['fwhm_gauss_a'] + 50)
+        assert jnp.all(samples['fwhm_gauss_c'] >= samples['fwhm_gauss_b'] + 50)
 
     def test_redshift_hierarchy_model(self):
         """Verify redshift hierarchy produces valid samples."""
-        z_sys = Redshift('z_sys', prior=Uniform(-0.005, 0.005))
+        z_sys = Redshift('sys', prior=Uniform(-0.005, 0.005))
         z_nlr = Redshift(
-            'z_nlr',
+            'nlr',
             prior=TruncatedNormal(
                 loc=z_sys, scale=0.001, low=z_sys - 0.003, high=z_sys + 0.003
             ),
@@ -659,6 +671,7 @@ class TestEndToEndDeepDependencies:
         predictive = Predictive(unite_model, num_samples=50)
         samples = predictive(rng_key, unite_args)
 
+        # Site names: z_sys, z_nlr
         # z_nlr should be within z_sys ± 0.003
         assert jnp.all(samples['z_nlr'] >= samples['z_sys'] - 0.003 - 1e-6)
         assert jnp.all(samples['z_nlr'] <= samples['z_sys'] + 0.003 + 1e-6)

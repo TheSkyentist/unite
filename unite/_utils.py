@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TypeVar
 
 from astropy import units as u
@@ -119,197 +119,61 @@ def _broadcast(val, arg_name: str, n: int) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Wavelength validation
+# Core Validation Utility
 # ---------------------------------------------------------------------------
 
 
-def _ensure_wavelength(
-    value: u.Quantity, name: str = 'wavelength', *, ndim: int | None = None
+def _ensure_quantity(
+    value: u.Quantity, ref_unit: u.UnitBase, name: str, ndim: int | Iterable[int]
 ) -> u.Quantity:
-    """Validate that *value* is an astropy Quantity with wavelength (length) units.
-
-    Parameters
-    ----------
-    value : astropy.units.Quantity
-        Value to validate.
-    name : str, optional
-        Name used in error messages.  Defaults to ``'wavelength'``.
-    ndim : int, optional
-        If provided, also validates that the quantity has exactly this
-        number of dimensions.
-
-    Returns
-    -------
-    astropy.units.Quantity
-        The validated quantity (unchanged).
-
-    Raises
-    ------
-    TypeError
-        If *value* is not a :class:`~astropy.units.Quantity`.
-    ValueError
-        If *value* does not have length (wavelength) units.
-    ValueError
-        If *ndim* is provided and *value* does not have that many dimensions.
-    """
+    # 1. Type validation and casting
     if not isinstance(value, u.Quantity):
         if hasattr(value, 'unit'):
             value = u.Quantity(value)
         else:
             raise TypeError(
-                f'{name} must be an astropy Quantity with wavelength units, got {type(value).__name__}.'
+                f'{name} must be an astropy Quantity with {ref_unit.physical_type} units, '
+                f'got {type(value).__name__}.'
             )
-    if not value.unit.is_equivalent(u.m):  # type: ignore[union-attr]
+
+    # 2. Unit equivalence validation
+    if not value.unit.is_equivalent(ref_unit):
         raise ValueError(
-            f'{name} must have wavelength (length) units, got {value.unit!r}.'
+            f'{name} must have units equivalent to {ref_unit}, got {value.unit}.'
         )
-    if ndim is not None and value.ndim != ndim:
-        raise ValueError(f'{name} must be {ndim}-D, got {value.ndim}-D array.')
+
+    # 3. Flexible ndim validation (supports int or list/tuple)
+    allowed_ndims = [ndim] if isinstance(ndim, int) else ndim
+    if value.ndim not in allowed_ndims:
+        allowed_str = ' or '.join(map(str, allowed_ndims))
+        raise ValueError(f'{name} must be {allowed_str}-D, got {value.ndim}-D array.')
+
     return value
 
 
 # ---------------------------------------------------------------------------
-# Unit conversion helpers
+# Specific Physical Type Wrappers
 # ---------------------------------------------------------------------------
 
 
-def _wavelength_conversion_factor(from_unit: u.UnitBase, to_unit: u.UnitBase) -> float:
-    """Return the scalar multiplier to convert wavelengths from *from_unit* to *to_unit*.
-
-    Parameters
-    ----------
-    from_unit : astropy.units.UnitBase
-        Source wavelength unit.
-    to_unit : astropy.units.UnitBase
-        Target wavelength unit.
-
-    Returns
-    -------
-    float
-        Multiplicative factor such that ``value_in_to = value_in_from * factor``.
-    """
-    return float((1.0 * from_unit).to(to_unit).value)
+def _ensure_wavelength(value, name, ndim):
+    return _ensure_quantity(value, u.m, name, ndim)
 
 
-def _ensure_velocity(value: u.Quantity, name: str = 'velocity') -> u.Quantity:
-    """Validate that *value* is a Quantity with velocity units.
-
-    Parameters
-    ----------
-    value : astropy.units.Quantity
-        Value to validate.
-    name : str, optional
-        Name used in error messages.  Defaults to ``'velocity'``.
-
-    Returns
-    -------
-    astropy.units.Quantity
-        The validated quantity (unchanged).
-
-    Raises
-    ------
-    TypeError
-        If *value* is not a :class:`~astropy.units.Quantity`.
-    ValueError
-        If *value* does not have velocity units.
-    """
-    if not isinstance(value, u.Quantity):
-        if hasattr(value, 'unit'):
-            value = u.Quantity(value)
-        else:
-            raise TypeError(
-                f'{name} must be an astropy Quantity with velocity units (e.g. km/s), got {type(value).__name__}.'
-            )
-    if not value.unit.is_equivalent(u.km / u.s):
-        raise ValueError(
-            f'{name} must have velocity units (e.g. km/s), got {value.unit!r}.'
-        )
-    return value
+def _ensure_velocity(value, name, ndim):
+    return _ensure_quantity(value, u.km / u.s, name, ndim)
 
 
-def _ensure_flux_density(unit: u.UnitBase) -> None:
-    """Validate that *unit* is a spectral flux density per wavelength.
-
-    Accepted units must be dimensionally equivalent to
-    ``erg / s / cm^2 / Angstrom`` (i.e. energy per time per area per
-    wavelength).
-
-    Parameters
-    ----------
-    unit : astropy.units.UnitBase
-        Unit to validate.
-
-    Raises
-    ------
-    ValueError
-        If the unit is not a valid f_lambda flux density.
-    """
-    ref = u.erg / u.s / u.cm**2 / u.AA
-    if not unit.is_equivalent(ref):
-        raise ValueError(
-            f'flux_unit must be a spectral flux density per wavelength (e.g. erg/s/cm^2/Angstrom), got {unit!r}.'
-        )
+def _ensure_flux_density(value, name, ndim):
+    ref = u.erg / (u.s * u.cm**2 * u.AA)
+    return _ensure_quantity(value, ref, name, ndim)
 
 
-def _ensure_flux_density_quantity(
-    value: u.Quantity, name: str = 'flux', *, ndim: int | None = None
-) -> u.Quantity:
-    """Validate that *value* is a Quantity with f_lambda flux density units.
-
-    Parameters
-    ----------
-    value : astropy.units.Quantity
-        Value to validate.
-    name : str, optional
-        Name used in error messages.  Defaults to ``'flux'``.
-    ndim : int, optional
-        If provided, also validates that the quantity has exactly this
-        number of dimensions.
-
-    Returns
-    -------
-    astropy.units.Quantity
-        The validated quantity (unchanged).
-
-    Raises
-    ------
-    TypeError
-        If *value* is not a :class:`~astropy.units.Quantity`.
-    ValueError
-        If *value* does not have f_lambda flux density units, or if
-        *ndim* is provided and the array has the wrong dimensionality.
-    """
-    if not isinstance(value, u.Quantity):
-        if hasattr(value, 'unit'):
-            value = u.Quantity(value)
-        else:
-            raise TypeError(
-                f'{name} must be an astropy Quantity with flux density units '
-                f'(e.g. erg/s/cm^2/Angstrom), got {type(value).__name__}.'
-            )
-    _ensure_flux_density(value.unit)
-    if ndim is not None and value.ndim != ndim:
-        raise ValueError(f'{name} must be {ndim}-D, got {value.ndim}-D array.')
-    return value
+# ---------------------------------------------------------------------------
+# Unit Conversion
+# ---------------------------------------------------------------------------
 
 
-def _flux_density_conversion_factor(
-    from_unit: u.UnitBase, to_unit: u.UnitBase
-) -> float:
-    """Return the scalar multiplier to convert f_lambda from *from_unit* to *to_unit*.
-
-    Both units must be spectral flux density per wavelength (f_lambda).
-
-    Parameters
-    ----------
-    from_unit : astropy.units.UnitBase
-        Source f_lambda unit.
-    to_unit : astropy.units.UnitBase
-        Target f_lambda unit.
-
-    Returns
-    -------
-    float
-        Multiplicative factor such that ``value_in_to = value_in_from * factor``.
-    """
+def _get_conversion_factor(from_unit: u.UnitBase, to_unit: u.UnitBase) -> float:
+    """Return generic scalar multiplier to convert between equivalent units."""
     return float((1.0 * from_unit).to(to_unit).value)

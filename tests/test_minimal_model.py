@@ -20,9 +20,7 @@ def create_simple_spectrum():
     wavelength = np.linspace(6500, 6600, 100) * u.AA
 
     # Create a simple disperser with constant R=3000
-    disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='test_disperser'
-    )
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test_disperser')
 
     # Create pixel edges (low and high)
     low = wavelength - 0.5 * np.gradient(wavelength)
@@ -122,8 +120,9 @@ class TestMinimalModel:
         actual_params = set(samples.keys())
 
         # Check that line parameters exist (at least flux, z, fwhm)
+        # New naming: flux_*, z_*, fwhm_gauss_*
         flux_params = [k for k in actual_params if 'flux' in k and 'scale' not in k]
-        z_params = [k for k in actual_params if k.endswith('-z')]
+        z_params = [k for k in actual_params if k.startswith('z_')]
         fwhm_params = [k for k in actual_params if 'fwhm' in k]
 
         assert len(flux_params) >= 1, f'No flux parameters found in {actual_params}'
@@ -159,9 +158,18 @@ class TestMinimalModel:
         predictive = Predictive(unite_model, num_samples=2)
         samples = predictive(rng_key, unite_args)
 
-        # Check for continuum parameters
-        continuum_params = [k for k in samples if k.startswith('cont_')]
-        assert len(continuum_params) > 0, 'No continuum parameters found'
+        # Check for continuum parameters — new naming: scale_0, angle_0, norm_wav_0, etc.
+        continuum_params = [
+            k
+            for k in samples
+            if any(
+                k.startswith(p)
+                for p in ('scale_', 'angle_', 'norm_wav_', 'beta_', 'slope_')
+            )
+        ]
+        assert len(continuum_params) > 0, (
+            f'No continuum parameters found in {set(samples.keys())}'
+        )
 
     @pytest.mark.slow
     def test_quick_mcmc(self):
@@ -192,9 +200,9 @@ class TestMinimalModel:
         # Check that we got samples for all parameters
         samples = mcmc.get_samples()
 
-        # Find flux, z, fwhm parameters by pattern
+        # Find flux, z, fwhm parameters by pattern (new naming: flux_*, z_*, fwhm_gauss_*)
         flux_key = next(k for k in samples if 'flux' in k and 'scale' not in k)
-        z_key = next(k for k in samples if k.endswith('-z'))
+        z_key = next(k for k in samples if k.startswith('z_'))
         fwhm_key = next(k for k in samples if 'fwhm' in k)
 
         assert len(samples[flux_key]) == 10
@@ -331,9 +339,7 @@ class TestWavelengthUnitConsistency:
         """Create a test spectrum in the given wavelength unit."""
         wl_aa = np.linspace(6500, 6600, 100) * u.AA
         wl = wl_aa.to(unit)
-        disperser = SimpleDisperser(
-            wavelength=wl.value, unit=unit, R=3000.0, name=name or str(unit)
-        )
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name=name or str(unit))
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
 
@@ -382,9 +388,7 @@ class TestWavelengthUnitConsistency:
     def test_normalization_brings_flux_to_o1(self):
         """Spectrum with flux ~1.5 (in 1e-17 unit) should have norm_factor ~1.5."""
         wl = np.linspace(6500, 6600, 50) * u.AA
-        disperser = SimpleDisperser(
-            wavelength=wl.value, unit=u.AA, R=3000.0, name='faint'
-        )
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='faint')
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
         flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
@@ -487,9 +491,9 @@ class TestModelBuilderFit:
             num_warmup=10, num_samples=15, num_chains=1, seed=42
         )
 
-        # Check that samples dictionary has expected keys
+        # Check that samples dictionary has expected keys (new naming: flux_*, z_*, fwhm_gauss_*)
         flux_key = next(k for k in samples if 'flux' in k and 'scale' not in k)
-        z_key = next(k for k in samples if k.endswith('-z'))
+        z_key = next(k for k in samples if k.startswith('z_'))
         fwhm_key = next(k for k in samples if 'fwhm' in k)
 
         assert len(samples[flux_key]) == 15  # num_samples
@@ -518,10 +522,22 @@ class TestModelBuilderFit:
         samples, _args = builder.fit(num_warmup=10, num_samples=15, seed=43)
 
         # Check that we have samples for both line and continuum parameters
-        assert 'H_alpha-6563.0-redshift' in samples or next(
-            (k for k in samples if 'z' in k), None
+        assert next((k for k in samples if k.startswith('z_')), None) is not None
+        # Continuum parameters use new naming: scale_*, angle_*, norm_wav_*, etc.
+        assert (
+            next(
+                (
+                    k
+                    for k in samples
+                    if any(
+                        k.startswith(p)
+                        for p in ('scale_', 'angle_', 'norm_wav_', 'beta_', 'slope_')
+                    )
+                ),
+                None,
+            )
+            is not None
         )
-        assert next((k for k in samples if 'cont_' in k), None) is not None
 
     @pytest.mark.slow
     def test_fit_multiple_chains(self):
@@ -549,6 +565,7 @@ class TestModelBuilderFit:
 
         # With 2 chains * 10 samples, should have 20 samples total per parameter
         # (shape may be (2, 10) or (20,) depending on device availability)
+        # New naming: flux_*, z_*, fwhm_gauss_*
         flux_key = next(k for k in samples if 'flux' in k and 'scale' not in k)
         assert samples[flux_key].size == 20
 
@@ -587,6 +604,7 @@ class TestModelBuilderFit:
         )
 
         # Samples should be identical (same seed, same data)
+        # New naming: flux_*, z_*, fwhm_gauss_*
         flux_key = next(k for k in samples1 if 'flux' in k and 'scale' not in k)
         flux_key2 = next(k for k in samples2 if 'flux' in k and 'scale' not in k)
         assert jnp.allclose(samples1[flux_key], samples2[flux_key2], rtol=1e-6)
@@ -598,7 +616,7 @@ class TestFullyMaskedSpectra:
     def _make_spectrum(self, wl_range, *, name='test'):
         """Create a test spectrum with the given wavelength range in Angstrom."""
         wl = np.linspace(*wl_range, 50) * u.AA
-        disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0, name=name)
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name=name)
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
         flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
@@ -652,8 +670,8 @@ class TestFullyMaskedSpectra:
         samples = predictive(rng_key, unite_args)
         assert 'obs_good' in samples
 
-    def test_all_spectra_fully_masked_raises(self):
-        """If all spectra are fully masked, build() should raise ValueError."""
+    def test_all_spectra_fully_masked_warns(self):
+        """If all spectra are fully masked, build() warns and returns empty args."""
         from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
 
         # Spectrum covers 8000-8100 AA, but continuum is at 6450-6650 AA.
@@ -668,18 +686,45 @@ class TestFullyMaskedSpectra:
 
         spectra = Spectra([spec], redshift=0.0)
         spectra.prepare(lc, cont)
+        # compute_scales would raise because the line is outside coverage;
+        # set scales manually to test the downstream build() warning.
+        spectra.line_scale = 1e-17 * u.erg / u.s / u.cm**2
+        spectra.continuum_scale = 1e-17 * u.erg / u.s / u.cm**2 / u.AA
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter('always')
+            _unite_model_fn, unite_args = model.ModelBuilder(
+                spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+            ).build()
+
+        msgs = [str(x.message) for x in w]
+        assert any('All spectra are fully masked' in m for m in msgs), msgs
+
+        # ModelArgs should report zero spectra.
+        assert len(unite_args) == 0
+        assert not unite_args
+
+    def test_model_args_len(self):
+        """len(ModelArgs) returns the number of spectra."""
+        spec = self._make_spectrum((6500, 6600), name='a')
+
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
         spectra.compute_scales(
             spectra.prepared_line_config, spectra.prepared_cont_config
         )
 
-        with (
-            pytest.raises(ValueError, match='All spectra are fully masked'),
-            warnings.catch_warnings(),
-        ):
+        with warnings.catch_warnings():
             warnings.simplefilter('always')
-            model.ModelBuilder(
+            _, args = model.ModelBuilder(
                 spectra.prepared_line_config, spectra.prepared_cont_config, spectra
             ).build()
+
+        assert len(args) == 1
+        assert args
 
 
 class TestFluxUnitValidation:
@@ -688,7 +733,7 @@ class TestFluxUnitValidation:
     def test_valid_flux_unit_accepted(self):
         """f_lambda Quantity should be accepted."""
         wl = np.linspace(6500, 6600, 10) * u.AA
-        disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0)
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0)
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
         flux_unit = u.erg / u.s / u.cm**2 / u.AA
@@ -703,11 +748,14 @@ class TestFluxUnitValidation:
     def test_invalid_flux_unit_raises(self):
         """Non-f_lambda unit (e.g. Jy) should raise."""
         wl = np.linspace(6500, 6600, 10) * u.AA
-        disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0)
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0)
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
 
-        with pytest.raises(ValueError, match='spectral flux density'):
+        with pytest.raises(
+            ValueError,
+            match=r'must have units equivalent to erg / \(Angstrom s cm2\), got Jy',
+        ):
             GenericSpectrum(
                 low=low,
                 high=high,
@@ -719,7 +767,7 @@ class TestFluxUnitValidation:
     def test_bare_array_raises(self):
         """Bare arrays (not Quantity) should raise TypeError."""
         wl = np.linspace(6500, 6600, 10) * u.AA
-        disperser = SimpleDisperser(wavelength=wl.value, unit=u.AA, R=3000.0)
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0)
         low = wl - 0.5 * np.gradient(wl)
         high = wl + 0.5 * np.gradient(wl)
 

@@ -17,7 +17,12 @@ import jax.numpy as jnp
 from astropy import units as u
 from jax.typing import ArrayLike
 
-from unite._utils import C_KMS, _ensure_flux_density_quantity, _ensure_wavelength
+from unite._utils import (
+    C_KMS,
+    _ensure_flux_density,
+    _ensure_velocity,
+    _ensure_wavelength,
+)
 from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
 
 # ---------------------------------------------------------------------------
@@ -113,17 +118,14 @@ class SimpleDisperser(Disperser):
 
     Parameters
     ----------
-    wavelength : ArrayLike
+    wavelength : u.Quantity
         Pixel-centre wavelengths.  Must be 1-D.
-    unit : astropy.units.UnitBase
-        The wavelength unit of the grid.
     R : ArrayLike, optional
         Resolving power (scalar or per-pixel array).
-    dlam : ArrayLike, optional
-        Spectral resolution Δλ (scalar or per-pixel array, same unit as
-        *wavelength*).
-    dvel : ArrayLike, optional
-        Velocity resolution in km/s (scalar or per-pixel array).
+    dlam : u.Quantity, optional
+        Spectral resolution Δλ, must be in wavelength units (scalar or per-pixel array)
+    dvel : u.Quantity, optional
+        Velocity resolution in velocity units (scalar or per-pixel array).
     name : str, optional
         Human-readable label.
     r_scale : RScale, optional
@@ -148,19 +150,19 @@ class SimpleDisperser(Disperser):
 
     def __init__(
         self,
-        wavelength: ArrayLike,
-        unit: u.UnitBase,
+        wavelength: u.Quantity,
         *,
         R: ArrayLike | None = None,  # noqa: N803
-        dlam: ArrayLike | None = None,
-        dvel: ArrayLike | None = None,
+        dlam: u.Quantity | None = None,
+        dvel: u.Quantity | None = None,
         name: str = '',
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
     ) -> None:
+        wavelength = _ensure_wavelength(wavelength, 'wavelength', ndim=1)
         super().__init__(
-            unit,
+            wavelength.unit,
             name=name,
             r_scale=r_scale,
             flux_scale=flux_scale,
@@ -172,7 +174,7 @@ class SimpleDisperser(Disperser):
             msg = f'Exactly one of R, dlam, or dvel must be provided, but {n_specified} were given.'
             raise ValueError(msg)
 
-        self._wavelength = jnp.asarray(wavelength, dtype=float)
+        self._wavelength = jnp.asarray(wavelength.value, dtype=float)
 
         # Compute dlam_dpix from the pixel grid.
         self._dlam_dpix_grid = jnp.gradient(self._wavelength)
@@ -181,10 +183,12 @@ class SimpleDisperser(Disperser):
         if R is not None:
             self._R_grid = self._validated_input(R, 'R')
         elif dlam is not None:
-            dlam_arr = self._validated_input(dlam, 'dlam')
+            dlam = _ensure_wavelength(dlam, 'dlam', ndim=[0, 1])
+            dlam_arr = self._validated_input(dlam.to(wavelength.unit).value, 'dlam')
             self._R_grid = self._wavelength / dlam_arr
         else:
-            dvel_arr = self._validated_input(dvel, 'dvel')
+            dvel = _ensure_velocity(dvel, 'dvel', ndim=[0, 1])
+            dvel_arr = self._validated_input(dvel.to(u.km / u.s).value, 'dvel')
             self._R_grid = C_KMS / dvel_arr
 
     def _validated_input(self, value: ArrayLike, name: str) -> jnp.ndarray:
@@ -290,8 +294,8 @@ class GenericSpectrum:
         name: str = '',
     ) -> None:
         # -- flux unit --------------------------------------------------------
-        flux = _ensure_flux_density_quantity(flux, 'flux', ndim=1)
-        error = _ensure_flux_density_quantity(error, 'error', ndim=1)
+        flux = _ensure_flux_density(flux, 'flux', ndim=1)
+        error = _ensure_flux_density(error, 'error', ndim=1)
         if not flux.unit.is_equivalent(error.unit):
             msg = f'flux and error must have compatible units, got {flux.unit!r} and {error.unit!r}.'
             raise ValueError(msg)

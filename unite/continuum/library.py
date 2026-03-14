@@ -10,11 +10,7 @@ from astropy import units as u
 from jax import Array
 from jax.typing import ArrayLike
 
-from unite._utils import (
-    _ensure_wavelength,
-    _make_register,
-    _wavelength_conversion_factor,
-)
+from unite._utils import _ensure_wavelength, _get_conversion_factor, _make_register
 from unite.continuum.functions import (
     bernstein_eval,
     bspline_eval,
@@ -49,8 +45,8 @@ class ContinuumForm(ABC):
 
     All forms share a unified parameter interface:
 
-    * ``scale`` — the continuum flux at ``normalization_wavelength``.
-    * ``normalization_wavelength`` — rest-frame reference wavelength where
+    * ``scale`` — the continuum flux at ``norm_wav``.
+    * ``norm_wav`` — rest-frame reference wavelength where
       the continuum equals ``scale``.  Default prior is
       ``Fixed(region_center)``, pinning it to the region midpoint.  Pass an
       explicit :class:`~unite.continuum.config.ContinuumNormalizationWavelength`
@@ -69,7 +65,7 @@ class ContinuumForm(ABC):
         -------
         tuple of str
             Parameter names.  Always includes ``'scale'`` and
-            ``'normalization_wavelength'``.
+            ``'norm_wav'``.
         """
 
     @abstractmethod
@@ -82,7 +78,7 @@ class ContinuumForm(ABC):
         ----------
         region_center : float
             Midpoint of the continuum region, used as the default
-            ``Fixed`` value for ``normalization_wavelength``.
+            ``Fixed`` value for ``norm_wav``.
 
         Returns
         -------
@@ -96,7 +92,12 @@ class ContinuumForm(ABC):
 
     @abstractmethod
     def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
     ) -> Array:
         """Evaluate the continuum model.
 
@@ -109,12 +110,16 @@ class ContinuumForm(ABC):
             Wavelength array (observed frame).
         center : float
             Region midpoint in observed frame (passed for convenience;
-            forms use ``params['normalization_wavelength']`` instead).
+            forms use ``params['norm_wav']`` instead).
         params : dict of str to ArrayLike
             Parameter values keyed by :meth:`param_names`.
-            ``params['normalization_wavelength']`` is already in observed
+            ``params['norm_wav']`` is already in observed
             frame (the model applies the systemic redshift before calling
             this method).
+        obs_low : float
+            Lower observed-frame wavelength bound of the region.
+        obs_high : float
+            Upper observed-frame wavelength bound of the region.
 
         Returns
         -------
@@ -134,24 +139,6 @@ class ContinuumForm(ABC):
         bool
         """
         return False
-
-    def _adapt_for_observed_region(
-        self, obs_low: float, obs_high: float
-    ) -> ContinuumForm:
-        """Return a copy adapted for fitting in an observed-frame region.
-
-        For forms with static wavelength configuration (e.g. knots,
-        half-widths), adjusts the configuration to match the observed
-        region bounds.  The default implementation returns ``self``.
-
-        Parameters
-        ----------
-        obs_low : float
-            Lower observed-frame wavelength bound.
-        obs_high : float
-            Upper observed-frame wavelength bound.
-        """
-        return self
 
     @abstractmethod
     def param_units(
@@ -193,27 +180,19 @@ class ContinuumForm(ABC):
     def __hash__(self) -> int:
         return hash(type(self).__name__)
 
-    def _prepare(
-        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
-    ) -> ContinuumForm:
-        """Return a copy with static wavelength config converted to *canonical_unit*.
+    def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
+        """Adapt the form to the specific continuum region.
 
-        Called by the model builder before evaluation so that static
-        wavelength-valued configuration (e.g. knots, half-widths, reference
-        wavelengths) is in the same unit as the wavelength arrays.
-
-        The default implementation returns ``self`` (no static wavelength
-        config to convert).  Subclasses with wavelength-valued configuration
-        must override this method.
+        Used for ensuring units and ranges are consistent with the region bounds.
 
         Parameters
         ----------
-        canonical_unit : astropy.units.UnitBase
-            Target wavelength unit (from the first spectrum's disperser).
-        region_unit : astropy.units.UnitBase
-            Wavelength unit of the :class:`ContinuumRegion` bounds.
+        low : astropy.units.Quantity
+            Lower bound of the continuum region in the region's wavelength unit.
+        high : astropy.units.Quantity
+            Upper bound of the continuum region in the region's wavelength unit.
         """
-        return self
+        return None
 
     def __repr__(self) -> str:
         return f'{type(self).__name__}()'
@@ -293,7 +272,7 @@ def get_form(name_or_form: str | ContinuumForm, **kwargs) -> ContinuumForm:
 
 @_register
 class Linear(ContinuumForm):
-    """Linear continuum: ``scale + slope * (wavelength - normalization_wavelength)``.
+    """Linear continuum: ``scale + slope * (wavelength - norm_wav)``.
 
     This form has no constructor parameters.
 
@@ -302,11 +281,11 @@ class Linear(ContinuumForm):
     **Model parameters** (sampled with priors, overridable via
     ``ContinuumRegion(params={...})``):
 
-    * ``scale`` — Continuum level at ``normalization_wavelength``.
+    * ``scale`` — Continuum level at ``norm_wav``.
       Default prior: ``Uniform(0, 10)``.
     * ``slope`` — Continuum slope in flux per wavelength unit.
       Default prior: ``Uniform(-10, 10)``.
-    * ``normalization_wavelength`` — Reference wavelength where the
+    * ``norm_wav`` — Reference wavelength where the
       continuum equals ``scale``.
       Default prior: ``Fixed(region_center)``.
     """
@@ -316,13 +295,13 @@ class Linear(ContinuumForm):
         return True
 
     def param_names(self) -> tuple[str, ...]:
-        return ('scale', 'angle', 'normalization_wavelength')
+        return ('scale', 'angle', 'norm_wav')
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
-            'angle': Uniform(-jnp.pi, jnp.pi),
-            'normalization_wavelength': Fixed(region_center),
+            'angle': Uniform(-jnp.pi / 2, jnp.pi / 2),
+            'norm_wav': Fixed(region_center),
         }
 
     def param_units(
@@ -331,13 +310,18 @@ class Linear(ContinuumForm):
         return {
             'scale': (True, flux_unit),
             'angle': (False, None),
-            'normalization_wavelength': (False, wl_unit),
+            'norm_wav': (False, wl_unit),
         }
 
     def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
     ) -> Array:
-        nw = params['normalization_wavelength']
+        nw = params['norm_wav']
         return params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
 
     def to_dict(self) -> dict:
@@ -349,68 +333,11 @@ class Linear(ContinuumForm):
 
 
 @_register
-class PowerLaw(ContinuumForm):
-    """Power-law continuum: ``scale * (wavelength / normalization_wavelength) ** beta``.
-
-    This form has no constructor parameters.
-
-    To share a consistent reference wavelength across multiple regions
-    (required for physically meaningful parameter sharing), pass a
-    :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
-    ``Fixed(value)`` carrying your chosen reference wavelength.
-
-    Notes
-    -----
-    **Model parameters** (sampled with priors, overridable via
-    ``ContinuumRegion(params={...})``):
-
-    * ``scale`` — Continuum level at ``normalization_wavelength``.
-      Default prior: ``Uniform(0, 10)``.
-    * ``beta`` — Power-law index (dimensionless).
-      Default prior: ``Uniform(-5, 5)``.
-    * ``normalization_wavelength`` — Reference wavelength.
-      Default prior: ``Fixed(region_center)``.
-    """
-
-    def param_names(self) -> tuple[str, ...]:
-        return ('scale', 'beta', 'normalization_wavelength')
-
-    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
-        return {
-            'scale': Uniform(0, 2),
-            'beta': Uniform(-5, 5),
-            'normalization_wavelength': Fixed(region_center),
-        }
-
-    def param_units(
-        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
-    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
-        return {
-            'scale': (True, flux_unit),
-            'beta': (False, None),
-            'normalization_wavelength': (False, wl_unit),
-        }
-
-    def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
-    ) -> Array:
-        nw = params['normalization_wavelength']
-        return params['scale'] * (wavelength / nw) ** params['beta']
-
-    def to_dict(self) -> dict:
-        return {'type': 'PowerLaw'}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> PowerLaw:
-        return cls()
-
-
-@_register
 class Polynomial(ContinuumForm):
     """Polynomial continuum of configurable degree.
 
     Evaluates ``scale + c1*x + c2*x**2 + ...`` where
-    ``x = wavelength - normalization_wavelength``.
+    ``x = wavelength - norm_wav``.
 
     Parameters
     ----------
@@ -422,11 +349,11 @@ class Polynomial(ContinuumForm):
     **Model parameters** (sampled with priors, overridable via
     ``ContinuumRegion(params={...})``):
 
-    * ``scale`` — Continuum level at ``normalization_wavelength``.
+    * ``scale`` — Continuum level at ``norm_wav``.
       Default prior: ``Uniform(0, 10)``.
     * ``c1, c2, ...`` — Higher-order polynomial coefficients.
       Default prior: ``Uniform(-10, 10)`` each.
-    * ``normalization_wavelength`` — Reference wavelength.
+    * ``norm_wav`` — Reference wavelength.
       Default prior: ``Fixed(region_center)``.
 
     """
@@ -448,18 +375,14 @@ class Polynomial(ContinuumForm):
 
     def param_names(self) -> tuple[str, ...]:
         if self._degree == 0:
-            return ('scale', 'normalization_wavelength')
-        return (
-            'scale',
-            *(f'c{i}' for i in range(1, self._degree + 1)),
-            'normalization_wavelength',
-        )
+            return ('scale', 'norm_wav')
+        return ('scale', *(f'c{i}' for i in range(1, self._degree + 1)), 'norm_wav')
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._degree + 1):
             priors[f'c{i}'] = Uniform(-10, 10)
-        priors['normalization_wavelength'] = Fixed(region_center)
+        priors['norm_wav'] = Fixed(region_center)
         return priors
 
     def param_units(
@@ -468,17 +391,23 @@ class Polynomial(ContinuumForm):
         d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
         for i in range(1, self._degree + 1):
             d[f'c{i}'] = (True, flux_unit / wl_unit**i)
-        d['normalization_wavelength'] = (False, wl_unit)
+        d['norm_wav'] = (False, wl_unit)
         return d
 
     def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
     ) -> Array:
-        nw = params['normalization_wavelength']
+        nw = params['norm_wav']
         x = wavelength - nw
-        result = jnp.full_like(x, params['scale'], dtype=float)
-        for i in range(1, self._degree + 1):
-            result = result + params[f'c{i}'] * x**i
+        coeffs = jnp.array(
+            [params[f'c{i}'] for i in range(self._degree, 0, -1)] + [params['scale']]
+        )
+        result = jnp.polyval(coeffs, x)
         return result
 
     def to_dict(self) -> dict:
@@ -505,59 +434,54 @@ class Chebyshev(ContinuumForm):
     """Chebyshev polynomial continuum of configurable order.
 
     Evaluates a Chebyshev series on coordinates normalized to ``[-1, 1]``
-    within the continuum region.  Numerically more stable than a standard
+    within the continuum region, normalized so that the continuum equals
+    ``scale`` at ``norm_wav``.  Numerically more stable than a standard
     polynomial basis for higher orders.
 
-    The x-coordinate is ``(wavelength - normalization_wavelength) / half_width``
-    where *half_width* should be set to the half-width of the region for
-    proper orthogonality.  Defaults to ``1.0`` (identity normalization).
+    The x-coordinate is ``(wavelength - center) / (half_width * stretch)``
+    where ``half_width`` is derived from the region bounds passed to
+    :meth:`evaluate`, and ``stretch`` is a form-specific scaling factor
+    (default ``1.0`` for identity normalization).
 
-    .. note::
-        ``scale`` is the T₀ (constant) Chebyshev coefficient, which equals
-        the mean value of the series over the interval.  For order ≥ 2, the
-        actual value at ``normalization_wavelength`` may differ from
-        ``scale`` by contributions from even-order terms.  For most smooth
-        continua this difference is small.
+    The continuum is parameterized as ``scale * T(x) / T(x_nw)`` where
+    ``T`` is the Chebyshev series with constant term fixed at 1.0,
+    and ``x_nw`` is the normalized coordinate at ``norm_wav``.
 
     Parameters
     ----------
     order : int
         Chebyshev order (default 2).  Number of coefficients = order + 1.
-    half_width : float
-        Half-width of the continuum region in the same wavelength units as
-        the :class:`ContinuumRegion` bounds.  Set to
-        ``(high - low) / 2``.  Default ``1.0``.
+    stretch : float
+        Stretch factor to scale the region normalization (default 1.0).
 
     Notes
     -----
     **Model parameters** (sampled with priors, overridable via
     ``ContinuumRegion(params={...})``):
 
-    * ``scale`` — DC (T₀) coefficient, approximately the continuum level at
-      ``normalization_wavelength``.  Default prior: ``Uniform(0, 10)``.
-    * ``c1, c2, ...`` — Higher-order Chebyshev coefficients.
+    * ``scale`` — Continuum level at ``norm_wav``.
+      Default prior: ``Uniform(0, 10)``.
+    * ``c1, c2, ...`` — Higher-order Chebyshev coefficients (normalized to constant term 1.0).
       Default prior: ``Uniform(-10, 10)`` each.
-    * ``normalization_wavelength`` — Reference wavelength defining ``x = 0``.
+    * ``norm_wav`` — Reference wavelength.
       Default prior: ``Fixed(region_center)``.
 
     """
 
-    def __init__(self, order: int = 2, half_width: float = 1.0) -> None:
+    def __init__(self, order: int = 2, stretch: float = 1.0) -> None:
         if order < 0:
             msg = f'Chebyshev order must be >= 0, got {order}'
             raise ValueError(msg)
         self._order = order
-        self._half_width = half_width
+        if stretch <= 0:
+            msg = f'Chebyshev stretch factor must be > 0, got {stretch}'
+            raise ValueError(msg)
+        self._stretch = stretch
+        # Note: _half_width removed; normalization now derived from obs_low/obs_high
 
     @property
     def is_linear(self) -> bool:
-        return True
-
-    def _adapt_for_observed_region(self, obs_low: float, obs_high: float) -> Chebyshev:
-        new = object.__new__(Chebyshev)
-        new._order = self._order
-        new._half_width = (obs_high - obs_low) / 2.0
-        return new
+        return False
 
     @property
     def order(self) -> int:
@@ -565,24 +489,20 @@ class Chebyshev(ContinuumForm):
         return self._order
 
     @property
-    def half_width(self) -> float:
-        """Normalization half-width."""
-        return self._half_width
+    def stretch(self) -> float:
+        """Stretch factor for the region normalization."""
+        return self._stretch
 
     def param_names(self) -> tuple[str, ...]:
         if self._order == 0:
-            return ('scale', 'normalization_wavelength')
-        return (
-            'scale',
-            *(f'c{i}' for i in range(1, self._order + 1)),
-            'normalization_wavelength',
-        )
+            return ('scale', 'norm_wav')
+        return ('scale', *(f'c{i}' for i in range(1, self._order + 1)), 'norm_wav')
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._order + 1):
             priors[f'c{i}'] = Uniform(-10, 10)
-        priors['normalization_wavelength'] = Fixed(region_center)
+        priors['norm_wav'] = Fixed(region_center)
         return priors
 
     def param_units(
@@ -592,65 +512,421 @@ class Chebyshev(ContinuumForm):
         d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
         for i in range(1, self._order + 1):
             d[f'c{i}'] = (True, flux_unit)
-        d['normalization_wavelength'] = (False, wl_unit)
+        d['norm_wav'] = (False, wl_unit)
         return d
 
     def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
     ) -> Array:
-        nw = params['normalization_wavelength']
-        x = (wavelength - nw) / self._half_width
-        coeffs = [params['scale']] + [
-            params[f'c{i}'] for i in range(1, self._order + 1)
-        ]
-        return chebval(x, coeffs)
+        half_width = (obs_high - obs_low) / 2
+        x = (wavelength - center) / (half_width * self._stretch)
+        nw = params['norm_wav']
+        x_nw = (nw - center) / (half_width * self._stretch)
+        shape_coeffs = jnp.array(
+            [1.0] + [params[f'c{i}'] for i in range(1, self._order + 1)]
+        )
+        shape = chebval(x, shape_coeffs)
+        shape_nw = chebval(x_nw, shape_coeffs)
+        return params['scale'] * shape / shape_nw
 
     def to_dict(self) -> dict:
-        return {
-            'type': 'Chebyshev',
-            'order': self._order,
-            'half_width': self._half_width,
-        }
+        return {'type': 'Chebyshev', 'order': self._order, 'stretch': self._stretch}
 
     @classmethod
     def from_dict(cls, d: dict) -> Chebyshev:
-        return cls(order=d['order'], half_width=d.get('half_width', 1.0))
+        return cls(order=d['order'], stretch=d.get('stretch', 1.0))
 
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return self._order == other._order and self._half_width == other._half_width  # type: ignore[attr-defined]
+        return self._order == other._order and self._stretch == other._stretch  # type: ignore[attr-defined]
 
     def __hash__(self) -> int:
-        return hash(('Chebyshev', self._order, self._half_width))
-
-    def _prepare(
-        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
-    ) -> Chebyshev:
-        factor = _wavelength_conversion_factor(region_unit, canonical_unit)
-        new = object.__new__(Chebyshev)
-        new._order = self._order
-        new._half_width = self._half_width * factor
-        return new
+        return hash(('Chebyshev', self._order, self._stretch))
 
     def __repr__(self) -> str:
-        return f'Chebyshev(order={self._order}, half_width={self._half_width})'
+        return f'Chebyshev(order={self._order}, stretch={self._stretch})'
 
 
-# ---------------------------------------------------------------------------
-# Global (non-piecewise) physical forms
-# ---------------------------------------------------------------------------
+@_register
+class BSpline(ContinuumForm):
+    """B-spline continuum with local knot control.
+
+    The knot vector must be set via *knots* at construction time (typically
+    derived from the wavelength coverage of the spectrum).  Knots should be
+    in the same wavelength unit as the :class:`ContinuumRegion` bounds;
+    they are converted to the canonical unit at region construction time via
+    :meth:`_prepare`. Knots must fall within the region bounds.
+
+    The continuum is normalized so that it equals ``scale`` at ``norm_wav``,
+    parameterized as ``scale * S(u) / S(u_nw)`` where ``S`` is the B-spline
+    series with first coefficient fixed at 1.0, and ``u_nw`` is the normalized
+    coordinate at ``norm_wav``.
+
+    Parameters
+    ----------
+    knots : u.Quantity
+        Knot vector in wavelength units. It is automatically clamped at the region bounds.
+    degree : int
+        Spline degree (default 3 for cubic).
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum level at ``norm_wav``.
+      Default prior: ``Uniform(0, 10)``.
+    * ``coeff_1, coeff_2, …`` — Remaining B-spline coefficients (normalized to first 1.0).
+      Default prior: ``Uniform(-10, 10)`` each.
+    * ``norm_wav`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
+
+    """
+
+    def __init__(self, knots: u.Quantity, degree: int = 3) -> None:
+        if isinstance(knots, u.Quantity):
+            self._knots: u.Quantity = _ensure_wavelength(knots, 'knots', ndim=1)
+        else:
+            raise ValueError(
+                f'knots must be an astropy Quantity with length units, got {knots}'
+            )
+        self._degree = degree
+        self._n_basis = len(self._knots) + degree + 1
+
+    @property
+    def is_linear(self) -> bool:
+        return False
+
+    @property
+    def degree(self) -> int:
+        """Spline degree."""
+        return self._degree
+
+    @property
+    def n_basis(self) -> int:
+        """Number of B-spline basis functions."""
+        return self._n_basis
+
+    @property
+    def knots(self) -> u.Quantity:
+        """Knot vector (in the original units passed at construction)."""
+        return self._knots
+
+    def param_names(self) -> tuple[str, ...]:
+        if self._n_basis == 1:
+            return ('scale', 'norm_wav')
+        return ('scale', *(f'coeff_{i}' for i in range(1, self._n_basis)), 'norm_wav')
+
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
+        for i in range(1, self._n_basis):
+            priors[f'coeff_{i}'] = Uniform(-10, 10)
+        priors['norm_wav'] = Fixed(region_center)
+        return priors
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        # B-spline coefficients share the same unit as the function value.
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
+        for i in range(1, self._n_basis):
+            d[f'coeff_{i}'] = (True, flux_unit)
+        d['norm_wav'] = (False, wl_unit)
+        return d
+
+    def evaluate(
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+    ) -> Array:
+        # Normalize wavelengths relative to the knot range
+        obs_range = obs_high - obs_low
+
+        # Map wavelengths to the same coordinate system as the knots
+        u = 2 * (wavelength - obs_low) / obs_range - 1
+
+        # Map norm_wav to the same coordinate system
+        nw = params['norm_wav']
+        u_nw = 2 * (nw - obs_low) / obs_range - 1
+
+        # Also map knots to [-1, 1]
+        knots_norm = 2 * (self._knots_eval - obs_low) / obs_range - 1
+
+        shape_coeffs = jnp.concatenate(
+            [jnp.array([1.0])]
+            + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._n_basis)]
+        )
+        shape = bspline_eval(u, shape_coeffs, knots_norm, self._degree)
+        shape_nw = bspline_eval(
+            jnp.atleast_1d(u_nw), shape_coeffs, knots_norm, self._degree
+        )[0]
+        return params['scale'] * shape / shape_nw
+
+    def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
+        """Validate and prepare the knot vector for evaluation within the region bounds."""
+        if any((self._knots <= low) or (self._knots >= high)):
+            msg = f'All knots must be within the region bounds [{low}, {high}], got {self._knots}'
+            raise ValueError(msg)
+        # Add n-1 extra knots at each end for clamping (B-spline convention)
+        p = self._degree + 1
+        knots_clamped = jnp.concatenate(
+            [
+                low.value * jnp.ones(p),
+                self._knots.to(low.unit).value,
+                high.value * jnp.ones(p),
+            ]
+        )
+        self._knots_eval = knots_clamped
+
+    def to_dict(self) -> dict:
+        return {
+            'type': 'BSpline',
+            'knots': self._knots.value.tolist(),
+            'unit': str(self._knots.unit),
+            'degree': self._degree,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> BSpline:
+        return cls(knots=d['knots'] * u.Unit(d['unit']), degree=d.get('degree', 3))
+
+    def __eq__(self, other: object) -> bool:
+        if type(self) is not type(other):
+            return NotImplemented
+        return (  # type: ignore[attr-defined]
+            bool(jnp.array_equal(self._knots, other._knots))
+            and self._degree == other._degree
+        )
+
+    def __hash__(self) -> int:
+        return hash(('BSpline', tuple(self._knots.to(u.um).value), self._degree))
+
+    def __repr__(self) -> str:
+        return f'BSpline(degree={self._degree}, knots={self._knots})'
+
+
+@_register
+class Bernstein(ContinuumForm):
+    """Global Bernstein polynomial continuum, normalized at a reference wavelength.
+
+    Evaluates a Bernstein series on coordinates normalized to ``[0, 1]``
+    within the continuum region, normalized so that the continuum equals
+    ``scale`` at ``norm_wav``.
+
+    The wavelength range is derived from the region bounds passed to
+    :meth:`evaluate`, normalized to ``[0, 1]`` for the Bernstein basis.
+    The ``stretch`` parameter optionally scales the region normalization.
+
+    The continuum is parameterized as ``scale * B(t) / B(t_nw)`` where
+    ``B`` is the Bernstein series with first term fixed at 1.0, and ``t_nw``
+    is the normalized coordinate at ``norm_wav``.
+
+    Parameters
+    ----------
+    degree : int
+        Polynomial degree (default 4).  Number of coefficients = degree + 1.
+    stretch : float
+        Stretch factor to scale the region normalization (default 1.0).
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum level at ``norm_wav``.
+      Default prior: ``Uniform(0, 10)``.
+    * ``coeff_1, coeff_2, …`` — Remaining Bernstein coefficients (normalized to first term 1.0).
+      Default prior: ``Uniform(-10, 10)`` each.
+    * ``norm_wav`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
+
+    """
+
+    def __init__(self, degree: int = 4, stretch: float = 1.0) -> None:
+        from scipy.special import comb
+
+        self._degree = degree
+        if stretch <= 0:
+            msg = f'Bernstein stretch factor must be > 0, got {stretch}'
+            raise ValueError(msg)
+        self._stretch = stretch
+        self._binom = jnp.array(
+            [comb(degree, i, exact=True) for i in range(degree + 1)], dtype=float
+        )
+
+    @property
+    def is_linear(self) -> bool:
+        return False
+
+    @property
+    def degree(self) -> int:
+        """Polynomial degree."""
+        return self._degree
+
+    @property
+    def stretch(self) -> float:
+        """Stretch factor for the region normalization."""
+        return self._stretch
+
+    def param_names(self) -> tuple[str, ...]:
+        if self._degree == 0:
+            return ('scale', 'norm_wav')
+        return (
+            'scale',
+            *(f'coeff_{i}' for i in range(1, self._degree + 1)),
+            'norm_wav',
+        )
+
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
+        for i in range(1, self._degree + 1):
+            priors[f'coeff_{i}'] = Uniform(0, 10)
+        priors['norm_wav'] = Fixed(region_center)
+        return priors
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        # Bernstein coefficients share the same unit as the function value.
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
+        for i in range(1, self._degree + 1):
+            d[f'coeff_{i}'] = (True, flux_unit)
+        d['norm_wav'] = (False, wl_unit)
+        return d
+
+    def evaluate(
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+    ) -> Array:
+        # 1. Coordinate Transformation
+        half_width = (obs_high - obs_low) / 2
+        stretch_factor = half_width * self._stretch
+
+        # helper to transform wavelength to [0, 1]
+        def to_t(w):
+            u = (w - center) / stretch_factor
+            return (u + 1) / 2
+
+        t = to_t(wavelength)
+        t_nw = to_t(params['norm_wav'])
+
+        # 2. Evaluate Bernstein basis functions and combine with coefficients
+        coeffs = jnp.concatenate(
+            [jnp.array([1.0])]
+            + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._degree + 1)]
+        )
+        shape = bernstein_eval(t, coeffs, self._binom)
+        shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
+
+        # 3. Normalize so that the continuum equals `scale` at `norm_wav`
+        return params['scale'] * shape / shape_nw
+
+    def to_dict(self) -> dict:
+        return {'type': 'Bernstein', 'degree': self._degree, 'stretch': self._stretch}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Bernstein:
+        return cls(degree=d['degree'], stretch=d.get('stretch', 1.0))
+
+    def __eq__(self, other: object) -> bool:
+        if type(self) is not type(other):
+            return NotImplemented
+        return (  # type: ignore[attr-defined]
+            self._degree == other._degree and self._stretch == other._stretch
+        )
+
+    def __hash__(self) -> int:
+        return hash(('Bernstein', self._degree, self._stretch))
+
+    def __repr__(self) -> str:
+        return f'Bernstein(degree={self._degree}, stretch={self._stretch})'
+
+
+@_register
+class PowerLaw(ContinuumForm):
+    """Power-law continuum: ``scale * (wavelength / norm_wav) ** beta``.
+
+    This form has no constructor parameters.
+
+    To share a consistent reference wavelength across multiple regions
+    (required for physically meaningful parameter sharing), pass a
+    :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
+    ``Fixed(value)`` carrying your chosen reference wavelength.
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Continuum level at ``norm_wav``.
+      Default prior: ``Uniform(0, 10)``.
+    * ``beta`` — Power-law index (dimensionless).
+      Default prior: ``Uniform(-5, 5)``.
+    * ``norm_wav`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
+    """
+
+    def param_names(self) -> tuple[str, ...]:
+        return ('scale', 'beta', 'norm_wav')
+
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        return {
+            'scale': Uniform(0, 2),
+            'beta': Uniform(-5, 5),
+            'norm_wav': Fixed(region_center),
+        }
+
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        return {
+            'scale': (True, flux_unit),
+            'beta': (False, None),
+            'norm_wav': (False, wl_unit),
+        }
+
+    def evaluate(
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+    ) -> Array:
+        nw = params['norm_wav']
+        return params['scale'] * (wavelength / nw) ** params['beta']
+
+    def to_dict(self) -> dict:
+        return {'type': 'PowerLaw'}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> PowerLaw:
+        return cls()
 
 
 @_register
 class Blackbody(ContinuumForm):
     """Planck blackbody continuum normalized at a reference wavelength.
 
-    Evaluates ``scale * B_λ(T) / B_λ(normalization_wavelength, T)`` so that
+    Evaluates ``scale * B_λ(T) / B_λ(norm_wav, T)`` so that
     *scale* directly represents the continuum flux at
-    ``normalization_wavelength``.
+    ``norm_wav``.  Wavelength parameters may be in any unit;
+    automatic unit conversion to microns is applied internally.
 
-    ``normalization_wavelength`` is a named parameter with a default
+    ``norm_wav`` is a named parameter with a default
     ``Fixed(region_center)`` prior.  Pass an explicit
     :class:`~unite.continuum.config.ContinuumNormalizationWavelength` with
     ``Fixed(value)`` to pin it to a specific wavelength across multiple
@@ -664,23 +940,26 @@ class Blackbody(ContinuumForm):
     **Model parameters** (sampled with priors, overridable via
     ``ContinuumRegion(params={...})``):
 
-    * ``scale`` — Continuum flux at ``normalization_wavelength``
+    * ``scale`` — Continuum flux at ``norm_wav``
       (in units of ``continuum_scale``).
       Default prior: ``Uniform(0, 10)``.
     * ``temperature`` — Blackbody temperature in Kelvin.
       Default prior: ``Uniform(100, 50000)``.
-    * ``normalization_wavelength`` — Reference wavelength.
+    * ``norm_wav`` — Reference wavelength.
       Default prior: ``Fixed(region_center)``.
     """
 
+    def __init__(self) -> None:
+        self._micron_factor: float = 1.0
+
     def param_names(self) -> tuple[str, ...]:
-        return ('scale', 'temperature', 'normalization_wavelength')
+        return ('scale', 'temperature', 'norm_wav')
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
             'temperature': Uniform(100, 50000),
-            'normalization_wavelength': Fixed(region_center),
+            'norm_wav': Fixed(region_center),
         }
 
     def param_units(
@@ -689,15 +968,25 @@ class Blackbody(ContinuumForm):
         return {
             'scale': (True, flux_unit),
             'temperature': (False, u.K),
-            'normalization_wavelength': (False, wl_unit),
+            'norm_wav': (False, wl_unit),
         }
 
     def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
     ) -> Array:
-        nw = params['normalization_wavelength']
-        bb = planck_function(wavelength, params['temperature'], nw)
+        wl_um = wavelength * self._micron_factor
+        nw_um = params['norm_wav'] * self._micron_factor
+        bb = planck_function(wl_um, params['temperature'], nw_um)
         return params['scale'] * bb
+
+    def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
+        """Compute the micron conversion factor for the region's wavelength unit."""
+        self._micron_factor = _get_conversion_factor(low.unit, u.um)
 
     def to_dict(self) -> dict:
         return {'type': 'Blackbody'}
@@ -709,13 +998,14 @@ class Blackbody(ContinuumForm):
 
 @_register
 class ModifiedBlackbody(ContinuumForm):
-    """Modified blackbody: ``scale * B_λ(T) * (λ / normalization_wavelength)^beta / B_λ(nw, T)``.
+    """Modified blackbody: ``scale * B_λ(T) * (λ / norm_wav)^beta / B_λ(nw, T)``.
 
     The power-law modifier *beta* broadens (beta > 0) or narrows (beta < 0)
     the SED relative to a pure blackbody.  *beta = 0* recovers
-    :class:`Blackbody`.
+    :class:`Blackbody`.  Wavelength parameters may be in any unit;
+    automatic unit conversion to microns is applied internally.
 
-    ``normalization_wavelength`` is a named parameter with a default
+    ``norm_wav`` is a named parameter with a default
     ``Fixed(region_center)`` prior.  Share a
     :class:`~unite.continuum.config.ContinuumNormalizationWavelength` token
     across regions to enforce a consistent reference wavelength.
@@ -727,26 +1017,29 @@ class ModifiedBlackbody(ContinuumForm):
     **Model parameters** (sampled with priors, overridable via
     ``ContinuumRegion(params={...})``):
 
-    * ``scale`` — Continuum flux at ``normalization_wavelength``
+    * ``scale`` — Continuum flux at ``norm_wav``
       (in units of ``continuum_scale``).
       Default prior: ``Uniform(0, 10)``.
     * ``temperature`` — Blackbody temperature in Kelvin.
       Default prior: ``Uniform(100, 50000)``.
     * ``beta`` — Power-law modifier index (dimensionless).
       Default prior: ``Uniform(-4, 4)``.
-    * ``normalization_wavelength`` — Reference wavelength.
+    * ``norm_wav`` — Reference wavelength.
       Default prior: ``Fixed(region_center)``.
     """
 
+    def __init__(self) -> None:
+        self._micron_factor: float = 1.0
+
     def param_names(self) -> tuple[str, ...]:
-        return ('scale', 'temperature', 'beta', 'normalization_wavelength')
+        return ('scale', 'temperature', 'beta', 'norm_wav')
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
             'temperature': Uniform(100, 50000),
             'beta': Uniform(-4, 4),
-            'normalization_wavelength': Fixed(region_center),
+            'norm_wav': Fixed(region_center),
         }
 
     def param_units(
@@ -756,16 +1049,26 @@ class ModifiedBlackbody(ContinuumForm):
             'scale': (True, flux_unit),
             'temperature': (False, u.K),
             'beta': (False, None),
-            'normalization_wavelength': (False, wl_unit),
+            'norm_wav': (False, wl_unit),
         }
 
     def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
     ) -> Array:
-        nw = params['normalization_wavelength']
-        bb = planck_function(wavelength, params['temperature'], nw)
-        modifier = (wavelength / nw) ** params['beta']
+        wl_um = wavelength * self._micron_factor
+        nw_um = params['norm_wav'] * self._micron_factor
+        bb = planck_function(wl_um, params['temperature'], nw_um)
+        modifier = (wl_um / nw_um) ** params['beta']
         return params['scale'] * bb * modifier
+
+    def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
+        """Compute the micron conversion factor for the region's wavelength unit."""
+        self._micron_factor = _get_conversion_factor(low.unit, u.um)
 
     def to_dict(self) -> dict:
         return {'type': 'ModifiedBlackbody'}
@@ -780,67 +1083,66 @@ class AttenuatedBlackbody(ContinuumForm):
     """Dust-attenuated blackbody continuum.
 
     Evaluates
-    ``scale * B_λ(T) / B_λ(nw,T) * exp(-tau_v * [(λ/lambda_v)^alpha - (nw/lambda_v)^alpha])``.
+    ``scale * B_λ(T) / B_λ(nw,T) * exp(-tau_v * [(λ/lambda_ext)^alpha - (nw/lambda_ext)^alpha])``.
 
-    Extinction is normalized at ``normalization_wavelength`` so that *scale*
+    Extinction is normalized at ``norm_wav`` so that *scale*
     represents the **observed** (attenuated) flux there.  Negative *alpha*
     gives steeper extinction at short wavelengths (typical dust law).
+    Wavelength parameters may be in any unit; automatic unit conversion
+    to microns is applied internally.
 
     Parameters
     ----------
-    lambda_v_micron : float or astropy.units.Quantity
-        Reference wavelength for the extinction law.  May be a bare
-        ``float`` (interpreted as microns) or an
+    lambda_ext : astropy.units.Quantity
+        Reference wavelength for the extinction law. Must be
         :class:`~astropy.units.Quantity` with any length unit — it will
-        be converted automatically.  Defaults to ``0.55``
-        (optical V band).  ``5500 * u.AA`` and ``0.55`` are equivalent.
+        be converted automatically.  Defaults to  ``5500 * u.AA``.
 
     Notes
     -----
-    ``lambda_v_micron`` is a *static* configuration parameter (not
-    sampled).  It is stored as an :class:`~astropy.units.Quantity` and
-    converted to the canonical wavelength unit at model-build time via
+    ``lambda_ext`` is a *static* configuration parameter (not
+    sampled).  It is stored in microns internally and, along with
+    evaluation wavelengths, automatically converted at model-build time via
     :meth:`_prepare`.
 
     **Model parameters** (sampled with priors, overridable via
     ``ContinuumRegion(params={...})``):
 
-    * ``scale`` — Observed continuum flux at ``normalization_wavelength``
+    * ``scale`` — Observed continuum flux at ``norm_wav``
       (in units of ``continuum_scale``).
       Default prior: ``Uniform(0, 10)``.
     * ``temperature`` — Blackbody temperature in Kelvin.
       Default prior: ``Uniform(100, 50000)``.
-    * ``tau_v`` — Optical depth at ``lambda_v``.
+    * ``tau_v`` — Optical depth at ``lambda_ext``.
       Default prior: ``Uniform(0, 5)``.
     * ``alpha`` — Dust extinction power-law index (negative = steeper at
       short λ).  Default prior: ``Uniform(-2, 0)``.
-    * ``normalization_wavelength`` — Reference wavelength.
+    * ``norm_wav`` — Reference wavelength.
       Default prior: ``Fixed(region_center)``.
 
     """
 
-    def __init__(self, lambda_v_micron: float | u.Quantity = 0.55) -> None:
-        if isinstance(lambda_v_micron, u.Quantity):
-            self._lambda_v: u.Quantity = _ensure_wavelength(
-                lambda_v_micron, 'lambda_v_micron'
+    def __init__(self, lambda_ext: u.Quantity = 5500 * u.AA) -> None:
+        if isinstance(lambda_ext, u.Quantity):
+            self._lambda_ext: u.Quantity = _ensure_wavelength(
+                lambda_ext, 'lambda_ext', ndim=0
             )
         else:
-            self._lambda_v = float(lambda_v_micron) * u.um
+            raise ValueError(
+                f'lambda_ext must be an astropy Quantity with length units, got {lambda_ext}'
+            )
         # Float used in evaluate(); initially microns, updated by _prepare().
-        self._lambda_v_eval: float = float(self._lambda_v.to(u.um).value)
+        self._lambda_ext_um: float = float(self._lambda_ext.to(u.um).value)
+        # Conversion factor from canonical unit to microns.
+        self._micron_factor: float = 1.0
 
     @property
-    def lambda_v_micron(self) -> float:
-        """Extinction reference wavelength in microns."""
-        return float(self._lambda_v.to(u.um).value)
-
-    @property
-    def lambda_v(self) -> u.Quantity:
+    def lambda_ext(self) -> u.Quantity:
         """Extinction reference wavelength as an astropy Quantity."""
-        return self._lambda_v
+        return self._lambda_ext
 
     def param_names(self) -> tuple[str, ...]:
-        return ('scale', 'temperature', 'tau_v', 'alpha', 'normalization_wavelength')
+        return ('scale', 'temperature', 'tau_v', 'alpha', 'norm_wav')
 
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
@@ -848,7 +1150,7 @@ class AttenuatedBlackbody(ContinuumForm):
             'temperature': Uniform(100, 50000),
             'tau_v': Uniform(0, 5),
             'alpha': Uniform(-2, 0),
-            'normalization_wavelength': Fixed(region_center),
+            'norm_wav': Fixed(region_center),
         }
 
     def param_units(
@@ -859,322 +1161,43 @@ class AttenuatedBlackbody(ContinuumForm):
             'temperature': (False, u.K),
             'tau_v': (False, None),
             'alpha': (False, None),
-            'normalization_wavelength': (False, wl_unit),
+            'norm_wav': (False, wl_unit),
         }
 
     def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
     ) -> Array:
-        nw = params['normalization_wavelength']
-        bb = planck_function(wavelength, params['temperature'], nw)
-        ext_data = (wavelength / self._lambda_v_eval) ** params['alpha']
-        ext_pivot = (nw / self._lambda_v_eval) ** params['alpha']
+        wl_um = wavelength * self._micron_factor
+        nw_um = params['norm_wav'] * self._micron_factor
+        bb = planck_function(wl_um, params['temperature'], nw_um)
+        ext_data = (wl_um / self._lambda_ext_um) ** params['alpha']
+        ext_pivot = (nw_um / self._lambda_ext_um) ** params['alpha']
         extinction = jnp.exp(-params['tau_v'] * (ext_data - ext_pivot))
         return params['scale'] * bb * extinction
 
-    def _prepare(
-        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
-    ) -> AttenuatedBlackbody:
-        new = object.__new__(AttenuatedBlackbody)
-        new._lambda_v = self._lambda_v
-        new._lambda_v_eval = float(self._lambda_v.to(canonical_unit).value)
-        return new
+    def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
+        """Compute the conversion factors for the region's wavelength unit."""
+        self._micron_factor = _get_conversion_factor(low.unit, u.um)
 
     def to_dict(self) -> dict:
-        return {'type': 'AttenuatedBlackbody', 'lambda_v_micron': self.lambda_v_micron}
+        return {'type': 'AttenuatedBlackbody', 'lambda_ext': self.lambda_ext}
 
     @classmethod
     def from_dict(cls, d: dict) -> AttenuatedBlackbody:
-        return cls(lambda_v_micron=d.get('lambda_v_micron', 0.55))
+        return cls(lambda_ext=d.get('lambda_ext', 0.55))
 
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return self.lambda_v_micron == other.lambda_v_micron  # type: ignore[attr-defined]
+        return self.lambda_ext == other.lambda_ext  # type: ignore[attr-defined]
 
     def __hash__(self) -> int:
-        return hash(('AttenuatedBlackbody', self.lambda_v_micron))
+        return hash(('AttenuatedBlackbody', self.lambda_ext))
 
     def __repr__(self) -> str:
-        return f'AttenuatedBlackbody(lambda_v_micron={self.lambda_v_micron})'
-
-
-@_register
-class BSpline(ContinuumForm):
-    """Global B-spline continuum with local knot control.
-
-    The knot vector must be set via *knots* at construction time (typically
-    derived from the wavelength coverage of the spectrum).  Knots should be
-    in the same wavelength unit as the :class:`ContinuumRegion` bounds;
-    they are converted to the canonical unit at model-build time via
-    :meth:`_prepare`.
-
-    Parameters
-    ----------
-    knots : array-like
-        Clamped knot vector in the same wavelength unit as the region
-        bounds.  The number of basis functions is
-        ``len(knots) - degree - 1``.
-    degree : int
-        Spline degree (default 3 for cubic).
-
-    Notes
-    -----
-    **Model parameters** (sampled with priors, overridable via
-    ``ContinuumRegion(params={...})``):
-
-    * ``scale`` — First B-spline coefficient (overall amplitude level).
-      Default prior: ``Uniform(0, 10)``.
-    * ``coeff_1, coeff_2, …`` — Remaining B-spline coefficients.
-      Default prior: ``Uniform(-10, 10)`` each.
-    * ``normalization_wavelength`` — Included for API consistency; does
-      not alter BSpline evaluation (the wavelength mapping is defined
-      by the knot vector).
-      Default prior: ``Fixed(region_center)``.
-
-    """
-
-    def __init__(self, knots, degree: int = 3) -> None:
-        self._knots = jnp.asarray(knots)
-        self._degree = degree
-        self._n_basis = len(self._knots) - degree - 1
-
-    @property
-    def is_linear(self) -> bool:
-        return True
-
-    def _adapt_for_observed_region(self, obs_low: float, obs_high: float) -> BSpline:
-        orig_lo = float(self._knots[0])
-        orig_hi = float(self._knots[-1])
-        if orig_hi == orig_lo:
-            return self
-        scale = (obs_high - obs_low) / (orig_hi - orig_lo)
-        new_knots = (self._knots - orig_lo) * scale + obs_low
-        new = object.__new__(BSpline)
-        new._knots = new_knots
-        new._degree = self._degree
-        new._n_basis = self._n_basis
-        return new
-
-    @property
-    def n_basis(self) -> int:
-        """Number of B-spline basis functions."""
-        return self._n_basis
-
-    def param_names(self) -> tuple[str, ...]:
-        if self._n_basis == 1:
-            return ('scale', 'normalization_wavelength')
-        return (
-            'scale',
-            *(f'coeff_{i}' for i in range(1, self._n_basis)),
-            'normalization_wavelength',
-        )
-
-    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
-        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
-        for i in range(1, self._n_basis):
-            priors[f'coeff_{i}'] = Uniform(-10, 10)
-        priors['normalization_wavelength'] = Fixed(region_center)
-        return priors
-
-    def param_units(
-        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
-    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
-        # B-spline coefficients share the same unit as the function value.
-        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
-        for i in range(1, self._n_basis):
-            d[f'coeff_{i}'] = (True, flux_unit)
-        d['normalization_wavelength'] = (False, wl_unit)
-        return d
-
-    def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
-    ) -> Array:
-        coeffs = jnp.stack(
-            [params['scale']] + [params[f'coeff_{i}'] for i in range(1, self._n_basis)]
-        )
-        return bspline_eval(wavelength, coeffs, self._knots, self._degree)
-
-    def to_dict(self) -> dict:
-        return {
-            'type': 'BSpline',
-            'knots': self._knots.tolist(),
-            'degree': self._degree,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> BSpline:
-        return cls(knots=d['knots'], degree=d.get('degree', 3))
-
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        return (  # type: ignore[attr-defined]
-            bool(jnp.array_equal(self._knots, other._knots))
-            and self._degree == other._degree
-        )
-
-    def __hash__(self) -> int:
-        return hash(('BSpline', tuple(float(k) for k in self._knots), self._degree))
-
-    def _prepare(self, canonical_unit: u.UnitBase, region_unit: u.UnitBase) -> BSpline:
-        factor = _wavelength_conversion_factor(region_unit, canonical_unit)
-        new = object.__new__(BSpline)
-        new._knots = self._knots * factor
-        new._degree = self._degree
-        new._n_basis = self._n_basis
-        return new
-
-    def __repr__(self) -> str:
-        return f'BSpline(n_basis={self._n_basis}, degree={self._degree})'
-
-
-@_register
-class Bernstein(ContinuumForm):
-    """Global Bernstein polynomial continuum with positivity guarantee.
-
-    Bernstein basis polynomials are non-negative on ``[0, 1]``, so fitting
-    with positive coefficients guarantees a positive continuum everywhere.
-
-    The wavelength range ``[wavelength_min, wavelength_max]`` should be in
-    the same unit as the :class:`ContinuumRegion` bounds; it is converted
-    to the canonical unit at model-build time via :meth:`_prepare`.
-
-    Parameters
-    ----------
-    degree : int
-        Polynomial degree (default 4).  Number of coefficients = degree + 1.
-    wavelength_min, wavelength_max : float
-        Wavelength range for normalization to ``[0, 1]``, in the same
-        unit as the region bounds.
-
-    Notes
-    -----
-    **Model parameters** (sampled with priors, overridable via
-    ``ContinuumRegion(params={...})``):
-
-    * ``scale`` — First Bernstein coefficient (positive values give
-      positive continuum).  Default prior: ``Uniform(0, 10)``.
-    * ``coeff_1, coeff_2, …`` — Remaining Bernstein coefficients.
-      Default prior: ``Uniform(0, 10)`` each.
-    * ``normalization_wavelength`` — Included for API consistency; does
-      not alter Bernstein evaluation (the wavelength mapping is defined
-      by ``wavelength_min/max``).
-      Default prior: ``Fixed(region_center)``.
-
-    """
-
-    def __init__(
-        self, degree: int = 4, wavelength_min: float = 0.0, wavelength_max: float = 1.0
-    ) -> None:
-        from scipy.special import comb
-
-        self._degree = degree
-        self._wavelength_min = wavelength_min
-        self._wavelength_max = wavelength_max
-        self._binom = jnp.array(
-            [comb(degree, i, exact=True) for i in range(degree + 1)], dtype=float
-        )
-
-    @property
-    def is_linear(self) -> bool:
-        return True
-
-    def _adapt_for_observed_region(self, obs_low: float, obs_high: float) -> Bernstein:
-        from scipy.special import comb
-
-        new = object.__new__(Bernstein)
-        new._degree = self._degree
-        new._wavelength_min = obs_low
-        new._wavelength_max = obs_high
-        new._binom = jnp.array(
-            [comb(self._degree, i, exact=True) for i in range(self._degree + 1)],
-            dtype=float,
-        )
-        return new
-
-    @property
-    def degree(self) -> int:
-        """Polynomial degree."""
-        return self._degree
-
-    def param_names(self) -> tuple[str, ...]:
-        if self._degree == 0:
-            return ('scale', 'normalization_wavelength')
-        return (
-            'scale',
-            *(f'coeff_{i}' for i in range(1, self._degree + 1)),
-            'normalization_wavelength',
-        )
-
-    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
-        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
-        for i in range(1, self._degree + 1):
-            priors[f'coeff_{i}'] = Uniform(0, 10)
-        priors['normalization_wavelength'] = Fixed(region_center)
-        return priors
-
-    def param_units(
-        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
-    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
-        # Bernstein coefficients share the same unit as the function value.
-        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
-        for i in range(1, self._degree + 1):
-            d[f'coeff_{i}'] = (True, flux_unit)
-        d['normalization_wavelength'] = (False, wl_unit)
-        return d
-
-    def evaluate(
-        self, wavelength: ArrayLike, center: float, params: dict[str, ArrayLike]
-    ) -> Array:
-        coeffs = jnp.stack(
-            [params['scale']]
-            + [params[f'coeff_{i}'] for i in range(1, self._degree + 1)]
-        )
-        return bernstein_eval(
-            wavelength, coeffs, self._wavelength_min, self._wavelength_max, self._binom
-        )
-
-    def to_dict(self) -> dict:
-        return {
-            'type': 'Bernstein',
-            'degree': self._degree,
-            'wavelength_min': self._wavelength_min,
-            'wavelength_max': self._wavelength_max,
-        }
-
-    @classmethod
-    def from_dict(cls, d: dict) -> Bernstein:
-        return cls(
-            degree=d['degree'],
-            wavelength_min=d.get('wavelength_min', 0.0),
-            wavelength_max=d.get('wavelength_max', 1.0),
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        return (  # type: ignore[attr-defined]
-            self._degree == other._degree
-            and self._wavelength_min == other._wavelength_min
-            and self._wavelength_max == other._wavelength_max
-        )
-
-    def __hash__(self) -> int:
-        return hash(
-            ('Bernstein', self._degree, self._wavelength_min, self._wavelength_max)
-        )
-
-    def _prepare(
-        self, canonical_unit: u.UnitBase, region_unit: u.UnitBase
-    ) -> Bernstein:
-        factor = _wavelength_conversion_factor(region_unit, canonical_unit)
-        new = object.__new__(Bernstein)
-        new._degree = self._degree
-        new._wavelength_min = self._wavelength_min * factor
-        new._wavelength_max = self._wavelength_max * factor
-        new._binom = self._binom
-        return new
-
-    def __repr__(self) -> str:
-        return f'Bernstein(degree={self._degree})'
+        return f'AttenuatedBlackbody(lambda_ext={self.lambda_ext})'

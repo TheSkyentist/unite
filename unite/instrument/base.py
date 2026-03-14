@@ -3,21 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from itertools import count
 
 from astropy import units as u
 from jax.typing import ArrayLike
 
 from unite.prior import Fixed, Parameter, Prior
-
-# ---------------------------------------------------------------------------
-# Auto-naming counters (module-level, reset per Python session)
-# ---------------------------------------------------------------------------
-
-_rscale_counter = count(0)
-_fluxscale_counter = count(0)
-_pixoffset_counter = count(0)
-
 
 # ---------------------------------------------------------------------------
 # CalibParam tokens — subclasses of Parameter with instrument-specific defaults
@@ -32,17 +22,18 @@ class RScale(Parameter):
 
     Parameters
     ----------
+    name : str, optional
+        Human-readable label.  When attached to a :class:`Disperser`, the
+        site name is auto-derived as ``'r_scale_{disperser_name}'`` if not provided.
     prior : Prior, optional
         Prior on the R scale factor.  Defaults to ``Fixed(1.0)`` (fixed at
         nominal).
-    name : str, optional
-        Auto-generated as ``'r_N'`` if not provided.
     """
 
-    def __init__(self, prior: Prior | None = None, name: str | None = None) -> None:
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Fixed(1.0)
-        super().__init__(name=name or f'r_{next(_rscale_counter)}', prior=prior)
+        super().__init__(name=name, prior=prior)
 
 
 class FluxScale(Parameter):
@@ -53,17 +44,18 @@ class FluxScale(Parameter):
 
     Parameters
     ----------
+    name : str, optional
+        Human-readable label.  When attached to a :class:`Disperser`, the
+        site name is auto-derived as ``'flux_scale_{disperser_name}'`` if not provided.
     prior : Prior, optional
         Prior on the flux scale factor.  Defaults to ``Fixed(1.0)`` (fixed at
         nominal).
-    name : str, optional
-        Auto-generated as ``'flux_N'`` if not provided.
     """
 
-    def __init__(self, prior: Prior | None = None, name: str | None = None) -> None:
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Fixed(1.0)
-        super().__init__(name=name or f'flux_{next(_fluxscale_counter)}', prior=prior)
+        super().__init__(name=name, prior=prior)
 
 
 class PixOffset(Parameter):
@@ -74,16 +66,17 @@ class PixOffset(Parameter):
 
     Parameters
     ----------
+    name : str, optional
+        Human-readable label.  When attached to a :class:`Disperser`, the
+        site name is auto-derived as ``'pix_offset_{disperser_name}'`` if not provided.
     prior : Prior, optional
         Prior on the pixel offset.  Defaults to ``Fixed(0.0)`` (no shift).
-    name : str, optional
-        Auto-generated as ``'pix_N'`` if not provided.
     """
 
-    def __init__(self, prior: Prior | None = None, name: str | None = None) -> None:
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Fixed(0.0)
-        super().__init__(name=name or f'pix_{next(_pixoffset_counter)}', prior=prior)
+        super().__init__(name=name, prior=prior)
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +152,17 @@ class Disperser(ABC):
         self.r_scale = r_scale
         self.flux_scale = flux_scale
         self.pix_offset = pix_offset
+
+        # Apply the type prefix to any token that has a user-supplied label but
+        # no site name yet.  Fully anonymous tokens (label=None, name=None) are
+        # named later by InstrumentConfig, which has visibility over sharing.
+        for slot, tok in [
+            ('r_scale', r_scale),
+            ('flux_scale', flux_scale),
+            ('pix_offset', pix_offset),
+        ]:
+            if tok is not None and tok.name is None and tok.label is not None:
+                tok.name = f'{slot}_{tok.label}'
 
     @abstractmethod
     def R(self, wavelength: ArrayLike) -> ArrayLike:

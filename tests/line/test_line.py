@@ -3,7 +3,7 @@
 import pytest
 from astropy import units as u
 
-from unite.line.config import FWHM, Flux, LineConfiguration, Param, Redshift
+from unite.line.config import FWHM, Flux, LineConfiguration, LineShape, Redshift
 from unite.line.profiles import (
     SEMG,
     Cauchy,
@@ -28,7 +28,8 @@ class TestRedshift:
 
     def test_named(self):
         z = Redshift('nlr')
-        assert z.name == 'nlr'
+        assert z.label == 'nlr'
+        assert z.name is None  # site name is set at registration time
 
     def test_custom_prior(self):
         p = TruncatedNormal(0.0, 0.01, -0.05, 0.05)
@@ -66,7 +67,8 @@ class TestFWHM:
 
     def test_named_with_prior(self):
         f = FWHM('broad', prior=Uniform(500, 5000))
-        assert f.name == 'broad'
+        assert f.label == 'broad'
+        assert f.name is None  # site name is set at registration time
         assert f.prior.low == pytest.approx(500.0)
 
     def test_dependent_bound(self):
@@ -82,16 +84,17 @@ class TestFlux:
 
     def test_named(self):
         f = Flux('Ha_flux')
-        assert f.name == 'Ha_flux'
+        assert f.label == 'Ha_flux'
+        assert f.name is None  # site name is set at registration time
 
 
-class TestParam:
+class TestLineShape:
     def test_default_prior(self):
-        p = Param()
-        assert isinstance(p.prior, Uniform)
+        p = LineShape()
+        assert isinstance(p.prior, TruncatedNormal)
 
     def test_custom_prior(self):
-        p = Param('h3', prior=Uniform(-0.5, 0.5))
+        p = LineShape('h3', prior=Uniform(-0.5, 0.5))
         assert p.prior.low == pytest.approx(-0.5)
 
 
@@ -129,21 +132,28 @@ class TestAddLine:
             is config._entries[1].fwhms['fwhm_gauss']
         )
 
-    def test_duplicate_raises(self):
-        z = Redshift('z')
-        f = FWHM('f')
+    def test_duplicate_name_raises(self):
         config = LineConfiguration()
-        config.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm_gauss=f)
-        with pytest.raises(ValueError, match='identical line'):
-            config.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm_gauss=f)
+        config.add_line('Ha', 6564.61 * u.AA)
+        with pytest.raises(ValueError, match='already used'):
+            config.add_line('Ha', 6564.61 * u.AA)
 
-    def test_two_components_same_wavelength_allowed(self):
+    def test_duplicate_name_raises_even_with_different_tokens(self):
         z = Redshift('z')
         f_narrow = FWHM('narrow')
         f_broad = FWHM('broad')
         config = LineConfiguration()
         config.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm_gauss=f_narrow)
-        config.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm_gauss=f_broad)
+        with pytest.raises(ValueError, match='already used'):
+            config.add_line('Ha', 6564.61 * u.AA, redshift=z, fwhm_gauss=f_broad)
+
+    def test_two_components_require_distinct_names(self):
+        z = Redshift('z')
+        f_narrow = FWHM('narrow')
+        f_broad = FWHM('broad')
+        config = LineConfiguration()
+        config.add_line('Ha_narrow', 6564.61 * u.AA, redshift=z, fwhm_gauss=f_narrow)
+        config.add_line('Ha_broad', 6564.61 * u.AA, redshift=z, fwhm_gauss=f_broad)
         assert len(config) == 2
 
     def test_wrong_redshift_type_raises(self):
@@ -164,7 +174,7 @@ class TestAddLine:
     def test_wrong_param_type_for_slot_raises(self):
         config = LineConfiguration()
         with pytest.raises(TypeError, match='must be a FWHM'):
-            config.add_line('Ha', 6564.61 * u.AA, fwhm_gauss=Param())  # type: ignore[arg-type]
+            config.add_line('Ha', 6564.61 * u.AA, fwhm_gauss=LineShape())  # type: ignore[arg-type]
 
     def test_non_quantity_center_raises(self):
         config = LineConfiguration()
@@ -389,6 +399,25 @@ class TestAddLines:
         assert len(config) == 2
         assert config._entries[0].redshift is config._entries[1].redshift
 
+    def test_auto_names_use_center_value(self):
+        config = LineConfiguration()
+        config.add_lines('[NII]', [6585.27 * u.AA, 6549.86 * u.AA])
+        assert config._entries[0].name == '[NII]_6585.27'
+        assert config._entries[1].name == '[NII]_6549.86'
+
+    def test_explicit_names_array(self):
+        config = LineConfiguration()
+        config.add_lines(
+            'NII', [6585.27 * u.AA, 6549.86 * u.AA], names=['NII_6585', 'NII_6550']
+        )
+        assert config._entries[0].name == 'NII_6585'
+        assert config._entries[1].name == 'NII_6550'
+
+    def test_names_wrong_length_raises(self):
+        config = LineConfiguration()
+        with pytest.raises(ValueError, match="'names' has"):
+            config.add_lines('X', [5000.0 * u.AA, 5100.0 * u.AA], names=['only_one'])
+
     def test_per_line_flux(self):
         config = LineConfiguration()
         f1 = Flux('f1')
@@ -488,7 +517,7 @@ class TestSaveLoad:
 
 _PROFILE_PARAMS = [
     (Gaussian(), {'fwhm_gauss': 100.0}),
-    (Cauchy(), {'fwhm_lorentzian': 100.0}),
+    (Cauchy(), {'fwhm_lorentz': 100.0}),
     (PseudoVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0}),
     (Laplace(), {'fwhm_exp': 100.0}),
     (SEMG(), {'fwhm_gauss': 80.0, 'fwhm_exp': 50.0}),

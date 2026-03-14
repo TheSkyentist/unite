@@ -192,6 +192,56 @@ class Configuration:
     # Dunder
     # ------------------------------------------------------------------
 
+    def __add__(self, other: Configuration) -> Configuration:
+        """Combine two configurations (strict mode — raises on name collisions).
+
+        Merges lines, continuum regions, and dispersers from both configurations.
+        Each sub-config combination follows strict mode — raises if any parameter
+        or disperser names collide.
+
+        Parameters
+        ----------
+        other : Configuration
+
+        Returns
+        -------
+        Configuration
+            New configuration combining lines, continuum, and dispersers from both
+            *self* and *other*.
+
+        Raises
+        ------
+        ValueError
+            If any parameter or disperser names appear in both configurations.
+        TypeError
+            If *other* is not a :class:`Configuration`.
+        """
+        if not isinstance(other, Configuration):
+            return NotImplemented
+
+        # Combine lines (required, always present)
+        lines = self.lines + other.lines
+
+        # Combine continuum (optional)
+        continuum = None
+        if self.continuum is not None and other.continuum is not None:
+            continuum = self.continuum + other.continuum
+        elif self.continuum is not None:
+            continuum = self.continuum
+        elif other.continuum is not None:
+            continuum = other.continuum
+
+        # Combine dispersers (optional)
+        dispersers = None
+        if self.dispersers is not None and other.dispersers is not None:
+            dispersers = self.dispersers + other.dispersers
+        elif self.dispersers is not None:
+            dispersers = self.dispersers
+        elif other.dispersers is not None:
+            dispersers = other.dispersers
+
+        return Configuration(lines, continuum=continuum, dispersers=dispersers)
+
     def __repr__(self) -> str:
         cont_repr = repr(self.continuum) if self.continuum is not None else 'None'
         dispersers_repr = (

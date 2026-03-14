@@ -14,11 +14,20 @@ from astropy import units as u
 
 from unite._utils import _alpha_name, _broadcast, _ensure_wavelength
 from unite.line.profiles import Profile, profile_from_dict, resolve_profile
-from unite.prior import Parameter, Prior, Uniform, prior_from_dict
+from unite.prior import Parameter, Prior, TruncatedNormal, Uniform, prior_from_dict
 
 # ------------------------------------------------------------------
 # Parameter token classes
 # ------------------------------------------------------------------
+
+# Maps category name → type prefix for NumPyro site names.
+# Categories not in this map use the category name itself as prefix.
+_CATEGORY_PREFIX: dict[str, str] = {'redshift': 'z', 'flux': 'flux'}
+
+
+def _prefix_for(category: str) -> str:
+    """Return the NumPyro site-name prefix for a given category."""
+    return _CATEGORY_PREFIX.get(category, category)
 
 
 class Redshift(Parameter):
@@ -47,7 +56,7 @@ class FWHM(Parameter):
         super().__init__(name, prior=prior)
 
 
-class Param(Parameter):
+class LineShape(Parameter):
     """
     A named generic shape parameter that can be shared between lines.
 
@@ -60,7 +69,7 @@ class Param(Parameter):
 
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
-            prior = Uniform(-10, 10)
+            prior = TruncatedNormal(low=0.3, high=0.3, loc=0, scale=0.1)
         super().__init__(name, prior=prior)
 
 
@@ -103,10 +112,10 @@ def _param_class_for(pn: str) -> type[Parameter]:
     Returns
     -------
     type
-        :class:`FWHM` for names starting with ``'fwhm'``, :class:`Param`
+        :class:`FWHM` for names starting with ``'fwhm'``, :class:`LineShape`
         otherwise.
     """
-    return FWHM if pn.startswith('fwhm') else Param
+    return FWHM if pn.startswith('fwhm') else LineShape
 
 
 # ------------------------------------------------------------------
@@ -349,6 +358,8 @@ class LineConfiguration:
         self._used_names: dict[str, set[str]] = {}
         # Per-category auto-name counter
         self._counters: dict[str, count] = {}
+        # Line names already used (must be unique)
+        self._used_line_names: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -370,7 +381,10 @@ class LineConfiguration:
         Parameters
         ----------
         name : str
-            Identifier for the line (e.g. ``'Ha'``, ``'[OIII]5007'``).
+            Unique identifier for the line (e.g. ``'Ha'``, ``'[OIII]5007'``,
+            ``'Ha_narrow'``).  Line names must be unique within a
+            :class:`LineConfiguration`; adding a second line with the same
+            name raises :exc:`ValueError`.
         center : float, Quantity, or sequence thereof
             Rest-frame wavelength(s).
         redshift : Redshift, optional
@@ -391,9 +405,23 @@ class LineConfiguration:
             :meth:`~unite.profile.base.Profile.default_priors`.
             Examples: ``fwhm_gauss=FWHM('narrow')``,
             ``h3=Param('narrow_h3', prior=Uniform(-0.5, 0.5))``.
+
+        Raises
+        ------
+        ValueError
+            If *name* is already used by another line in this configuration.
         """
+        # --- Enforce unique line names ---
+        if name in self._used_line_names:
+            msg = (
+                f'Line name {name!r} is already used. Each line must have a unique '
+                f'name. Use distinct names such as {name!r}_narrow / {name!r}_broad '
+                f'for multiple kinematic components.'
+            )
+            raise ValueError(msg)
+
         # --- Validate wavelength and resolve all tokens first ---
-        wl = _ensure_wavelength(center)
+        wl = _ensure_wavelength(center, 'center', ndim=0)
 
         if redshift is None:
             redshift = Redshift()
@@ -410,34 +438,13 @@ class LineConfiguration:
         prof = resolve_profile(profile)
         fwhms = _resolve_params(prof, param_kwargs)
 
-        # --- Conflict check: (name, wavelength, redshift, fwhm) must be unique.
-        # Same name + wavelength is allowed when redshift or fwhm differs
-        # (e.g. narrow vs broad component of the same line). ---
-        fwhm_ids = {k: id(v) for k, v in fwhms.items()}
-        for entry in self._entries:
-            if (
-                entry.name == name
-                and entry.wavelength == wl
-                and entry.redshift is redshift
-                and {k: id(v) for k, v in entry.fwhms.items()} == fwhm_ids
-            ):
-                msg = (
-                    f'An identical line already exists: {name!r} at {wl} '
-                    f'with the same redshift and fwhm tokens. '
-                    f'Each (name, wavelength, redshift, fwhm) combination must be unique.'
-                )
-                raise ValueError(msg)
-
         # --- Register / auto-name all kinematic tokens ---
-        # Auto-names follow the pattern "{line_name}-{wavelength}-{param}", e.g.
-        # "Ha-6564-z", "Ha-6564-fwhm_gauss", "Ha-6564-flux".  When the hint is
-        # already taken (two unnamed tokens of the same type on the same
-        # line), the fallback appends an alphabet suffix: "Ha-6564-z_a", "_b", …
-        self._register_token(redshift, 'redshift', hint=f'{name}-{wl.value}-z')
+        self._register_token(redshift, 'redshift', hint_label=name)
         for wn, w_obj in fwhms.items():
-            self._register_token(w_obj, wn, hint=f'{name}-{wl.value}-{wn}')
-        self._register_token(flux, 'flux', hint=f'{name}-{wl.value}-flux')
+            self._register_token(w_obj, wn, hint_label=name)
+        self._register_token(flux, 'flux', hint_label=name)
 
+        self._used_line_names.add(name)
         self._entries.append(
             _LineEntry(
                 name=name,
@@ -455,24 +462,31 @@ class LineConfiguration:
         name: str,
         centers: u.Quantity,
         *,
+        names: Sequence[str] | None = None,
         profile: str | Profile = 'gaussian',
         redshift: Redshift | Sequence[Redshift | None] | None = None,
         flux: Flux | Sequence[Flux | None] | None = None,
         strength: int | float | Sequence[int | float] = 1.0,
         **param_kwargs,
     ) -> None:
-        r"""Add multiple lines sharing the same name and profile.
+        r"""Add multiple lines, each with an independent name.
 
-        Each entry in *centers* becomes one line.  All other arguments
-        may be supplied as a single value (broadcast to every line) or
-        as a sequence of the same length as *centers*.
+        Each entry in *centers* becomes one line with a unique name.  When
+        *names* is omitted, names are auto-generated as
+        ``'{name}_{center.value:g}'`` (e.g. ``'NII_6585'``, ``'NII_6550'``).
+        All other arguments may be supplied as a single value (broadcast to
+        every line) or as a sequence of the same length as *centers*.
 
         Parameters
         ----------
         name : str
-            Shared identifier for all lines.
+            Base name.  Used as a prefix when auto-generating per-line names.
         centers : Quantity
             Rest-frame wavelengths.  Must be non-empty.
+        names : sequence of str, optional
+            Explicit per-line names.  Must have the same length as *centers*.
+            When provided, *name* is ignored for naming purposes (it is only
+            used as a fallback label hint).
         profile : str or Profile, optional
             Line profile shared by all lines.  Default ``'gaussian'``.
         redshift : Redshift or sequence thereof, optional
@@ -489,8 +503,9 @@ class LineConfiguration:
         Raises
         ------
         ValueError
-            If *centers* is empty, or if any sequence argument has a
-            length other than 1 or ``len(centers)``.
+            If *centers* is empty, if *names* has the wrong length, or if
+            any sequence argument has a length other than 1 or
+            ``len(centers)``.
         TypeError
             If any token has the wrong type for its slot.
         """
@@ -498,15 +513,30 @@ class LineConfiguration:
         if n == 0:
             raise ValueError("'centers' must be non-empty.")
 
+        if names is not None:
+            names_seq = list(names)
+            if len(names_seq) != n:
+                msg = (
+                    f"'names' has {len(names_seq)} element(s) but 'centers' has {n}. "
+                    f'They must have the same length.'
+                )
+                raise ValueError(msg)
+        else:
+            names_seq = None
+
         redshifts = _broadcast(redshift, 'redshift', n)
         fluxes = _broadcast(flux, 'flux', n)
         strengths = _broadcast(strength, 'strength', n)
         broadcasted_kwargs = {k: _broadcast(v, k, n) for k, v in param_kwargs.items()}
 
         for i, center in enumerate(centers):
+            if names_seq is not None:
+                line_name = names_seq[i]
+            else:
+                line_name = f'{name}_{center.value:g}'
             kw = {k: v[i] for k, v in broadcasted_kwargs.items()}
             self.add_line(
-                name,
+                line_name,
                 center,
                 profile=profile,
                 redshift=redshifts[i],
@@ -516,56 +546,71 @@ class LineConfiguration:
             )
 
     def _register_token(
-        self, token: Parameter, category: str, hint: str | None = None
+        self, token: Parameter, category: str, hint_label: str | None = None
     ) -> None:
-        """Register a kinematic token, auto-naming it if it has no name yet.
+        """Register a parameter token, assigning a prefixed site name.
 
-        Sets ``token.name`` in-place when unnamed.  Unnamed tokens use *hint*
-        as their name; when *hint* is already taken in the category, appends
-        ``_a``, ``_b``, … until a unique name is found.
-        Raises :exc:`ValueError` if a user-supplied name clashes with a name
-        already registered in the same *category*.
+        Sets ``token.name`` (NumPyro site name) and ``token.label`` (human
+        label) in-place when not yet set.  Detects name collisions within
+        each category.
 
         Parameters
         ----------
         token : Parameter
             The token to register.
         category : str
-            Grouping key for duplicate detection (e.g. ``'z'``,
-            ``'fwhm_gauss'``, ``'h3'``, ``'flux'``).
-        hint : str, optional
-            Preferred name to try first when the token is unnamed.
+            Grouping key (e.g. ``'redshift'``, ``'fwhm_gauss'``, ``'flux'``).
+            Determines the type prefix used to build the site name.
+        hint_label : str, optional
+            Label hint for auto-naming (the line name).  Used when the token
+            has no user-supplied label.
         """
         tid = id(token)
         if tid in self._token_registry:
             return  # already registered; name already assigned
 
+        prefix = _prefix_for(category)
         used = self._used_names.setdefault(category, set())
 
         if token.name is not None:
-            name = token.name
-            if name in used:
-                msg = (
-                    f'Duplicate {category} parameter name {name!r}. '
+            # Already has a finalized site name (e.g. re-used from _filter or merge).
+            site_name = token.name
+            if site_name in used:
+                raise ValueError(
+                    f'Duplicate {category} site name {site_name!r}. '
                     f'Each token in the same category must have a unique name.'
                 )
-                raise ValueError(msg)
+        elif token.label is not None:
+            # User supplied a label; prefix it to get the site name.
+            site_name = f'{prefix}_{token.label}'
+            if site_name in used:
+                raise ValueError(
+                    f'Duplicate {category} parameter name {token.label!r} '
+                    f'(site name {site_name!r}). Each token in the same '
+                    f'category must have a unique name.'
+                )
+            token.name = site_name
         else:
-            # Try the hint first; when taken, append _a, _b, _c, …
-            if hint is not None and hint not in used:
-                name = hint
+            # Auto-name from hint (use line name, not wavelength).
+            base = f'{prefix}_{hint_label}' if hint_label else prefix
+            if base not in used:
+                site_name = base
             else:
-                base = hint if hint is not None else category
                 ctr = self._counters.setdefault(base, count())
                 while True:
-                    candidate = f'{base}_{_alpha_name(next(ctr))}'
-                    if candidate not in used:
-                        name = candidate
+                    site_name = f'{base}_{_alpha_name(next(ctr))}'
+                    if site_name not in used:
                         break
-            token.name = name
+            token.name = site_name
+            # Derive label from site name by stripping the prefix.
+            token.label = (
+                site_name[len(prefix) + 1 :]
+                if site_name.startswith(prefix + '_')
+                else site_name
+            )
 
-        used.add(name)
-        self._token_registry[tid] = name
+        used.add(site_name)
+        self._token_registry[tid] = site_name
 
     # ------------------------------------------------------------------
     # Matrix construction
@@ -774,17 +819,31 @@ class LineConfiguration:
                 return Flux
             if section.startswith('fwhm'):
                 return FWHM
-            return Param
+            return LineShape
 
         # Pass 1 — create token objects (name comes from the dict key).
         # All tokens must exist before priors are parsed because priors may
         # contain ParameterRefs that point to other tokens.
+        sec_prefix = {
+            section: _prefix_for(section) for section in d if section != 'lines'
+        }
         section_tokens: dict[str, dict[str, Parameter]] = {}
         for section, params in d.items():
             if section == 'lines':
                 continue
             klass = _class_for_section(section)
-            section_tokens[section] = {name: klass(name=name) for name in params}
+            prefix = sec_prefix[section]
+            tokens: dict[str, Parameter] = {}
+            for site_name in params:
+                tok = klass()
+                tok.name = site_name  # set site name directly
+                # Derive label by stripping prefix
+                if site_name.startswith(prefix + '_'):
+                    tok.label = site_name[len(prefix) + 1 :]
+                else:
+                    tok.label = site_name
+                tokens[site_name] = tok
+            section_tokens[section] = tokens
 
         # Pass 2 — assign deserialized priors.
         # ParameterRefs can reference parameters from any section, so we need a global registry.

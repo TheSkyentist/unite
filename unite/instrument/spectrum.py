@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 from astropy import units as u
 
-from unite._utils import C_KMS, _ensure_velocity, _flux_density_conversion_factor
+from unite._utils import C_KMS, _ensure_velocity, _get_conversion_factor
 from unite.instrument.generic import GenericSpectrum
 
 if TYPE_CHECKING:
@@ -173,6 +173,16 @@ class Spectra:
         self._prepared_cont_config: ContinuumConfiguration | None = None
         self._scale_diagnostics: ScaleDiagnosticList | None = None
 
+        # Assign names to any anonymous calibration tokens on the dispersers.
+        # Local import avoids circular dependency at module load time.
+        from unite.instrument.config import InstrumentConfig
+
+        seen_ids: dict[int, object] = {}
+        for s in self._spectra:
+            if id(s.disperser) not in seen_ids:
+                seen_ids[id(s.disperser)] = s.disperser
+        InstrumentConfig(list(seen_ids.values()))
+
         # Canonical wavelength unit: default to the first spectrum's unit.
         if canonical_unit is not None:
             canonical_unit = u.Unit(canonical_unit)
@@ -260,7 +270,7 @@ class Spectra:
         continuum_config: ContinuumConfiguration | None = None,
         *,
         line_mask_width: u.Quantity = 1000.0 * u.km / u.s,
-        max_width: u.Quantity = 1000.0 * u.km / u.s,
+        box_width: u.Quantity = 1000.0 * u.km / u.s,
         error_scale: bool = False,
     ) -> None:
         """Estimate characteristic flux scales for lines and continuum.
@@ -276,7 +286,7 @@ class Spectra:
         4. Estimate the **continuum scale** as the maximum median ``|flux|``
            across continuum regions (after masking lines).
         5. Optionally compute per-region **error scale** factors
-           (``sqrt(max(chi2_red, 1.0))``) and store them as per-pixel
+           (``sqrt(chi2_red)``) and store them as per-pixel
            arrays on each :class:`~unite.instrument.generic.GenericSpectrum`.
 
         Both flux scales are stored as :class:`~astropy.units.Quantity`
@@ -303,11 +313,10 @@ class Spectra:
             :attr:`~unite.instrument.generic.GenericSpectrum.error_scale`.
             Default ``False``.
         """
-        max_width = _ensure_velocity(max_width, 'max_fwhm')
-        line_mask_width = _ensure_velocity(line_mask_width, 'line_mask_fwhm')
-        max_width_kms = float(max_width.to(u.km / u.s).value)
+        box_width = _ensure_velocity(box_width, 'max_fwhm', ndim=0)
+        line_mask_width = _ensure_velocity(line_mask_width, 'line_mask_fwhm', ndim=0)
+        box_width_kms = float(box_width.to(u.km / u.s).value)
         mask_width_kms = float(line_mask_width.to(u.km / u.s).value)
-        from unite._utils import _wavelength_conversion_factor
 
         z = self._redshift
         ref_flux_unit = self._spectra[0].flux_unit
@@ -346,13 +355,14 @@ class Spectra:
                 return None, in_region, good, None, {}
 
             center = float((obs_low + obs_high) / 2.0)
-            adapted_form = form._adapt_for_observed_region(obs_low, obs_high)
             result = fit_continuum_form(
-                adapted_form, wl[good], flux[good], error[good], center
+                form, wl[good], flux[good], error[good], center, obs_low, obs_high
             )
 
             # Evaluate on all in-region pixels.
-            model_region = adapted_form.evaluate(wl[in_region], center, result.params)
+            model_region = form.evaluate(
+                wl[in_region], center, result.params, obs_low, obs_high
+            )
 
             return model_region, in_region, good, result.chi2_red, result.params
 
@@ -360,14 +370,14 @@ class Spectra:
         #     derive line scale, continuum scale, error scale, and diagnostics.
         max_line_scale = 0.0
         max_cont_scale = 0.0
+        any_good_continuum_pixels = False
+        any_successful_fit = False
         diag_list = []
 
         for spectrum in self._spectra:
             wl = spectrum.wavelength
-            flux_conv = _flux_density_conversion_factor(
-                spectrum.flux_unit, ref_flux_unit
-            )
-            wl_conv = _wavelength_conversion_factor(spectrum.unit, ref_wl_unit)
+            flux_conv = _get_conversion_factor(spectrum.flux_unit, ref_flux_unit)
+            wl_conv = _get_conversion_factor(spectrum.unit, ref_wl_unit)
             line_mask = _build_line_mask(spectrum, mask_width_kms)
 
             continuum_model = jnp.full(spectrum.npix, jnp.nan)
@@ -376,7 +386,7 @@ class Spectra:
 
             if continuum_config is not None:
                 for region in continuum_config:
-                    conv = _wavelength_conversion_factor(region._unit, spectrum.unit)
+                    conv = _get_conversion_factor(region._unit, spectrum.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
 
@@ -401,9 +411,11 @@ class Spectra:
                         continuum_model = continuum_model.at[in_region].set(
                             model_region
                         )
+                        any_successful_fit = True
 
                     # Continuum scale: median |flux| of unmasked pixels.
                     if jnp.any(good):
+                        any_good_continuum_pixels = True
                         median_flux = float(jnp.median(jnp.abs(spectrum.flux[good])))
                         max_cont_scale = max(max_cont_scale, median_flux * flux_conv)
 
@@ -430,6 +442,8 @@ class Spectra:
                 spectrum.error_scale = per_pixel_scale
 
             # Line scale: peak above continuum within ±total_fwhm of each line.
+            # Where continuum is not fitted (NaN), assume zero baseline.
+            baseline = jnp.where(jnp.isnan(continuum_model), 0.0, continuum_model)
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
                 lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
@@ -439,10 +453,10 @@ class Spectra:
                 if not jnp.any(in_window):
                     continue
                 peak_above = float(
-                    jnp.nanmax(spectrum.flux[in_window] - continuum_model[in_window])
+                    jnp.max(spectrum.flux[in_window] - baseline[in_window])
                 )
-                max_width_lam = max_width_kms * lam_obs / C_KMS
-                flux_est = peak_above * flux_conv * max_width_lam * wl_conv
+                box_width_lam = box_width_kms * lam_obs / C_KMS
+                flux_est = peak_above * flux_conv * box_width_lam * wl_conv
                 max_line_scale = max(max_line_scale, flux_est)
 
             diag_list.append(
@@ -459,12 +473,45 @@ class Spectra:
                 )
             )
 
-        line_scale_val = max_line_scale if max_line_scale > 0 else 1.0
-        self._line_scale = line_scale_val * ref_flux_unit * ref_wl_unit
+        if max_line_scale <= 0:
+            msg = (
+                'Could not estimate line flux scale: no emission line peak '
+                'was found above the continuum in any spectrum. This can '
+                'happen if (a) the configured lines fall outside the spectral '
+                'coverage, (b) the continuum model over-subtracts the flux, '
+                'or (c) the lines are too faint relative to noise. '
+                'Check that line_config wavelengths match the observed data, '
+                'or set spectra.line_scale manually.'
+            )
+            raise ValueError(msg)
+        self._line_scale = max_line_scale * ref_flux_unit * ref_wl_unit
 
         if continuum_config is not None:
-            cont_scale_val = max_cont_scale if max_cont_scale > 0 else 1.0
-            self._continuum_scale = cont_scale_val * ref_flux_unit
+            if not any_good_continuum_pixels:
+                msg = (
+                    'Could not estimate continuum scale: the line mask covers '
+                    'all pixels in every continuum region, leaving no unmasked '
+                    'pixels for fitting. Try reducing line_mask_width (currently '
+                    f'{line_mask_width}) or widening the continuum regions.'
+                )
+                raise ValueError(msg)
+            if not any_successful_fit:
+                msg = (
+                    'Could not estimate continuum scale: all continuum region '
+                    'fits failed (too few unmasked pixels in every region after '
+                    'line masking). Try reducing line_mask_width (currently '
+                    f'{line_mask_width}) or widening the continuum regions.'
+                )
+                raise ValueError(msg)
+            if max_cont_scale <= 0:
+                msg = (
+                    'Could not estimate continuum scale: the median |flux| in '
+                    'all continuum regions is zero. Check that the input spectra '
+                    'contain non-zero flux values, or set '
+                    'spectra.continuum_scale manually.'
+                )
+                raise ValueError(msg)
+            self._continuum_scale = max_cont_scale * ref_flux_unit
 
         self._scale_diagnostics = ScaleDiagnosticList(diag_list)
 
@@ -475,7 +522,7 @@ class Spectra:
         line_config: LineConfiguration,
         continuum_config: ContinuumConfiguration | None = None,
         *,
-        linedet: u.Quantity = 1000.0 * u.km / u.s,
+        linedet_width: u.Quantity = 1000.0 * u.km / u.s,
         drop_empty_regions: bool = True,
     ) -> tuple[LineConfiguration, ContinuumConfiguration | None]:
         """Filter configs for coverage and optionally drop empty continuum regions.
@@ -491,8 +538,8 @@ class Spectra:
             Line configuration.
         continuum_config : ContinuumConfiguration, optional
             Continuum configuration.
-        linedet : astropy.units.Quantity
-            Detection half-width.  Must have velocity units.
+        linedet_width : astropy.units.Quantity
+            Detection width.  Must have velocity units.
             Default ``1000 km/s``.
         drop_empty_regions : bool
             If ``True`` (default), drop continuum regions that do not contain
@@ -506,7 +553,7 @@ class Spectra:
         from unite.continuum.config import ContinuumConfiguration
 
         filtered_lines, filtered_cont = self.filter_config(
-            line_config, continuum_config, linedet=linedet
+            line_config, continuum_config, linedet_width=linedet_width
         )
 
         if drop_empty_regions and filtered_cont is not None and len(filtered_lines) > 0:
@@ -551,12 +598,12 @@ class Spectra:
         line_config: LineConfiguration,
         continuum_config: ContinuumConfiguration | None = None,
         *,
-        linedet: u.Quantity = 1000.0 * u.km / u.s,
+        linedet_width: u.Quantity = 1000.0 * u.km / u.s,
     ) -> tuple[LineConfiguration, ContinuumConfiguration | None]:
         """Drop lines and continuum regions not covered by any spectrum.
 
         Each line's rest-frame wavelength is shifted to the observed frame
-        using :attr:`redshift`, then padded by *linedet* to form a
+        using :attr:`redshift`, then padded by *linedet_width* to form a
         detection window.  A line is kept if **any** spectrum partially
         overlaps that window.  Continuum regions are checked the same way.
 
@@ -566,8 +613,8 @@ class Spectra:
             Line configuration to filter.
         continuum_config : ContinuumConfiguration, optional
             Continuum configuration to filter.  ``None`` is passed through.
-        linedet : astropy.units.Quantity
-            Detection half-width.  Must have velocity units.
+        linedet_width : astropy.units.Quantity
+            Detection width.  Must have velocity units.
             Default ``1000 km/s``.
 
         Returns
@@ -575,11 +622,10 @@ class Spectra:
         filtered_lines : LineConfiguration
         filtered_continuum : ContinuumConfiguration or None
         """
-        from unite._utils import _wavelength_conversion_factor
         from unite.continuum.config import ContinuumConfiguration
 
-        linedet = _ensure_velocity(linedet, 'linedet')
-        eps = float(linedet.to(u.km / u.s).value) / C_KMS
+        linedet_width = _ensure_velocity(linedet_width, 'linedet_width', ndim=0)
+        eps = float(linedet_width.to(u.km / u.s).value) / (2 * C_KMS)
         z = self._redshift
 
         # --- filter lines ---
@@ -605,7 +651,7 @@ class Spectra:
                 # to each spectrum's disperser unit before checking coverage.
                 region_covered = False
                 for s in self._spectra:
-                    conv = _wavelength_conversion_factor(region._unit, s.unit)
+                    conv = _get_conversion_factor(region._unit, s.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
                     if s.covers(obs_low, obs_high):

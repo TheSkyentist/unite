@@ -79,69 +79,69 @@ class TestSimpleDisperser:
     """Tests for SimpleDisperser."""
 
     def test_construction_with_R(self):
-        wl = np.linspace(5000, 7000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0)
+        wl = np.linspace(5000, 7000, 100) * u.AA
+        d = SimpleDisperser(wavelength=wl, R=3000.0)
         assert d.unit == u.AA
 
     def test_construction_with_dlam(self):
-        wl = np.linspace(5000, 7000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, dlam=2.0)
+        wl = np.linspace(5000, 7000, 100) * u.AA
+        d = SimpleDisperser(wavelength=wl, dlam=2.0 * u.AA)
         r = d.R(jnp.array([6000.0]))
         np.testing.assert_allclose(r, 3000.0, rtol=1e-3)
 
     def test_construction_with_dvel(self):
-        wl = np.linspace(5000, 7000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, dvel=100.0)
+        wl = np.linspace(5000, 7000, 100) * u.AA
+        d = SimpleDisperser(wavelength=wl, dvel=100.0 * u.km / u.s)
         r = d.R(jnp.array([6000.0]))
         # R = c / dvel = 299792.458 / 100 ≈ 2998
         np.testing.assert_allclose(r, 299792.458 / 100, rtol=1e-3)
 
     def test_no_resolution_raises(self):
-        wl = np.linspace(5000, 7000, 100)
+        wl = np.linspace(5000, 7000, 100) * u.AA
         with pytest.raises(ValueError, match='Exactly one of'):
-            SimpleDisperser(wavelength=wl, unit=u.AA)
+            SimpleDisperser(wavelength=wl)
 
     def test_multiple_resolution_raises(self):
-        wl = np.linspace(5000, 7000, 100)
+        wl = np.linspace(5000, 7000, 100) * u.AA
         with pytest.raises(ValueError, match='Exactly one of'):
-            SimpleDisperser(wavelength=wl, unit=u.AA, R=3000, dlam=2.0)
+            SimpleDisperser(wavelength=wl, R=3000, dlam=2.0 * u.AA)
 
     def test_wrong_shape_R_raises(self):
-        wl = np.linspace(5000, 7000, 100)
+        wl = np.linspace(5000, 7000, 100) * u.AA
         with pytest.raises(ValueError, match='same shape'):
-            SimpleDisperser(wavelength=wl, unit=u.AA, R=np.ones(50))
+            SimpleDisperser(wavelength=wl, R=np.ones(50))
 
     def test_scalar_R_broadcast(self):
-        wl = np.linspace(5000, 7000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0)
+        wl = np.linspace(5000, 7000, 100) * u.AA
+        d = SimpleDisperser(wavelength=wl, R=3000.0)
         r = d.R(jnp.asarray(wl))
         np.testing.assert_allclose(r, 3000.0)
 
     def test_array_R(self):
-        wl = np.linspace(5000, 7000, 100)
+        wl = np.linspace(5000, 7000, 100) * u.AA
         r_arr = np.linspace(2000, 4000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, R=r_arr)
+        d = SimpleDisperser(wavelength=wl, R=r_arr)
         r = d.R(jnp.asarray(wl))
         np.testing.assert_allclose(r, r_arr, rtol=1e-5)
 
     def test_dlam_dpix_from_gradient(self):
         """dlam_dpix should be derived from pixel spacing."""
-        wl = np.linspace(5000, 7000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0)
+        wl = np.linspace(5000, 7000, 100) * u.AA
+        d = SimpleDisperser(wavelength=wl, R=3000.0)
         dlam = d.dlam_dpix(jnp.asarray(wl))
         # Uniform grid: spacing = (7000-5000)/99 ≈ 20.2
-        expected = np.gradient(wl)
+        expected = np.gradient(wl.value)
         np.testing.assert_allclose(dlam, expected, rtol=1e-5)
 
     def test_interpolation_outside_grid(self):
         """Values outside the grid should be extrapolated via jnp.interp."""
-        wl = np.linspace(5000, 7000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0)
+        wl = np.linspace(5000, 7000, 100) * u.AA
+        d = SimpleDisperser(wavelength=wl, R=3000.0)
         # Should not raise, jnp.interp clamps at boundaries
         r = d.R(jnp.array([4000.0, 8000.0]))
         assert jnp.all(jnp.isfinite(r))
 
     def test_name_kwarg(self):
-        wl = np.linspace(5000, 7000, 100)
-        d = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0, name='test')
+        wl = np.linspace(5000, 7000, 100) * u.AA
+        d = SimpleDisperser(wavelength=wl, R=3000.0, name='test')
         assert d.name == 'test'

@@ -59,6 +59,7 @@ from pathlib import Path
 
 import yaml
 
+from unite._utils import _alpha_name
 from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
 from unite.instrument.nirspec.disperser import (
     G140H,
@@ -107,7 +108,10 @@ def _calib_param_from_dict(name: str, d: dict) -> Parameter:
     """Reconstruct a calibration token from its serialized dict."""
     cls = _CALIB_REGISTRY[d['type']]
     prior = prior_from_dict(d['prior'])
-    return cls(prior=prior, name=name)
+    tok = cls(prior=prior)
+    tok.name = name  # set finalized site name directly to avoid re-prefixing
+    tok.label = name  # keep label consistent with name
+    return tok
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +244,59 @@ class InstrumentConfig:
             msg = f'Duplicate disperser name(s) in InstrumentConfig: {dupes}'
             raise ValueError(msg)
         self._dispersers: list[Disperser] = list(dispersers)
+        self._assign_calib_names()
+
+    # -- calibration token naming --------------------------------------------
+
+    def _assign_calib_names(self) -> None:
+        """Assign site names to any anonymous calibration tokens.
+
+        Tokens with a user-supplied label already have their site name set by
+        :class:`~unite.instrument.base.Disperser`.  This method handles the
+        remaining anonymous tokens (``label=None``, ``name=None``):
+
+        * **Unshared** token on a single named disperser → ``'{prefix}_{disperser.name}'``
+          (e.g. ``FluxScale()`` on ``G235H`` → ``'fs_G235H'``).
+        * **Shared** token across multiple dispersers, or disperser with no name
+          → alphabetic counter: ``'r_a'``, ``'r_b'``, …
+
+        A shared anonymous token (same instance on multiple dispersers) is
+        encountered once and receives exactly one name.
+        """
+        _slots = ('r_scale', 'flux_scale', 'pix_offset')
+
+        # Pre-compute which dispersers each anonymous token appears on.
+        tok_dispersers: dict[int, list] = {}
+        for d in self._dispersers:
+            for slot in _slots:
+                tok = getattr(d, slot)
+                if tok is not None and tok.name is None:
+                    tok_dispersers.setdefault(id(tok), []).append(d)
+
+        counters: dict[str, int] = {}  # slot → next alpha index
+        seen: set[int] = set()  # id(tok) already named
+
+        for d in self._dispersers:
+            for slot in _slots:
+                tok = getattr(d, slot)
+                if tok is None or tok.name is not None or id(tok) in seen:
+                    continue
+                seen.add(id(tok))
+                dispersers_with_tok = tok_dispersers.get(id(tok), [])
+                if tok.label is not None:
+                    # User-supplied label takes priority (name already set by base.py).
+                    pass
+                elif len(dispersers_with_tok) == 1 and d.name:
+                    # Unshared token on a single named disperser: use its name.
+                    tok.name = f'{slot}_{d.name}'
+                    tok.label = d.name
+                else:
+                    # Shared across multiple dispersers or unnamed disperser: alpha.
+                    idx = counters.get(slot, 0)
+                    counters[slot] = idx + 1
+                    label = _alpha_name(idx)
+                    tok.name = f'{slot}_{label}'
+                    tok.label = label
 
     # -- validation ----------------------------------------------------------
 
@@ -385,6 +442,38 @@ class InstrumentConfig:
         InstrumentConfig
         """
         return cls.from_yaml(Path(path).read_text())
+
+    # -- addition ------------------------------------------------------------
+
+    def __add__(self, other: InstrumentConfig) -> InstrumentConfig:
+        """Combine two configurations (strict mode — raises on duplicate names).
+
+        Parameters
+        ----------
+        other : InstrumentConfig
+
+        Returns
+        -------
+        InstrumentConfig
+            New configuration containing dispersers from both *self* and *other*.
+
+        Raises
+        ------
+        ValueError
+            If any disperser name appears in both configurations.
+        TypeError
+            If *other* is not an :class:`InstrumentConfig`.
+        """
+        if not isinstance(other, InstrumentConfig):
+            return NotImplemented
+
+        self_names = set(self.names)
+        collisions = [n for n in other.names if n in self_names]
+        if collisions:
+            msg = f'Duplicate disperser name(s) in InstrumentConfig addition: {collisions}'
+            raise ValueError(msg)
+
+        return InstrumentConfig(list(self._dispersers) + list(other._dispersers))
 
     # -- repr ----------------------------------------------------------------
 

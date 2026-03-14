@@ -23,9 +23,7 @@ from unite.results import (
 def _setup():
     """Create model and get predictive samples."""
     wavelength = np.linspace(6500, 6600, 60) * u.AA
-    disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='test'
-    )
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
 
@@ -158,9 +156,7 @@ class TestMakeSpectraTables:
 def _setup_with_continuum():
     """Create model with continuum and get predictive samples."""
     wavelength = np.linspace(6500, 6600, 60) * u.AA
-    disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='test'
-    )
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
 
@@ -214,36 +210,36 @@ class TestRestEquivalentWidths:
     def test_rew_columns_present(self):
         samples, args = _setup_with_continuum()
         table = make_parameter_table(samples, args)
-        assert 'Ha_rew' in table.colnames
+        assert 'rew_Ha' in table.colnames
 
     def test_rew_has_unit(self):
         samples, args = _setup_with_continuum()
         table = make_parameter_table(samples, args)
-        assert table['Ha_rew'].unit is not None
+        assert table['rew_Ha'].unit is not None
 
     def test_rew_shape(self):
         samples, args = _setup_with_continuum()
         table = make_parameter_table(samples, args)
-        assert len(table['Ha_rew']) == 4  # 4 samples
+        assert len(table['rew_Ha']) == 4  # 4 samples
 
     def test_rew_finite(self):
         samples, args = _setup_with_continuum()
         table = make_parameter_table(samples, args)
-        assert np.all(np.isfinite(np.asarray(table['Ha_rew'])))
+        assert np.all(np.isfinite(np.asarray(table['rew_Ha'])))
 
     def test_rew_percentiles_mode(self):
         samples, args = _setup_with_continuum()
         percentiles = np.array([0.16, 0.5, 0.84])
         table = make_parameter_table(samples, args, percentiles=percentiles)
-        assert 'Ha_rew' in table.colnames
-        assert len(table['Ha_rew']) == 3  # 3 percentiles
+        assert 'rew_Ha' in table.colnames
+        assert len(table['rew_Ha']) == 3  # 3 percentiles
         assert 'percentile' in table.colnames
         assert np.allclose(table['percentile'], percentiles)
 
     def test_no_rew_without_continuum(self):
         samples, args = _setup()
         table = make_parameter_table(samples, args)
-        assert not any(col.endswith('_rew') for col in table.colnames)
+        assert not any(col.startswith('rew_') for col in table.colnames)
 
 
 class TestMakeHDUL:
@@ -395,9 +391,7 @@ def _setup_two_region_continuum():
     )
     wavelength = np.sort(wavelength)
 
-    disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='two_region'
-    )
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='two_region')
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
     flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')

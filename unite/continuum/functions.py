@@ -9,20 +9,16 @@ from __future__ import annotations
 from functools import partial
 from typing import Final
 
-import jax.nn as jnn
 import jax.numpy as jnp
-from astropy import constants
+from astropy import constants as const, units as u
 from jax import Array, jit
 from jax.typing import ArrayLike
 
 # ---------------------------------------------------------------------------
-# Physical constants (SI)
+# Physical constants
 # ---------------------------------------------------------------------------
 
-_H: Final[float] = constants.h.si.value  # Planck constant (J·s)
-_C_SI: Final[float] = constants.c.si.value  # Speed of light (m/s)
-_KB: Final[float] = constants.k_B.si.value  # Boltzmann constant (J/K)
-
+_HC_KB: Final[float] = ((const.c * const.h) / const.k_B).to(u.um * u.K).value
 
 # ---------------------------------------------------------------------------
 # Planck blackbody
@@ -30,32 +26,8 @@ _KB: Final[float] = constants.k_B.si.value  # Boltzmann constant (J/K)
 
 
 @jit
-def _safe_log_expm1(x: ArrayLike) -> Array:
-    """Numerically stable ``log(exp(x) - 1)``.
-
-    For large *x* (≳ 10) the expression equals *x*; for small *x* it is
-    computed via ``log(expm1(x))``.  A smooth sigmoid blend avoids
-    discontinuous gradients at the transition.
-
-    Parameters
-    ----------
-    x : ArrayLike
-        Input values (must be positive).
-
-    Returns
-    -------
-    Array
-        ``log(exp(x) - 1)`` computed with numerical stability.
-    """
-    alpha = jnn.sigmoid((x - 10.0) / 3.0)
-    x_safe = jnp.minimum(x, 50.0)
-    small = jnp.log(jnp.maximum(jnp.expm1(x_safe), 1e-100))
-    return jnp.where(x > 50.0, x, alpha * x + (1 - alpha) * small)
-
-
-@jit
 def planck_function(
-    wavelength_micron: ArrayLike, temperature_k: ArrayLike, pivot_micron: float = 0.5
+    wavelength_micron: ArrayLike, temperature_k: ArrayLike, pivot_micron: float
 ) -> Array:
     """Return the normalized Planck function ``B_λ(T) / B_λ(pivot, T)``.
 
@@ -70,7 +42,7 @@ def planck_function(
     temperature_k : ArrayLike
         Temperature in Kelvin.
     pivot_micron : float
-        Normalization wavelength in microns.  Default ``0.5``.
+        Normalization wavelength in microns.
 
     Returns
     -------
@@ -82,21 +54,11 @@ def planck_function(
     Physical constants are pre-combined to avoid gradient overflow in JAX
     when differentiating ``exp(hc / λkT)`` with respect to temperature.
     """
-    temperature_k = jnp.clip(temperature_k, 20.0, 1e5)
+    hc_kbt = _HC_KB / temperature_k
+    x = hc_kbt / wavelength_micron
+    x_p = hc_kbt / pivot_micron
 
-    wavelength_m = wavelength_micron * 1e-6
-    pivot_m = pivot_micron * 1e-6
-
-    const_wave = (_H * _C_SI) / (wavelength_m * _KB)
-    const_pivot = (_H * _C_SI) / (pivot_m * _KB)
-
-    x_wave = jnp.clip(const_wave / temperature_k, 0.01, 200.0)
-    x_pivot = jnp.clip(const_pivot / temperature_k, 0.01, 200.0)
-
-    log_ratio = -5.0 * jnp.log(wavelength_micron / pivot_micron)
-    log_expm1_diff = _safe_log_expm1(x_pivot) - _safe_log_expm1(x_wave)
-
-    return jnp.exp(jnp.clip(log_ratio + log_expm1_diff, -100.0, 100.0))
+    return ((pivot_micron / wavelength_micron) ** 5) * (jnp.expm1(x_p) / jnp.expm1(x))
 
 
 # ---------------------------------------------------------------------------
@@ -105,12 +67,12 @@ def planck_function(
 
 
 def chebval(x: ArrayLike, coeffs: list) -> Array:
-    """Evaluate a Chebyshev series via Clenshaw recurrence.
+    """Evaluate a Chebyshev series using the trigonometric identity.
 
     Parameters
     ----------
     x : ArrayLike
-        Evaluation points, typically normalized to ``[-1, 1]``.
+        Evaluation points, normalized to ``[-1, 1]``.
     coeffs : list of ArrayLike
         Chebyshev coefficients ``[c0, c1, ..., cN]``.
 
@@ -119,21 +81,57 @@ def chebval(x: ArrayLike, coeffs: list) -> Array:
     Array
         Series value at each point in *x*.
     """
-    n = len(coeffs)
-    if n == 1:
-        return coeffs[0] + jnp.zeros_like(x)
-    if n == 2:
-        return coeffs[0] + coeffs[1] * x
-    x2 = 2 * x
-    c0, c1 = coeffs[-2], coeffs[-1]
-    for k in range(3, n + 1):
-        c0, c1 = coeffs[-k] - c1, c0 + c1 * x2
-    return c0 + c1 * x
+    x = jnp.atleast_1d(x)
+    # Create an array of degrees: [0, 1, 2, ..., n]
+    degrees = jnp.arange(len(coeffs), dtype=x.dtype)
+
+    # Calculate the theta values: theta = acos(x)
+    # Resulting shape: (len(x),)
+    theta = jnp.acos(x)
+
+    # Calculate the basis: cos(n * theta)
+    # We use broadcasting to get a matrix of shape (len(coeffs), len(x))
+    basis = jnp.cos(degrees[:, None] * theta[None, :])
+
+    # Weighted sum: coeffs @ basis
+    return jnp.dot(coeffs, basis)
+
+    # ---------------------------------------------------------------------------
+    # B-spline
+    # ---------------------------------------------------------------------------
 
 
-# ---------------------------------------------------------------------------
-# B-spline
-# ---------------------------------------------------------------------------
+@jit
+def bernstein_eval(x, coeffs, binom_coeffs):
+    """
+    Evaluate a Bernstein polynomial series using a vectorized basis matrix.
+
+    Parameters
+    ----------
+    x : ArrayLike
+        Evaluation points, must be normalized to the range [0, 1].
+        Shape: (N,).
+    coeffs : ArrayLike
+        Bernstein coefficients (control points). Shape: (n + 1,).
+    binom_coeffs : ArrayLike
+        Pre-computed binomial coefficients for degree n, where
+        binom_coeffs[i] = C(n, i). Shape: (n + 1,).
+
+    Returns
+    -------
+    Array
+        The evaluated polynomial values at each point in x. Shape: (N,).
+    """
+    x = jnp.atleast_1d(x)
+    n = coeffs.shape[0] - 1
+    i = jnp.arange(n + 1)
+
+    # Compute the basis functions using broadcasting
+    # For n=10, this is numerically safe and extremely fast
+    # Resulting shape: (len(wavelength), n+1)
+    basis = binom_coeffs * (x[:, None] ** i) * ((1.0 - x[:, None]) ** (n - i))
+
+    return basis @ coeffs
 
 
 def bspline_basis(t: ArrayLike, knots: ArrayLike, degree: int) -> Array:
@@ -160,32 +158,31 @@ def bspline_basis(t: ArrayLike, knots: ArrayLike, degree: int) -> Array:
     knots = jnp.asarray(knots)
     n_knots = len(knots)
 
-    t_safe = jnp.where(t >= knots[-1], knots[-1] * (1 - 1e-14), t)
+    # Handle the right-boundary condition (x == knots[-1])
+    # by pushing points slightly inside the last interval.
+    t = jnp.clip(t, knots[0], knots[-1] - 1e-14)
 
+    # Degree 0 basis: indicator functions
     basis = jnp.where(
-        (t_safe[:, None] >= knots[None, :-1]) & (t_safe[:, None] < knots[None, 1:]),
-        1.0,
-        0.0,
+        (t[:, None] >= knots[None, :-1]) & (t[:, None] < knots[None, 1:]), 1.0, 0.0
     )
 
+    # Recursive Cox-de Boor steps
     for d in range(1, degree + 1):
         n_basis = n_knots - d - 1
-        left_denom = knots[d : d + n_basis] - knots[:n_basis]
-        right_denom = knots[d + 1 : d + 1 + n_basis] - knots[1 : 1 + n_basis]
 
-        safe_left = jnp.where(left_denom > 0, left_denom, 1.0)
-        safe_right = jnp.where(right_denom > 0, right_denom, 1.0)
+        # Denominators
+        dt_left = knots[d : d + n_basis] - knots[:n_basis]
+        dt_right = knots[d + 1 : d + 1 + n_basis] - knots[1 : 1 + n_basis]
 
-        left_w = jnp.where(
-            left_denom > 0,
-            (t[:, None] - knots[None, :n_basis]) / safe_left[None, :],
-            0.0,
-        )
+        # Avoid division by zero for repeated knots
+        # Using 1.0 as a dummy denominator; the 'where' will zero out the result anyway
+        left_w = jnp.where(dt_left > 0, (t[:, None] - knots[:n_basis]) / dt_left, 0.0)
         right_w = jnp.where(
-            right_denom > 0,
-            (knots[None, d + 1 : d + 1 + n_basis] - t[:, None]) / safe_right[None, :],
-            0.0,
+            dt_right > 0, (knots[d + 1 : d + 1 + n_basis] - t[:, None]) / dt_right, 0.0
         )
+
+        # Update basis: linear combination of lower-degree bases
         basis = left_w * basis[:, :n_basis] + right_w * basis[:, 1 : n_basis + 1]
 
     return basis
@@ -214,53 +211,4 @@ def bspline_eval(
         Continuum flux, shape ``(N,)``.
     """
     basis = bspline_basis(wavelength, knots, degree)
-    return basis @ coeffs
-
-
-# ---------------------------------------------------------------------------
-# Bernstein polynomial
-# ---------------------------------------------------------------------------
-
-
-@jit
-def bernstein_eval(
-    wavelength: ArrayLike,
-    coeffs: ArrayLike,
-    wavelength_min: float,
-    wavelength_max: float,
-    binom_coeffs: ArrayLike,
-) -> Array:
-    """Evaluate a Bernstein polynomial continuum model.
-
-    Bernstein basis polynomials are non-negative on ``[0, 1]``, so
-    positive coefficients guarantee a positive continuum everywhere.
-
-    Parameters
-    ----------
-    wavelength : ArrayLike
-        Wavelength values, shape ``(N,)``.
-    coeffs : ArrayLike
-        Bernstein coefficients, shape ``(n+1,)``.
-    wavelength_min, wavelength_max : float
-        Wavelength range for normalization to ``[0, 1]``.
-    binom_coeffs : ArrayLike
-        Pre-computed binomial coefficients ``C(n, i)``, shape ``(n+1,)``.
-
-    Returns
-    -------
-    Array
-        Continuum flux, shape ``(N,)``.
-    """
-    wavelength = jnp.asarray(wavelength)
-    coeffs = jnp.asarray(coeffs)
-    n = len(coeffs) - 1
-    t = jnp.clip(
-        (wavelength - wavelength_min) / (wavelength_max - wavelength_min), 0.0, 1.0
-    )
-    i = jnp.arange(n + 1)
-    basis = (
-        binom_coeffs
-        * (t[:, None] ** i[None, :])
-        * ((1 - t[:, None]) ** (n - i)[None, :])
-    )
     return basis @ coeffs

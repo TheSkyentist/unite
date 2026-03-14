@@ -38,47 +38,6 @@ class SDSSSpectrum(GenericSpectrum):
     """
 
     @classmethod
-    def from_arrays(
-        cls,
-        low: u.Quantity,
-        high: u.Quantity,
-        flux: u.Quantity,
-        error: u.Quantity,
-        disperser: SDSSDisperser,
-        *,
-        name: str = '',
-    ) -> SDSSSpectrum:
-        """Create an :class:`SDSSSpectrum` from pre-loaded arrays.
-
-        Parameters
-        ----------
-        low : astropy.units.Quantity
-            Lower wavelength edges of each pixel (Angstrom).
-        high : astropy.units.Quantity
-            Upper wavelength edges of each pixel (Angstrom).
-        flux : astropy.units.Quantity
-            Flux density values per pixel (f_lambda).
-        error : astropy.units.Quantity
-            Flux density uncertainty per pixel.
-        disperser : SDSSDisperser
-            The SDSS disperser for this spectrum.
-        name : str, optional
-            Human-readable label.  Defaults to ``disperser.name``.
-
-        Returns
-        -------
-        SDSSSpectrum
-        """
-        return cls(
-            low=low,
-            high=high,
-            flux=flux,
-            error=error,
-            disperser=disperser,
-            name=name or disperser.name,
-        )
-
-    @classmethod
     def from_fits(
         cls,
         path: str | Path,
@@ -165,19 +124,17 @@ class SDSSSpectrum(GenericSpectrum):
         high = high[good_pixels]
         flux = flux[good_pixels]
         error = error[good_pixels]
-        wavelength = wavelength[good_pixels]
 
         # Update the disperser with the actual R(λ) from wdisp
-        wdisp = np.asarray(data['wdisp'], dtype=float)[good_pixels]
+        wdisp = np.asarray(data['wdisp'], dtype=float)
 
         # Rebuild disperser internals with data from the file
         import jax.numpy as jnp
 
         disperser._wavelength_grid = jnp.asarray(wavelength, dtype=float)
-        disperser._R_grid = jnp.asarray(
-            wavelength / (2.355 * np.maximum(wdisp, 1e-10)), dtype=float
-        )
+        disperser._R_grid = jnp.asarray(wavelength / (2.355 * wdisp), dtype=float)
         disperser._dlam_dpix_grid = jnp.gradient(disperser._wavelength_grid)
-        disperser._has_data = True
 
-        return cls.from_arrays(low, high, flux, error, disperser, name=name)
+        return cls(
+            low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
+        )

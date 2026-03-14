@@ -51,7 +51,7 @@ def make_parameter_table(
         * Continuum ``scale`` parameters — ``flux_unit``
         * Continuum ``slope`` / polynomial coefficients — ``flux_unit / wl_unit^n``
         * Shape / index parameters (``beta``, ``temperature``, …) — raw values
-        * Rest equivalent width columns (``{line_label}_rew``) —
+        * Rest equivalent width columns (``rew_{line_label}``) —
           ``canonical_wl_unit``.  One column per line whose rest-frame
           wavelength falls within a continuum region.  Appended after all
           model parameters when a continuum is present.
@@ -92,45 +92,58 @@ def make_parameter_table(
         if pname in cont_param_lookup:
             k, pn = cont_param_lookup[pname]
             region = args.cont_config[k]
-            pu = region.form.param_units(flux_unit, canonical_unit)
+            pu = region.form.param_units(flux_unit, region._unit)
             apply_cs, phys_unit = pu.get(pn, (False, None))
             phys = arr * cont_scale_0 if apply_cs else arr
             return u.Quantity(phys, unit=phys_unit) if phys_unit is not None else phys
         return arr  # calibration or other dimensionless param
 
-    if percentiles is not None:
-        percentiles_arr = np.asarray(percentiles)
-        table['percentile'] = percentiles_arr
-        for pname in args.dependency_order:
-            prior = args.all_priors[pname]
+    ordered = _categorized_order(
+        args.dependency_order, z_names, fwhm_names, flux_names, cont_param_lookup
+    )
+    rew_cols = _compute_rew_columns(samples, args)
+
+    def _add_param(pname: str, *, pct_arr: np.ndarray | None = None) -> None:
+        prior = args.all_priors[pname]
+        if pct_arr is not None:
             if isinstance(prior, Fixed):
                 val = float(prior.value)
-                table[pname] = _to_column(pname, np.full(len(percentiles_arr), val))
+                table[pname] = _to_column(pname, np.full(len(pct_arr), val))
             else:
                 arr = np.asarray(samples[pname])
-                percentile_vals = np.percentile(arr, percentiles_arr * 100)
-                table[pname] = _to_column(pname, percentile_vals)
-    else:
-        n_samples = _get_n_samples(samples)
-        for pname in args.dependency_order:
-            prior = args.all_priors[pname]
-            if isinstance(prior, Fixed):
-                table[pname] = _to_column(pname, np.full(n_samples, float(prior.value)))
-            else:
-                arr = np.asarray(samples[pname])
-                table[pname] = _to_column(pname, arr)
-
-    # Add rest equivalent width columns.
-    rew_cols = _compute_rew_columns(samples, args)
-    if rew_cols:
-        if percentiles is not None:
-            percentiles_arr = np.asarray(percentiles)
-            for col_name, rew_arr in rew_cols.items():
-                percentile_vals = np.nanpercentile(rew_arr, percentiles_arr * 100)
-                table[col_name] = u.Quantity(percentile_vals, unit=canonical_unit)
+                table[pname] = _to_column(pname, np.percentile(arr, pct_arr * 100))
         else:
-            for col_name, rew_arr in rew_cols.items():
-                table[col_name] = u.Quantity(rew_arr, unit=canonical_unit)
+            n_samp = _get_n_samples(samples)
+            if isinstance(prior, Fixed):
+                table[pname] = _to_column(pname, np.full(n_samp, float(prior.value)))
+            else:
+                table[pname] = _to_column(pname, np.asarray(samples[pname]))
+
+    def _add_rew(
+        rew_arr: np.ndarray, col_name: str, *, pct_arr: np.ndarray | None = None
+    ) -> None:
+        if pct_arr is not None:
+            vals = np.nanpercentile(rew_arr, pct_arr * 100)
+        else:
+            vals = rew_arr
+        table[col_name] = u.Quantity(vals, unit=canonical_unit)
+
+    if percentiles is not None:
+        pct_arr = np.asarray(percentiles)
+        table['percentile'] = pct_arr
+        for category, pnames in ordered.items():
+            for pname in pnames:
+                _add_param(pname, pct_arr=pct_arr)
+            if category == 'flux' and rew_cols:
+                for col_name, rew_arr in rew_cols.items():
+                    _add_rew(rew_arr, col_name, pct_arr=pct_arr)
+    else:
+        for category, pnames in ordered.items():
+            for pname in pnames:
+                _add_param(pname)
+            if category == 'flux' and rew_cols:
+                for col_name, rew_arr in rew_cols.items():
+                    _add_rew(rew_arr, col_name)
 
     # Add metadata (short keys for FITS compatibility).
     lsq = args.line_scale_quantity
@@ -315,6 +328,52 @@ def make_hdul(
 # ------------------------------------------------------------------
 
 
+def _categorized_order(
+    dependency_order: list[str],
+    z_names: set[str],
+    fwhm_names: set[str],
+    flux_names: set[str],
+    cont_param_lookup: dict[str, tuple[int, str]],
+) -> dict[str, list[str]]:
+    """Return parameters grouped by category, preserving topological order within each group.
+
+    Parameters
+    ----------
+    dependency_order : list of str
+        Topologically sorted parameter names from ModelArgs.
+    z_names, fwhm_names, flux_names : set of str
+        Parameter name sets from the coupling matrices.
+    cont_param_lookup : dict
+        Mapping of continuum param name → (region_idx, slot_name).
+
+    Returns
+    -------
+    dict of str to list of str
+        Ordered dict with keys ``'z'``, ``'fwhm'``, ``'flux'``, ``'cont'``,
+        ``'instrument'`` and values being the parameter names in each category,
+        in their original topological order.
+    """
+    groups: dict[str, list[str]] = {
+        'z': [],
+        'fwhm': [],
+        'flux': [],
+        'cont': [],
+        'instrument': [],
+    }
+    for pname in dependency_order:
+        if pname in z_names:
+            groups['z'].append(pname)
+        elif pname in fwhm_names:
+            groups['fwhm'].append(pname)
+        elif pname in flux_names:
+            groups['flux'].append(pname)
+        elif pname in cont_param_lookup:
+            groups['cont'].append(pname)
+        else:
+            groups['instrument'].append(pname)
+    return groups
+
+
 def _get_n_samples(samples: dict[str, np.ndarray]) -> int:
     """Determine the number of samples from the first non-empty array."""
     for v in samples.values():
@@ -372,7 +431,7 @@ def _compute_rew_columns(
     Returns
     -------
     dict of str to ndarray
-        Mapping of ``'{line_label}_rew'`` → ``(n_samples,)`` array.
+        Mapping of ``'rew_{line_label}'`` → ``(n_samples,)`` array.
         Lines without a covering continuum region are omitted.
     """
     if args.cont_config is None or args.cont_resolved_params is None:
@@ -429,6 +488,8 @@ def _compute_rew_columns(
 
         k = covering_k
         form = args.cont_forms[k]
+        obs_low = float(args.cont_low[k]) * (1.0 + z_sys)
+        obs_high = float(args.cont_high[k]) * (1.0 + z_sys)
         obs_center = float(args.cont_center[k]) * (1.0 + z_sys)
 
         # Build cont_p with (n_samples,) arrays, mirroring evaluate.py.
@@ -440,7 +501,7 @@ def _compute_rew_columns(
                 if isinstance(prior, Fixed)
                 else np.asarray(samples[tok.name])
             )
-            if pn == 'normalization_wavelength':
+            if pn == 'norm_wav':
                 val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
             cont_p[pn] = val
 
@@ -449,7 +510,9 @@ def _compute_rew_columns(
         obs_wl_j = rest_wl * (1.0 + z_sys + z_j)
 
         # Continuum flux density at line centre (un-scaled, from form.evaluate).
-        cont_val = np.asarray(form.evaluate(obs_wl_j, obs_center, cont_p))
+        cont_val = np.asarray(
+            form.evaluate(obs_wl_j, obs_center, cont_p, obs_low, obs_high)
+        )
 
         # Physical quantities.
         cont_physical = cont_val * cont_scale  # flux_unit
@@ -461,7 +524,7 @@ def _compute_rew_columns(
         z_total = z_sys + z_j
         rew = flux_physical / (cont_physical * (1.0 + z_total))  # canonical_unit
 
-        result[f'{label}_rew'] = rew
+        result[f'rew_{label}'] = rew
 
     return result
 

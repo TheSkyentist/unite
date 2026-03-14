@@ -59,9 +59,6 @@ class SDSSDisperser(Disperser):
 
     def __init__(
         self,
-        wavelength: ArrayLike | None = None,
-        wdisp: ArrayLike | None = None,
-        *,
         name: str = '',
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
@@ -74,23 +71,6 @@ class SDSSDisperser(Disperser):
             flux_scale=flux_scale,
             pix_offset=pix_offset,
         )
-
-        if wavelength is not None:
-            self._wavelength_grid = jnp.asarray(wavelength, dtype=float)
-            if wdisp is not None:
-                wdisp_arr = jnp.asarray(wdisp, dtype=float)
-                # R = λ / FWHM = λ / (2.355 * wdisp)
-                self._R_grid = self._wavelength_grid / (2.355 * wdisp_arr)
-            else:
-                # Default: constant R = 2000
-                self._R_grid = jnp.full_like(self._wavelength_grid, 2000.0)
-            self._dlam_dpix_grid = jnp.gradient(self._wavelength_grid)
-            self._has_data = True
-        else:
-            self._wavelength_grid = None
-            self._R_grid = None
-            self._dlam_dpix_grid = None
-            self._has_data = False
 
     def R(self, wavelength: ArrayLike) -> ArrayLike:
         """Return the resolving power at the given wavelengths (Angstrom).
@@ -105,8 +85,6 @@ class SDSSDisperser(Disperser):
         ArrayLike
             Resolving power *R* at each wavelength.
         """
-        if not self._has_data:
-            return jnp.full_like(jnp.asarray(wavelength), 2000.0)
         return jnp.interp(wavelength, self._wavelength_grid, self._R_grid)
 
     def dlam_dpix(self, wavelength: ArrayLike) -> ArrayLike:
@@ -122,11 +100,8 @@ class SDSSDisperser(Disperser):
         ArrayLike
             Linear dispersion at each wavelength.
         """
-        if not self._has_data:
-            return jnp.ones_like(jnp.asarray(wavelength))
         return jnp.interp(wavelength, self._wavelength_grid, self._dlam_dpix_grid)
 
     def __repr__(self) -> str:
         """Return a readable string representation."""
-        data_str = f'{len(self._wavelength_grid)} px' if self._has_data else 'no data'
-        return f'SDSSDisperser(name={self.name!r}, {data_str})'
+        return f'SDSSDisperser(name={self.name!r})'

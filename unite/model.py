@@ -16,13 +16,13 @@ import jax.numpy as jnp
 import numpyro
 from numpyro import distributions as dist
 
-from unite._utils import C_KMS, _wavelength_conversion_factor
+from unite._utils import C_KMS, _get_conversion_factor
 from unite.continuum.config import ContinuumConfiguration
 from unite.instrument import Spectra
 from unite.instrument.generic import GenericSpectrum
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.line.profiles import integrate_lines
-from unite.prior import Fixed, Parameter, Prior, topological_sort
+from unite.prior import Fixed, Parameter, ParameterRef, Prior, topological_sort
 
 # ------------------------------------------------------------------
 # ModelArgs — data bundle for the numpyro model function
@@ -82,6 +82,14 @@ class ModelArgs:
     #: Derived from form type and wavelength bounds.
     continuum_labels: list[str]
 
+    def __len__(self) -> int:
+        """Return the number of spectra in the model."""
+        return len(self.spectra)
+
+    def __bool__(self) -> bool:
+        """Return True if the model has at least one spectrum."""
+        return len(self.spectra) > 0
+
 
 # ------------------------------------------------------------------
 # Numpyro model function
@@ -120,7 +128,10 @@ def unite_model(args: ModelArgs) -> None:
     for pname in args.dependency_order:
         prior = args.all_priors[pname]
         if isinstance(prior, Fixed):
-            val = jnp.asarray(prior.value)
+            value = prior.value
+            if isinstance(value, ParameterRef):
+                value = value.resolve(obj_ctx)
+            val = jnp.asarray(value)
         else:
             val = numpyro.sample(pname, prior.to_dist(obj_ctx))
         context[pname] = val
@@ -226,13 +237,15 @@ def unite_model(args: ModelArgs) -> None:
                 cont_params = {
                     pn: (
                         context[tok.name] * args.cont_nw_conv[k] * (1.0 + z_sys)
-                        if pn == 'normalization_wavelength'
+                        if pn == 'norm_wav'
                         else context[tok.name]
                     )
                     for pn, tok in args.cont_resolved_params[k].items()
                 }
                 form = args.cont_forms[k]
-                region_cont = form.evaluate(wavelength, obs_center, cont_params)
+                region_cont = form.evaluate(
+                    wavelength, obs_center, cont_params, obs_low, obs_high
+                )
                 continuum = continuum + jnp.where(in_region, region_cont, 0.0)
 
         # Likelihood (normalized flux space).
@@ -402,7 +415,7 @@ class ModelBuilder:
             for s in self._spectra:
                 mask = jnp.zeros(s.npix, dtype=bool)
                 for region in self._cont_config:
-                    conv = _wavelength_conversion_factor(region._unit, s.unit)
+                    conv = _get_conversion_factor(region._unit, s.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
                     mask = mask | s.pixel_mask(obs_low, obs_high)
@@ -418,18 +431,21 @@ class ModelBuilder:
                         stacklevel=2,
                     )
             if not trimmed_spectra:
-                msg = (
+                warnings.warn(
                     'All spectra are fully masked after trimming to '
-                    'continuum regions. Check that your continuum '
-                    'configuration covers the observed wavelength range.'
+                    'continuum regions. The resulting model has no spectra '
+                    'and should not be used for fitting. Check that your '
+                    'continuum configuration covers the observed wavelength '
+                    'range.',
+                    UserWarning,
+                    stacklevel=2,
                 )
-                raise ValueError(msg)
         else:
             trimmed_spectra = list(self._spectra)
 
         # Per-spectrum wavelength conversion factors.
         spec_to_canonical = [
-            _wavelength_conversion_factor(s.unit, self._canonical_unit)
+            _get_conversion_factor(s.unit, self._canonical_unit)
             for s in trimmed_spectra
         ]
 
@@ -469,14 +485,12 @@ class ModelBuilder:
             cont_nw_conv = []
             cont_forms = []
             for region in self._cont_config:
-                conv = _wavelength_conversion_factor(region._unit, self._canonical_unit)
+                conv = _get_conversion_factor(region._unit, self._canonical_unit)
                 cont_low.append(region.low * conv)
                 cont_high.append(region.high * conv)
                 cont_center.append(region.center * conv)
                 cont_nw_conv.append(conv)
-                cont_forms.append(
-                    region.form._prepare(self._canonical_unit, region._unit)
-                )
+                cont_forms.append(region.form)
         else:
             cont_low = None
             cont_high = None
@@ -582,106 +596,15 @@ class ModelBuilder:
 
 
 def _make_line_labels(line_config: LineConfiguration) -> list[str]:
-    """Build a human-readable label for every line entry.
+    """Return the unique name for every line entry.
 
-    For a name group with only one entry, the label is just the line name.
-
-    For a name group with multiple entries, the label is built by appending
-    the token names of every axis that varies *within the group*:
-
-    * **Wavelength** — if rest-frame wavelengths differ, the rounded value is
-      appended (e.g. ``'[NII]_6585'``).
-    * **Redshift** — if redshift token names differ, the token name is
-      appended (e.g. ``'Ha_z_nlr'``).
-    * **FWHM(s)** — if any fwhm token names differ, every fwhm token name for
-      that entry is appended in ``profile.param_names()`` order
-      (e.g. ``'Ha_fwhm_narrow'``, ``'Ha_fwhm_gauss_narrow'``).
-    * **Flux** — if flux token names differ, the token name is appended
-      (e.g. ``'Ha_flux_broad'``).
-
-    All varying axes are included simultaneously, so the label is always
-    unambiguous and self-documenting regardless of how the tokens were
-    named by the user.
-
-    Examples
-    --------
-    Unique name::
-
-        add_line('Ha', 6563 Å, ...)  →  'Ha'
-
-    Multiplet — same kinematics, different wavelengths::
-
-        add_line('[NII]', [6585, 6550] Å, z=z, fwhm_gauss=fwhm, flux=flux)
-        →  '[NII]_6585', '[NII]_6550'
-
-    Multiple components — same wavelength, different FWHM tokens::
-
-        fwhm1 = FWHM('narrow');  fwhm2 = FWHM('broad')
-        add_line('Ha', 6563 Å, fwhm_gauss=fwhm1, ...)
-        add_line('Ha', 6563 Å, fwhm_gauss=fwhm2, ...)
-        →  'Ha_narrow', 'Ha_broad'
-
-    Three components sharing a flux token (the motivating bug case)::
-
-        fwhm1 = FWHM('f1');  fwhm2 = FWHM('f2');  fwhm3 = FWHM('f3')
-        flux  = Flux('flux')
-        add_line('a', 6563 Å, fwhm_gauss=fwhm1, flux=flux, ...)
-        add_line('a', 6563 Å, fwhm_gauss=fwhm2, flux=flux, ...)
-        add_line('a', 6563 Å, fwhm_gauss=fwhm3, flux=flux, ...)
-        →  'a_f1', 'a_f2', 'a_f3'
-
-    Multiplet + multiple components::
-
-        fwhm_n = FWHM('narrow');  fwhm_b = FWHM('broad')
-        add_line('[NII]', [6585, 6550] Å, fwhm_gauss=fwhm_n, flux=flux1, ...)
-        add_line('[NII]', [6585, 6550] Å, fwhm_gauss=fwhm_b, flux=flux2, ...)
-        →  '[NII]_6585_narrow', '[NII]_6550_narrow',
-           '[NII]_6585_broad',  '[NII]_6550_broad'
+    Since line names are required to be unique within a
+    :class:`~unite.line.config.LineConfiguration`, the label for each entry
+    is simply its name.  Use ``add_lines`` (which auto-generates names as
+    ``'{name}_{center.value:g}'``) or supply explicit unique names to
+    ``add_line`` for multiplets and multi-component lines.
     """
-    from collections import defaultdict
-
-    entries = list(line_config._entries)
-    labels: list[str] = [''] * len(entries)
-
-    # Group entry indices by user-supplied line name.
-    name_to_indices: dict[str, list[int]] = defaultdict(list)
-    for j, entry in enumerate(entries):
-        name_to_indices[entry.name].append(j)
-
-    for name, indices in name_to_indices.items():
-        if len(indices) == 1:
-            labels[indices[0]] = name
-            continue
-
-        group = [entries[j] for j in indices]
-
-        # Determine which axes vary within this name group.
-        wl_strs = [f'{float(e.wavelength.value):.0f}' for e in group]
-        z_names = [e.redshift.name for e in group]
-        flux_names_list = [e.flux.name for e in group]
-        # fwhm names: list-of-lists, one inner list per entry.
-        fwhm_names_per_entry = [
-            [e.fwhms[pn].name for pn in e.profile.param_names()] for e in group
-        ]
-
-        vary_wl = len(set(wl_strs)) > 1
-        vary_z = len(set(z_names)) > 1
-        vary_fwhm = len({tuple(fns) for fns in fwhm_names_per_entry}) > 1
-        vary_flux = len(set(flux_names_list)) > 1
-
-        for idx, j in enumerate(indices):
-            parts = [name]
-            if vary_wl:
-                parts.append(wl_strs[idx])
-            if vary_z:
-                parts.append(z_names[idx])
-            if vary_fwhm:
-                parts.extend(fwhm_names_per_entry[idx])
-            if vary_flux:
-                parts.append(flux_names_list[idx])
-            labels[j] = '_'.join(parts)
-
-    return labels
+    return [entry.name for entry in line_config._entries]
 
 
 def _make_continuum_labels(cont_config: ContinuumConfiguration) -> list[str]:

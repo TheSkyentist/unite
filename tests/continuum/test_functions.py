@@ -66,20 +66,20 @@ class TestChebval:
     def test_constant(self):
         """T0(x) = 1 → chebval([c0], x) = c0."""
         x = jnp.linspace(-1, 1, 10)
-        result = chebval(x, [3.0])
+        result = chebval(x, jnp.array([3.0]))
         np.testing.assert_allclose(result, 3.0)
 
     def test_linear(self):
         """c0 + c1*x."""
         x = jnp.linspace(-1, 1, 10)
-        result = chebval(x, [2.0, 3.0])
+        result = chebval(x, jnp.array([2.0, 3.0]))
         expected = 2.0 + 3.0 * x
         np.testing.assert_allclose(result, expected, rtol=1e-6)
 
     def test_quadratic(self):
         """c0*T0 + c1*T1 + c2*T2 where T2 = 2x^2 - 1."""
         x = jnp.linspace(-1, 1, 20)
-        result = chebval(x, [1.0, 0.0, 1.0])
+        result = chebval(x, jnp.array([1.0, 0.0, 1.0]))
         # T0 + T2 = 1 + 2x^2 - 1 = 2x^2
         expected = 2.0 * x**2
         np.testing.assert_allclose(result, expected, rtol=1e-6)
@@ -89,7 +89,7 @@ class TestChebval:
         from numpy.polynomial.chebyshev import chebval as np_chebval
 
         x = jnp.linspace(-1, 1, 50)
-        coeffs = [1.5, -0.3, 0.7, 0.1]
+        coeffs = jnp.array([1.5, -0.3, 0.7, 0.1])
         result = chebval(x, coeffs)
         expected = np_chebval(np.array(x), coeffs)
         np.testing.assert_allclose(result, expected, rtol=1e-5)
@@ -159,8 +159,8 @@ class TestBernstein:
         n = 4
         coeffs = jnp.full(n + 1, 3.0)
         binom = jnp.array([float(scipy_comb(n, i, exact=True)) for i in range(n + 1)])
-        wl = jnp.linspace(0.5, 1.5, 20)
-        result = bernstein_eval(wl, coeffs, 0.5, 1.5, binom)
+        wl = jnp.linspace(0.0, 1.0, 20)
+        result = bernstein_eval(wl, coeffs, binom)
         np.testing.assert_allclose(result, 3.0, atol=1e-5)
 
     def test_linear(self):
@@ -168,7 +168,7 @@ class TestBernstein:
         coeffs = jnp.array([2.0, 8.0])
         binom = jnp.array([1.0, 1.0])
         wl = jnp.array([0.0, 0.5, 1.0])
-        result = bernstein_eval(wl, coeffs, 0.0, 1.0, binom)
+        result = bernstein_eval(wl, coeffs, binom)
         np.testing.assert_allclose(result, [2.0, 5.0, 8.0], atol=1e-5)
 
     def test_nonnegative_with_positive_coeffs(self):
@@ -177,7 +177,7 @@ class TestBernstein:
         coeffs = jnp.array([1.0, 2.0, 3.0, 2.0, 1.0, 4.0])
         binom = jnp.array([float(scipy_comb(n, i, exact=True)) for i in range(n + 1)])
         wl = jnp.linspace(0.0, 1.0, 50)
-        result = bernstein_eval(wl, coeffs, 0.0, 1.0, binom)
+        result = bernstein_eval(wl, coeffs, binom)
         assert jnp.all(result > 0)
 
     def test_endpoints(self):
@@ -186,6 +186,6 @@ class TestBernstein:
         coeffs = jnp.array([2.0, 5.0, 3.0, 7.0])
         binom = jnp.array([float(scipy_comb(n, i, exact=True)) for i in range(n + 1)])
         wl = jnp.array([0.0, 1.0])
-        result = bernstein_eval(wl, coeffs, 0.0, 1.0, binom)
+        result = bernstein_eval(wl, coeffs, binom)
         np.testing.assert_allclose(result[0], 2.0, atol=1e-5)
         np.testing.assert_allclose(result[1], 7.0, atol=1e-5)

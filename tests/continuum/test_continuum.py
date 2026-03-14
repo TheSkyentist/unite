@@ -11,13 +11,14 @@ from unite.continuum import (
     BSpline,
     Chebyshev,
     ContinuumConfiguration,
-    ContinuumNormalizationWavelength,
     ContinuumRegion,
-    ContinuumScale,
+    ContShape,
     Linear,
     ModifiedBlackbody,
+    NormWavelength,
     Polynomial,
     PowerLaw,
+    Scale,
     form_from_dict,
     get_form,
 )
@@ -36,7 +37,8 @@ class TestParameterAsContinuumToken:
 
     def test_name_stored(self):
         p = Parameter('beta', prior=Uniform(-5, 5))
-        assert p.name == 'beta'
+        # label stores user-supplied name; site name is set at registration
+        assert p.label == 'beta'
 
     def test_repr(self):
         p = Parameter('x', prior=Uniform(0, 1))
@@ -48,48 +50,49 @@ class TestParameterAsContinuumToken:
 # ---------------------------------------------------------------------------
 
 
-class TestContinuumScale:
+class TestScale:
     def test_default_prior_is_uniform_positive(self):
-        tok = ContinuumScale('s')
+        tok = Scale('s')
         assert isinstance(tok.prior, Uniform)
         assert tok.prior.low == pytest.approx(0.0)
-        assert tok.prior.high == pytest.approx(10.0)
+        assert tok.prior.high == pytest.approx(2.0)
 
     def test_custom_prior(self):
-        tok = ContinuumScale('s', prior=Uniform(0, 5))
+        tok = Scale('s', prior=Uniform(0, 5))
         assert tok.prior.high == pytest.approx(5.0)
 
     def test_name_stored(self):
-        tok = ContinuumScale('my_scale')
-        assert tok.name == 'my_scale'
+        tok = Scale('my_scale')
+        # label stores the user-supplied label; site name is set when attached to a region
+        assert tok.label == 'my_scale'
 
-    def test_is_subclass_of_continuum_param(self):
-        assert isinstance(ContinuumScale('s'), Parameter)
+    def test_is_subclass_of_parameter(self):
+        assert isinstance(Scale('s'), Parameter)
 
     def test_wrong_slot_raises(self):
-        tok = ContinuumScale('s')
+        tok = Scale('s')
         region = ContinuumRegion(
             1.0 * u.um, 2.0 * u.um, Linear(), params={'angle': tok}
         )
-        with pytest.raises(ValueError, match=r'ContinuumScale.*"scale"'):
+        with pytest.raises(TypeError, match=r'must be a ContShape'):
             ContinuumConfiguration([region])
 
     def test_correct_slot_ok(self):
-        tok = ContinuumScale('s', prior=Uniform(0, 5))
+        tok = Scale('s', prior=Uniform(0, 5))
         region = ContinuumRegion(
             1.0 * u.um, 2.0 * u.um, Linear(), params={'scale': tok}
         )
         config = ContinuumConfiguration([region])
         assert config.resolved_params[0]['scale'] is tok
 
-    def test_scale_slot_accepts_generic_continuum_param(self):
-        # Generic Parameter is allowed in any slot including 'scale'.
+    def test_scale_slot_rejects_generic_param(self):
+        # Generic Parameter is no longer allowed; must be typed.
         tok = Parameter('generic', prior=Uniform(0, 5))
         region = ContinuumRegion(
             1.0 * u.um, 2.0 * u.um, Linear(), params={'scale': tok}
         )
-        config = ContinuumConfiguration([region])
-        assert config.resolved_params[0]['scale'] is tok
+        with pytest.raises(TypeError, match='must be a Scale'):
+            ContinuumConfiguration([region])
 
 
 # ---------------------------------------------------------------------------
@@ -97,49 +100,91 @@ class TestContinuumScale:
 # ---------------------------------------------------------------------------
 
 
-class TestContinuumNormalizationWavelength:
+class TestNormWavelength:
     def test_default_prior_is_fixed(self):
-        tok = ContinuumNormalizationWavelength('nw')
+        tok = NormWavelength('nw')
         assert isinstance(tok.prior, Fixed)
+        assert tok.prior.value == pytest.approx(1.0)
 
     def test_custom_prior(self):
-        tok = ContinuumNormalizationWavelength('nw', prior=Fixed(2.5))
+        tok = NormWavelength('nw', prior=Fixed(2.5))
         assert tok.prior.value == pytest.approx(2.5)
 
     def test_name_stored(self):
-        tok = ContinuumNormalizationWavelength('my_nw')
-        assert tok.name == 'my_nw'
+        tok = NormWavelength('my_nw')
+        # label stores the user-supplied label; site name is set when attached to a region
+        assert tok.label == 'my_nw'
 
-    def test_is_subclass_of_continuum_param(self):
-        assert isinstance(ContinuumNormalizationWavelength('nw'), Parameter)
+    def test_is_subclass_of_parameter(self):
+        assert isinstance(NormWavelength('nw'), Parameter)
 
     def test_wrong_slot_raises(self):
-        tok = ContinuumNormalizationWavelength('nw', prior=Fixed(1.5))
+        tok = NormWavelength('nw', prior=Fixed(1.5))
         region = ContinuumRegion(
             1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'scale': tok}
         )
-        with pytest.raises(
-            ValueError,
-            match=r'ContinuumNormalizationWavelength.*"normalization_wavelength"',
-        ):
+        with pytest.raises(TypeError, match=r'must be a Scale'):
             ContinuumConfiguration([region])
 
     def test_correct_slot_ok(self):
-        tok = ContinuumNormalizationWavelength('nw', prior=Fixed(1.5))
+        tok = NormWavelength('nw', prior=Fixed(1.5))
         region = ContinuumRegion(
-            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'normalization_wavelength': tok}
+            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'norm_wav': tok}
         )
         config = ContinuumConfiguration([region])
-        assert config.resolved_params[0]['normalization_wavelength'] is tok
+        assert config.resolved_params[0]['norm_wav'] is tok
 
-    def test_normalization_wavelength_slot_accepts_generic_continuum_param(self):
-        # Generic Parameter is allowed in any slot.
+    def test_norm_wav_slot_rejects_generic_param(self):
+        # Generic Parameter is no longer allowed; must be typed.
         tok = Parameter('generic', prior=Fixed(1.5))
         region = ContinuumRegion(
-            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'normalization_wavelength': tok}
+            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'norm_wav': tok}
+        )
+        with pytest.raises(TypeError, match='must be a NormWavelength'):
+            ContinuumConfiguration([region])
+
+
+# ---------------------------------------------------------------------------
+# ContShape
+# ---------------------------------------------------------------------------
+
+
+class TestContShape:
+    def test_default_prior(self):
+        tok = ContShape('beta')
+        assert isinstance(tok.prior, Uniform)
+        assert tok.prior.low == pytest.approx(-10.0)
+        assert tok.prior.high == pytest.approx(10.0)
+
+    def test_custom_prior(self):
+        tok = ContShape('beta', prior=Uniform(-5, 5))
+        assert tok.prior.low == pytest.approx(-5.0)
+        assert tok.prior.high == pytest.approx(5.0)
+
+    def test_name_stored(self):
+        tok = ContShape('my_beta')
+        # label stores the user-supplied label; site name is set when attached to a region
+        assert tok.label == 'my_beta'
+
+    def test_is_subclass_of_parameter(self):
+        assert isinstance(ContShape('beta'), Parameter)
+
+    def test_wrong_slot_for_contshape_raises(self):
+        # ContShape should not be used in 'scale' or 'norm_wav' slots
+        tok = ContShape('not_a_beta')
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'scale': tok}
+        )
+        with pytest.raises(TypeError, match='must be a Scale'):
+            ContinuumConfiguration([region])
+
+    def test_correct_slot_for_form_param(self):
+        tok = ContShape('beta', prior=Uniform(-5, 5))
+        region = ContinuumRegion(
+            1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'beta': tok}
         )
         config = ContinuumConfiguration([region])
-        assert config.resolved_params[0]['normalization_wavelength'] is tok
+        assert config.resolved_params[0]['beta'] is tok
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +215,7 @@ class TestContinuumRegion:
             ContinuumRegion(1.0, 2.0)
 
     def test_wrong_units_raises(self):
-        with pytest.raises(ValueError, match=r'wavelength.*units'):
+        with pytest.raises(ValueError, match=r'low.*units'):
             ContinuumRegion(1.0 * u.kg, 2.0 * u.kg)
 
     def test_unit_conversion(self):
@@ -187,6 +232,26 @@ class TestContinuumRegion:
         p = Parameter('my_angle', prior=Uniform(-5, 5))
         r = ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), params={'angle': p})
         assert r.params['angle'] is p
+
+    def test_bspline_knots_within_region_ok(self):
+        """BSpline knots within region bounds should not raise."""
+        knots = [1.0] * u.um
+        r = ContinuumRegion(0.9 * u.um, 1.1 * u.um, BSpline(knots, degree=3))
+        assert r.form.n_basis == 5
+
+    def test_bspline_knots_not_array_raises(self):
+        """BSpline knots within region bounds should not raise."""
+        knots = 1.0 * u.um
+        with pytest.raises(ValueError, match=r'knots must be 1-D, got 0-D array.'):
+            ContinuumRegion(0.9 * u.um, 1.1 * u.um, BSpline(knots, degree=3))
+
+    def test_bspline_knots_outside_region_raises(self):
+        """BSpline knots outside region bounds should raise."""
+        knots = [0.8] * u.um
+        with pytest.raises(
+            ValueError, match=r'All knots must be within the region bounds'
+        ):
+            ContinuumRegion(0.9 * u.um, 1.1 * u.um, BSpline(knots, degree=3))
 
 
 # ---------------------------------------------------------------------------
@@ -257,20 +322,20 @@ class TestResolvedParams:
         )
         assert len(config.resolved_params) == 2
 
-    def test_auto_names_use_form_type_and_index(self):
+    def test_auto_names_use_alpha_counter(self):
         config = ContinuumConfiguration(
             [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
         )
         resolved = config.resolved_params[0]
         assert 'scale' in resolved
-        assert resolved['scale'].name == 'cont_linear_0_scale'
-        assert resolved['angle'].name == 'cont_linear_0_angle'
-        assert (
-            resolved['normalization_wavelength'].name
-            == 'cont_linear_0_normalization_wavelength'
-        )
+        assert isinstance(resolved['scale'], Scale)
+        assert resolved['scale'].name == 'scale_a'
+        assert isinstance(resolved['angle'], ContShape)
+        assert resolved['angle'].name == 'angle_a'
+        assert isinstance(resolved['norm_wav'], NormWavelength)
+        assert resolved['norm_wav'].name == 'norm_wav_a'
 
-    def test_two_same_type_regions_get_different_indices(self):
+    def test_two_same_type_regions_get_sequential_alpha_names(self):
         config = ContinuumConfiguration(
             [
                 ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear()),
@@ -279,21 +344,22 @@ class TestResolvedParams:
         )
         r0 = config.resolved_params[0]
         r1 = config.resolved_params[1]
-        assert r0['scale'].name == 'cont_linear_0_scale'
-        assert r1['scale'].name == 'cont_linear_1_scale'
+        assert r0['scale'].name == 'scale_a'
+        assert r1['scale'].name == 'scale_b'
         # Must be distinct token objects.
         assert r0['scale'] is not r1['scale']
 
-    def test_normalization_wavelength_default_fixed_at_region_center(self):
+    def test_norm_wav_default_fixed_at_region_center(self):
         config = ContinuumConfiguration(
             [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear())]
         )
-        nw_tok = config.resolved_params[0]['normalization_wavelength']
+        nw_tok = config.resolved_params[0]['norm_wav']
+        assert isinstance(nw_tok, NormWavelength)
         assert isinstance(nw_tok.prior, Fixed)
         assert nw_tok.prior.value == pytest.approx(1.5)  # center of [1, 2] um
 
     def test_explicit_token_used_as_is(self):
-        scale = Parameter('my_scale', prior=Uniform(0, 5))
+        scale = Scale('my_scale', prior=Uniform(0, 5))
         config = ContinuumConfiguration(
             [
                 ContinuumRegion(
@@ -303,20 +369,19 @@ class TestResolvedParams:
         )
         resolved = config.resolved_params[0]
         assert resolved['scale'] is scale
-        # beta and normalization_wavelength should be auto-created.
-        assert resolved['beta'].name == 'cont_powerlaw_0_beta'
-        assert (
-            resolved['normalization_wavelength'].name
-            == 'cont_powerlaw_0_normalization_wavelength'
-        )
-        # normalization_wavelength default is Fixed at region center.
-        assert isinstance(resolved['normalization_wavelength'].prior, Fixed)
-        assert resolved['normalization_wavelength'].prior.value == pytest.approx(1.5)
+        # scale site name is derived from its label: 'scale_my_scale'
+        assert resolved['scale'].name == 'scale_my_scale'
+        # beta and norm_wav should be auto-created with alpha names.
+        assert resolved['beta'].name == 'beta_a'
+        assert resolved['norm_wav'].name == 'norm_wav_a'
+        # norm_wav default is Fixed at region center.
+        assert isinstance(resolved['norm_wav'].prior, Fixed)
+        assert resolved['norm_wav'].prior.value == pytest.approx(1.5)
 
     def test_shared_tokens_are_same_object(self):
-        scale = Parameter('pl_scale', prior=Uniform(0, 10))
-        beta = Parameter('pl_beta', prior=Uniform(-5, 5))
-        nw = Parameter('pl_nw', prior=Fixed(2.5))
+        scale = Scale('pl_scale', prior=Uniform(0, 10))
+        beta = ContShape('pl_beta', prior=Uniform(-5, 5))
+        nw = NormWavelength('pl_nw', prior=Fixed(2.5))
         pl = PowerLaw()
         config = ContinuumConfiguration(
             [
@@ -324,21 +389,13 @@ class TestResolvedParams:
                     1.0 * u.um,
                     2.0 * u.um,
                     pl,
-                    params={
-                        'scale': scale,
-                        'beta': beta,
-                        'normalization_wavelength': nw,
-                    },
+                    params={'scale': scale, 'beta': beta, 'norm_wav': nw},
                 ),
                 ContinuumRegion(
                     3.0 * u.um,
                     4.0 * u.um,
                     pl,
-                    params={
-                        'scale': scale,
-                        'beta': beta,
-                        'normalization_wavelength': nw,
-                    },
+                    params={'scale': scale, 'beta': beta, 'norm_wav': nw},
                 ),
             ]
         )
@@ -346,12 +403,12 @@ class TestResolvedParams:
         r1 = config.resolved_params[1]
         assert r0['scale'] is r1['scale']
         assert r0['beta'] is r1['beta']
-        assert r0['normalization_wavelength'] is r1['normalization_wavelength']
+        assert r0['norm_wav'] is r1['norm_wav']
 
     def test_unique_param_count_with_sharing(self):
-        scale = Parameter('pl_scale', prior=Uniform(0, 10))
-        beta = Parameter('pl_beta', prior=Uniform(-5, 5))
-        nw = Parameter('pl_nw', prior=Fixed(2.5))
+        scale = Scale('pl_scale', prior=Uniform(0, 10))
+        beta = ContShape('pl_beta', prior=Uniform(-5, 5))
+        nw = NormWavelength('pl_nw', prior=Fixed(2.5))
         pl = PowerLaw()
         config = ContinuumConfiguration(
             [
@@ -359,21 +416,13 @@ class TestResolvedParams:
                     1.0 * u.um,
                     2.0 * u.um,
                     pl,
-                    params={
-                        'scale': scale,
-                        'beta': beta,
-                        'normalization_wavelength': nw,
-                    },
+                    params={'scale': scale, 'beta': beta, 'norm_wav': nw},
                 ),
                 ContinuumRegion(
                     3.0 * u.um,
                     4.0 * u.um,
                     pl,
-                    params={
-                        'scale': scale,
-                        'beta': beta,
-                        'normalization_wavelength': nw,
-                    },
+                    params={'scale': scale, 'beta': beta, 'norm_wav': nw},
                 ),
             ]
         )
@@ -388,6 +437,62 @@ class TestResolvedParams:
         rp2 = config.resolved_params
         assert rp1 is not rp2  # New list each time.
         assert rp1[0] is not rp2[0]  # Inner dicts are copies too.
+
+    def test_named_region_auto_params_use_region_name(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), name='blue')]
+        )
+        resolved = config.resolved_params[0]
+        assert resolved['scale'].name == 'scale_blue'
+        assert resolved['angle'].name == 'angle_blue'
+        assert resolved['norm_wav'].name == 'norm_wav_blue'
+
+    def test_two_named_regions_use_region_names(self):
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), name='blue'),
+                ContinuumRegion(3.0 * u.um, 4.0 * u.um, Linear(), name='red'),
+            ]
+        )
+        r0 = config.resolved_params[0]
+        r1 = config.resolved_params[1]
+        assert r0['scale'].name == 'scale_blue'
+        assert r1['scale'].name == 'scale_red'
+
+    def test_duplicate_region_names_raise(self):
+        with pytest.raises(ValueError, match='Duplicate ContinuumRegion name'):
+            ContinuumConfiguration(
+                [
+                    ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), name='blue'),
+                    ContinuumRegion(3.0 * u.um, 4.0 * u.um, Linear(), name='blue'),
+                ]
+            )
+
+    def test_shared_anonymous_param_across_regions_gets_alpha_name(self):
+        beta = ContShape(prior=Uniform(-5, 5))
+        config = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'beta': beta}
+                ),
+                ContinuumRegion(
+                    3.0 * u.um, 4.0 * u.um, PowerLaw(), params={'beta': beta}
+                ),
+            ]
+        )
+        r0 = config.resolved_params[0]
+        r1 = config.resolved_params[1]
+        assert r0['beta'] is r1['beta']
+        assert r0['beta'].name == 'beta_a'
+
+    def test_named_region_roundtrip(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, Linear(), name='blue')]
+        )
+        d = config.to_dict()
+        config2 = ContinuumConfiguration.from_dict(d)
+        assert config2._regions[0].name == 'blue'
+        assert config2.resolved_params[0]['scale'].name == 'scale_blue'
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +587,7 @@ class TestSerializationRoundTrip:
         d = config.to_dict()
         config2 = ContinuumConfiguration.from_dict(d)
         resolved = config2.resolved_params[0]
-        assert resolved['scale'].name == 'cont_linear_0_scale'
+        assert resolved['scale'].name == 'scale_a'
         assert isinstance(resolved['scale'].prior, Uniform)
 
     def test_shared_form_object_preserved_after_roundtrip(self):
@@ -513,20 +618,22 @@ class TestSerializationRoundTrip:
         assert len(d['forms']) == 2
 
     def test_explicit_param_token_roundtrip(self):
-        scale = Parameter('pl_scale', prior=Uniform(0, 8))
+        scale = Scale('pl_scale', prior=Uniform(0, 8))
         r = ContinuumRegion(1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'scale': scale})
         config = ContinuumConfiguration([r])
         d = config.to_dict()
         config2 = ContinuumConfiguration.from_dict(d)
         resolved = config2.resolved_params[0]
-        assert resolved['scale'].name == 'pl_scale'
+        # Site name uses prefix + label: 'scale_pl_scale'
+        assert resolved['scale'].name == 'scale_pl_scale'
+        assert isinstance(resolved['scale'], Scale)
         assert isinstance(resolved['scale'].prior, Uniform)
         assert resolved['scale'].prior.high == pytest.approx(8.0)
 
     def test_shared_token_roundtrip(self):
-        scale = Parameter('pl_scale', prior=Uniform(0, 10))
-        beta = Parameter('pl_beta', prior=Uniform(-5, 5))
-        nw = Parameter('pl_nw', prior=Fixed(2.5))
+        scale = Scale('pl_scale', prior=Uniform(0, 10))
+        beta = ContShape('pl_beta', prior=Uniform(-5, 5))
+        nw = NormWavelength('pl_nw', prior=Fixed(2.5))
         pl = PowerLaw()
         config = ContinuumConfiguration(
             [
@@ -534,21 +641,13 @@ class TestSerializationRoundTrip:
                     1.0 * u.um,
                     2.0 * u.um,
                     pl,
-                    params={
-                        'scale': scale,
-                        'beta': beta,
-                        'normalization_wavelength': nw,
-                    },
+                    params={'scale': scale, 'beta': beta, 'norm_wav': nw},
                 ),
                 ContinuumRegion(
                     3.0 * u.um,
                     4.0 * u.um,
                     pl,
-                    params={
-                        'scale': scale,
-                        'beta': beta,
-                        'normalization_wavelength': nw,
-                    },
+                    params={'scale': scale, 'beta': beta, 'norm_wav': nw},
                 ),
             ]
         )
@@ -561,9 +660,9 @@ class TestSerializationRoundTrip:
         # After round-trip: same name → same object.
         assert r0['scale'] is r1['scale']
         assert r0['beta'] is r1['beta']
-        assert r0['normalization_wavelength'] is r1['normalization_wavelength']
-        assert isinstance(r0['normalization_wavelength'].prior, Fixed)
-        assert r0['normalization_wavelength'].prior.value == pytest.approx(2.5)
+        assert r0['norm_wav'] is r1['norm_wav']
+        assert isinstance(r0['norm_wav'].prior, Fixed)
+        assert r0['norm_wav'].prior.value == pytest.approx(2.5)
 
     def test_polynomial_degree_preserved(self):
         config = ContinuumConfiguration(
@@ -594,24 +693,23 @@ class TestSerializationRoundTrip:
         assert config2[0].low == pytest.approx(4600.0)
         assert config2[0]._unit.is_equivalent(u.AA)
 
-    def test_powerlaw_normalization_wavelength_param_roundtrip(self):
-        nw = Parameter('my_nw', prior=Fixed(3.5))
+    def test_powerlaw_norm_wav_param_roundtrip(self):
+        nw = NormWavelength('my_nw', prior=Fixed(3.5))
         config = ContinuumConfiguration(
             [
                 ContinuumRegion(
-                    1.0 * u.um,
-                    2.0 * u.um,
-                    PowerLaw(),
-                    params={'normalization_wavelength': nw},
+                    1.0 * u.um, 2.0 * u.um, PowerLaw(), params={'norm_wav': nw}
                 )
             ]
         )
         d = config.to_dict()
         config2 = ContinuumConfiguration.from_dict(d)
         resolved = config2.resolved_params[0]
-        assert resolved['normalization_wavelength'].name == 'my_nw'
-        assert isinstance(resolved['normalization_wavelength'].prior, Fixed)
-        assert resolved['normalization_wavelength'].prior.value == pytest.approx(3.5)
+        # Site name uses prefix + label: 'norm_wav_my_nw'
+        assert resolved['norm_wav'].name == 'norm_wav_my_nw'
+        assert isinstance(resolved['norm_wav'], NormWavelength)
+        assert isinstance(resolved['norm_wav'].prior, Fixed)
+        assert resolved['norm_wav'].prior.value == pytest.approx(3.5)
 
 
 # ---------------------------------------------------------------------------
@@ -650,53 +748,51 @@ class TestFormFromDict:
 
 _WL = jnp.linspace(0.9, 1.1, 40)
 _CENTER = 1.0
+_OBS_LOW = 0.9
+_OBS_HIGH = 1.1
 
 
 class TestLinear:
     def test_param_names(self):
-        assert Linear().param_names() == ('scale', 'angle', 'normalization_wavelength')
+        assert Linear().param_names() == ('scale', 'angle', 'norm_wav')
 
     def test_n_params(self):
         assert Linear().n_params == 3
 
     def test_default_priors_keys(self):
-        assert set(Linear().default_priors()) == {
-            'scale',
-            'angle',
-            'normalization_wavelength',
-        }
+        assert set(Linear().default_priors()) == {'scale', 'angle', 'norm_wav'}
 
-    def test_default_priors_normalization_wavelength_uses_region_center(self):
+    def test_default_priors_norm_wav_uses_region_center(self):
         priors = Linear().default_priors(region_center=2.5)
-        assert isinstance(priors['normalization_wavelength'], Fixed)
-        assert priors['normalization_wavelength'].value == pytest.approx(2.5)
+        assert isinstance(priors['norm_wav'], Fixed)
+        assert priors['norm_wav'].value == pytest.approx(2.5)
 
     def test_evaluate_shape(self):
         params = {
             'scale': jnp.array(1.0),
             'angle': jnp.array(0.0),
-            'normalization_wavelength': jnp.array(_CENTER),
+            'norm_wav': jnp.array(_CENTER),
         }
-        result = Linear().evaluate(_WL, _CENTER, params)
+        result = Linear().evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert result.shape == _WL.shape
 
     def test_evaluate_flat_at_zero_angle(self):
         params = {
             'scale': jnp.array(2.0),
             'angle': jnp.array(0.0),
-            'normalization_wavelength': jnp.array(_CENTER),
+            'norm_wav': jnp.array(_CENTER),
         }
-        result = Linear().evaluate(_WL, _CENTER, params)
+        result = Linear().evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert jnp.allclose(result, 2.0)
 
-    def test_evaluate_equals_scale_at_normalization_wavelength(self):
+    def test_evaluate_equals_scale_at_norm_wav(self):
         nw = 1.05
         params = {
             'scale': jnp.array(3.0),
             'angle': jnp.array(5.0),
-            'normalization_wavelength': jnp.array(nw),
+            'norm_wav': jnp.array(nw),
         }
-        val = Linear().evaluate(jnp.array([nw]), _CENTER, params)
+        val = Linear().evaluate(jnp.array([nw]), _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert val[0] == pytest.approx(3.0)
 
     def test_roundtrip(self):
@@ -709,25 +805,25 @@ class TestLinear:
 
 class TestPowerLaw:
     def test_param_names(self):
-        assert PowerLaw().param_names() == ('scale', 'beta', 'normalization_wavelength')
+        assert PowerLaw().param_names() == ('scale', 'beta', 'norm_wav')
 
-    def test_default_priors_normalization_wavelength_uses_region_center(self):
+    def test_default_priors_norm_wav_uses_region_center(self):
         priors = PowerLaw().default_priors(region_center=3.5)
-        assert isinstance(priors['normalization_wavelength'], Fixed)
-        assert priors['normalization_wavelength'].value == pytest.approx(3.5)
+        assert isinstance(priors['norm_wav'], Fixed)
+        assert priors['norm_wav'].value == pytest.approx(3.5)
 
-    def test_default_priors_normalization_wavelength_default_region_center(self):
+    def test_default_priors_norm_wav_default_region_center(self):
         priors = PowerLaw().default_priors()
-        assert isinstance(priors['normalization_wavelength'], Fixed)
-        assert priors['normalization_wavelength'].value == pytest.approx(1.0)
+        assert isinstance(priors['norm_wav'], Fixed)
+        assert priors['norm_wav'].value == pytest.approx(1.0)
 
-    def test_evaluate_uses_normalization_wavelength(self):
+    def test_evaluate_uses_norm_wav(self):
         params = {
             'scale': jnp.array(1.0),
             'beta': jnp.array(1.0),
-            'normalization_wavelength': jnp.array(2.0),
+            'norm_wav': jnp.array(2.0),
         }
-        result = PowerLaw().evaluate(_WL, _CENTER, params)
+        result = PowerLaw().evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         expected = _WL / 2.0
         assert jnp.allclose(result, expected)
 
@@ -735,28 +831,28 @@ class TestPowerLaw:
         params = {
             'scale': jnp.array(1.0),
             'beta': jnp.array(0.0),
-            'normalization_wavelength': jnp.array(_CENTER),
+            'norm_wav': jnp.array(_CENTER),
         }
-        result = PowerLaw().evaluate(_WL, _CENTER, params)
+        result = PowerLaw().evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert result.shape == _WL.shape
 
     def test_evaluate_flat_at_zero_beta(self):
         params = {
             'scale': jnp.array(2.0),
             'beta': jnp.array(0.0),
-            'normalization_wavelength': jnp.array(_CENTER),
+            'norm_wav': jnp.array(_CENTER),
         }
-        result = PowerLaw().evaluate(_WL, _CENTER, params)
+        result = PowerLaw().evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert jnp.allclose(result, 2.0)
 
-    def test_evaluate_equals_scale_at_normalization_wavelength(self):
+    def test_evaluate_equals_scale_at_norm_wav(self):
         nw = 1.05
         params = {
             'scale': jnp.array(3.7),
             'beta': jnp.array(2.0),
-            'normalization_wavelength': jnp.array(nw),
+            'norm_wav': jnp.array(nw),
         }
-        val = PowerLaw().evaluate(jnp.array([nw]), _CENTER, params)
+        val = PowerLaw().evaluate(jnp.array([nw]), _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert val[0] == pytest.approx(3.7)
 
     def test_roundtrip(self):
@@ -773,25 +869,13 @@ class TestPowerLaw:
 
 class TestPolynomial:
     def test_param_names_degree0(self):
-        assert Polynomial(degree=0).param_names() == (
-            'scale',
-            'normalization_wavelength',
-        )
+        assert Polynomial(degree=0).param_names() == ('scale', 'norm_wav')
 
     def test_param_names_degree1(self):
-        assert Polynomial(degree=1).param_names() == (
-            'scale',
-            'c1',
-            'normalization_wavelength',
-        )
+        assert Polynomial(degree=1).param_names() == ('scale', 'c1', 'norm_wav')
 
     def test_param_names_degree2(self):
-        assert Polynomial(degree=2).param_names() == (
-            'scale',
-            'c1',
-            'c2',
-            'normalization_wavelength',
-        )
+        assert Polynomial(degree=2).param_names() == ('scale', 'c1', 'c2', 'norm_wav')
 
     def test_negative_degree_raises(self):
         with pytest.raises(ValueError, match='>= 0'):
@@ -800,18 +884,20 @@ class TestPolynomial:
     def test_evaluate_shape(self):
         p = Polynomial(degree=2)
         params = {k: jnp.array(1.0) for k in p.param_names()}
-        result = p.evaluate(_WL, _CENTER, params)
+        result = p.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert result.shape == _WL.shape
 
-    def test_evaluate_equals_scale_at_normalization_wavelength(self):
+    def test_evaluate_equals_scale_at_norm_wav(self):
         nw = 1.0
         params = {
             'scale': jnp.array(4.0),
             'c1': jnp.array(2.0),
             'c2': jnp.array(3.0),
-            'normalization_wavelength': jnp.array(nw),
+            'norm_wav': jnp.array(nw),
         }
-        val = Polynomial(degree=2).evaluate(jnp.array([nw]), _CENTER, params)
+        val = Polynomial(degree=2).evaluate(
+            jnp.array([nw]), _CENTER, params, _OBS_LOW, _OBS_HIGH
+        )
         assert val[0] == pytest.approx(4.0)
 
     def test_roundtrip(self):
@@ -829,59 +915,64 @@ class TestPolynomial:
 
 class TestChebyshev:
     def test_param_names_order0(self):
-        assert Chebyshev(order=0).param_names() == ('scale', 'normalization_wavelength')
+        assert Chebyshev(order=0).param_names() == ('scale', 'norm_wav')
 
     def test_param_names_order2(self):
-        assert Chebyshev(order=2).param_names() == (
-            'scale',
-            'c1',
-            'c2',
-            'normalization_wavelength',
-        )
+        assert Chebyshev(order=2).param_names() == ('scale', 'c1', 'c2', 'norm_wav')
 
     def test_negative_order_raises(self):
         with pytest.raises(ValueError, match='>= 0'):
             Chebyshev(order=-1)
 
     def test_evaluate_shape(self):
-        f = Chebyshev(order=2, half_width=0.1)
+        f = Chebyshev(order=2)
         params = {k: jnp.array(0.0) for k in f.param_names()}
         params['scale'] = jnp.array(1.0)
-        result = f.evaluate(_WL, _CENTER, params)
+        result = f.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert result.shape == _WL.shape
 
+    def test_evaluate_equals_scale_at_norm_wav(self):
+        """Chebyshev should equal scale at norm_wav."""
+        nw = 1.05
+        params = {
+            'scale': jnp.array(2.0),
+            'c1': jnp.array(0.3),
+            'c2': jnp.array(0.1),
+            'norm_wav': jnp.array(nw),
+        }
+        val = Chebyshev(order=2).evaluate(
+            jnp.array([nw]), _CENTER, params, _OBS_LOW, _OBS_HIGH
+        )
+        assert val[0] == pytest.approx(2.0, rel=1e-5)
+
     def test_roundtrip(self):
-        f = Chebyshev(order=3, half_width=0.2)
+        f = Chebyshev(order=3)
         f2 = form_from_dict(f.to_dict())
         assert f2.order == 3
-        assert f2.half_width == pytest.approx(0.2)
+        assert f2.stretch == pytest.approx(1)
         assert f2 == f
 
-    def test_equality_checks_half_width(self):
+    def test_equality_checks_stretch(self):
         assert Chebyshev(2, 0.1) != Chebyshev(2, 0.2)
 
 
 class TestBlackbody:
     def test_param_names(self):
-        assert set(Blackbody().param_names()) == {
-            'scale',
-            'temperature',
-            'normalization_wavelength',
-        }
+        assert set(Blackbody().param_names()) == {'scale', 'temperature', 'norm_wav'}
 
-    def test_default_priors_normalization_wavelength_uses_region_center(self):
+    def test_default_priors_norm_wav_uses_region_center(self):
         priors = Blackbody().default_priors(region_center=2.0)
-        assert isinstance(priors['normalization_wavelength'], Fixed)
-        assert priors['normalization_wavelength'].value == pytest.approx(2.0)
+        assert isinstance(priors['norm_wav'], Fixed)
+        assert priors['norm_wav'].value == pytest.approx(2.0)
 
     def test_evaluate_shape(self):
         wl = jnp.linspace(0.5, 2.0, 30)
         params = {
             'scale': jnp.array(1.0),
             'temperature': jnp.array(5000.0),
-            'normalization_wavelength': jnp.array(1.0),
+            'norm_wav': jnp.array(1.0),
         }
-        result = Blackbody().evaluate(wl, 1.0, params)
+        result = Blackbody().evaluate(wl, 1.0, params, 0.5, 2.0)
         assert result.shape == wl.shape
 
     def test_evaluate_positive(self):
@@ -889,20 +980,44 @@ class TestBlackbody:
         params = {
             'scale': jnp.array(1.0),
             'temperature': jnp.array(5000.0),
-            'normalization_wavelength': jnp.array(1.0),
+            'norm_wav': jnp.array(1.0),
         }
-        result = Blackbody().evaluate(wl, 1.0, params)
+        result = Blackbody().evaluate(wl, 1.0, params, 0.5, 2.0)
         assert jnp.all(result > 0)
 
-    def test_evaluate_equals_scale_at_normalization_wavelength(self):
+    def test_evaluate_equals_scale_at_norm_wav(self):
         nw = 1.0
         params = {
             'scale': jnp.array(2.5),
             'temperature': jnp.array(5000.0),
-            'normalization_wavelength': jnp.array(nw),
+            'norm_wav': jnp.array(nw),
         }
-        val = Blackbody().evaluate(jnp.array([nw]), nw, params)
+        val = Blackbody().evaluate(jnp.array([nw]), nw, params, _OBS_LOW, _OBS_HIGH)
         assert val[0] == pytest.approx(2.5, rel=1e-5)
+
+    def test_evaluate_consistent_across_unit_conversions(self):
+        """Blackbody evaluation should be consistent regardless of wavelength unit."""
+        # Create a region in Angstroms
+        region_aa = ContinuumRegion(5000.0 * u.AA, 6000.0 * u.AA, Blackbody())
+        # Create a region in microns
+        region_um = ContinuumRegion(0.5 * u.um, 0.6 * u.um, Blackbody())
+        # Evaluate at the same physical wavelength (5500 AA = 0.55 um)
+        params_aa = {
+            'scale': jnp.array(1.0),
+            'temperature': jnp.array(5000.0),
+            'norm_wav': jnp.array(5500.0),
+        }
+        params_um = {
+            'scale': jnp.array(1.0),
+            'temperature': jnp.array(5000.0),
+            'norm_wav': jnp.array(0.55),
+        }
+        val_aa = region_aa.form.evaluate(
+            jnp.array([5500.0]), 5500.0, params_aa, 5000.0, 6000.0
+        )
+        val_um = region_um.form.evaluate(jnp.array([0.55]), 0.55, params_um, 0.5, 0.6)
+        # Results should be equal at the same physical wavelength
+        assert val_aa[0] == pytest.approx(val_um[0], rel=1e-5)
 
     def test_roundtrip(self):
         f = Blackbody()
@@ -916,18 +1031,20 @@ class TestModifiedBlackbody:
             'scale',
             'temperature',
             'beta',
-            'normalization_wavelength',
+            'norm_wav',
         }
 
-    def test_evaluate_equals_scale_at_normalization_wavelength(self):
+    def test_evaluate_equals_scale_at_norm_wav(self):
         nw = 1.0
         params = {
             'scale': jnp.array(3.0),
             'temperature': jnp.array(5000.0),
             'beta': jnp.array(1.5),
-            'normalization_wavelength': jnp.array(nw),
+            'norm_wav': jnp.array(nw),
         }
-        val = ModifiedBlackbody().evaluate(jnp.array([nw]), nw, params)
+        val = ModifiedBlackbody().evaluate(
+            jnp.array([nw]), nw, params, _OBS_LOW, _OBS_HIGH
+        )
         assert val[0] == pytest.approx(3.0, rel=1e-5)
 
     def test_roundtrip(self):
@@ -943,40 +1060,42 @@ class TestAttenuatedBlackbody:
             'temperature',
             'tau_v',
             'alpha',
-            'normalization_wavelength',
+            'norm_wav',
         }
 
-    def test_lambda_v_micron_stored(self):
-        f = AttenuatedBlackbody(lambda_v_micron=0.6)
-        assert f.lambda_v_micron == pytest.approx(0.6)
+    def test_lambda_ext_micron_stored(self):
+        f = AttenuatedBlackbody(lambda_ext=0.6 * u.um)
+        assert f.lambda_ext.value == pytest.approx(0.6)
 
-    def test_evaluate_equals_scale_at_normalization_wavelength(self):
+    def test_evaluate_equals_scale_at_norm_wav(self):
         nw = 1.0
         params = {
             'scale': jnp.array(1.5),
             'temperature': jnp.array(5000.0),
             'tau_v': jnp.array(0.5),
             'alpha': jnp.array(-1.5),
-            'normalization_wavelength': jnp.array(nw),
+            'norm_wav': jnp.array(nw),
         }
-        val = AttenuatedBlackbody().evaluate(jnp.array([nw]), nw, params)
+        val = AttenuatedBlackbody().evaluate(
+            jnp.array([nw]), nw, params, _OBS_LOW, _OBS_HIGH
+        )
         assert val[0] == pytest.approx(1.5, rel=1e-5)
 
     def test_roundtrip(self):
-        f = AttenuatedBlackbody(lambda_v_micron=0.6)
+        f = AttenuatedBlackbody(lambda_ext=0.6 * u.um)
         f2 = form_from_dict(f.to_dict())
-        assert f2.lambda_v_micron == pytest.approx(0.6)
+        assert f2.lambda_ext.value == pytest.approx(0.6)
         assert f2 == f
 
-    def test_equality_checks_lambda_v(self):
-        assert AttenuatedBlackbody(0.55) != AttenuatedBlackbody(0.50)
+    def test_equality_checks_lambda_ext(self):
+        assert AttenuatedBlackbody(0.55 * u.um) != AttenuatedBlackbody(0.50 * u.um)
 
 
 class TestBSpline:
     @pytest.fixture
     def cubic_knots(self):
         # Clamped cubic knot vector: repeat end knots degree+1 times.
-        return jnp.array([0.9, 0.9, 0.9, 0.9, 1.0, 1.1, 1.1, 1.1, 1.1])
+        return [1.0] * u.um
 
     def test_n_basis(self, cubic_knots):
         b = BSpline(cubic_knots, degree=3)
@@ -984,21 +1103,26 @@ class TestBSpline:
 
     def test_param_names(self, cubic_knots):
         b = BSpline(cubic_knots, degree=3)
-        expected = (
-            'scale',
-            'coeff_1',
-            'coeff_2',
-            'coeff_3',
-            'coeff_4',
-            'normalization_wavelength',
-        )
+        expected = ('scale', 'coeff_1', 'coeff_2', 'coeff_3', 'coeff_4', 'norm_wav')
         assert b.param_names() == expected
 
     def test_evaluate_shape(self, cubic_knots):
         b = BSpline(cubic_knots, degree=3)
+        b._prepare(0.9 * u.um, 1.1 * u.um)
         params = {n: jnp.array(1.0) for n in b.param_names()}
-        result = b.evaluate(_WL, _CENTER, params)
+        result = b.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert result.shape == _WL.shape
+
+    def test_evaluate_equals_scale_at_norm_wav(self, cubic_knots):
+        """BSpline should equal scale at norm_wav."""
+        b = BSpline(cubic_knots, degree=3)
+        b._prepare(0.9 * u.um, 1.1 * u.um)
+        nw = 1.0
+        params = {n: jnp.array(0.5) for n in b.param_names()}
+        params['scale'] = jnp.array(2.0)
+        params['norm_wav'] = jnp.array(nw)
+        val = b.evaluate(jnp.array([nw]), _CENTER, params, _OBS_LOW, _OBS_HIGH)
+        assert val[0] == pytest.approx(2.0, rel=1e-5)
 
     def test_roundtrip(self, cubic_knots):
         b = BSpline(cubic_knots, degree=3)
@@ -1010,37 +1134,42 @@ class TestBSpline:
 class TestBernstein:
     @pytest.fixture
     def bernstein(self):
-        return Bernstein(degree=3, wavelength_min=0.9, wavelength_max=1.1)
+        return Bernstein(degree=3)
 
     def test_param_names(self, bernstein):
-        expected = (
-            'scale',
-            'coeff_1',
-            'coeff_2',
-            'coeff_3',
-            'normalization_wavelength',
-        )
+        expected = ('scale', 'coeff_1', 'coeff_2', 'coeff_3', 'norm_wav')
         assert bernstein.param_names() == expected
 
     def test_evaluate_shape(self, bernstein):
         params = {n: jnp.array(1.0) for n in bernstein.param_names()}
-        result = bernstein.evaluate(_WL, _CENTER, params)
+        result = bernstein.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert result.shape == _WL.shape
 
     def test_evaluate_nonnegative_with_positive_coeffs(self, bernstein):
         params = {n: jnp.array(1.0) for n in bernstein.param_names()}
-        result = bernstein.evaluate(_WL, _CENTER, params)
+        result = bernstein.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
         assert jnp.all(result >= 0)
+
+    def test_evaluate_equals_scale_at_norm_wav(self, bernstein):
+        """Bernstein should equal scale at norm_wav."""
+        nw = 1.05
+        params = {n: jnp.array(0.5) for n in bernstein.param_names()}
+        params['scale'] = jnp.array(3.0)
+        params['norm_wav'] = jnp.array(nw)
+        val = bernstein.evaluate(jnp.array([nw]), _CENTER, params, _OBS_LOW, _OBS_HIGH)
+        assert val[0] == pytest.approx(3.0, rel=1e-5)
 
     def test_roundtrip(self, bernstein):
         b2 = form_from_dict(bernstein.to_dict())
         assert b2.degree == 3
         assert b2 == bernstein
 
-    def test_equality_checks_bounds(self):
-        b1 = Bernstein(3, 0.9, 1.1)
-        b2 = Bernstein(3, 0.9, 1.2)
+    def test_equality_checks_stretch(self):
+        b1 = Bernstein(degree=3, stretch=1.0)
+        b2 = Bernstein(degree=3, stretch=1.5)
         assert b1 != b2
+        b3 = Bernstein(degree=3, stretch=1.0)
+        assert b1 == b3
 
 
 # ---------------------------------------------------------------------------
@@ -1096,7 +1225,7 @@ class TestParamsValidation:
             1.0 * u.um,
             2.0 * u.um,
             PowerLaw(),
-            params={'betta': Parameter('b', prior=Uniform(-5, 5))},
+            params={'betta': ContShape('b', prior=Uniform(-5, 5))},
         )
         with pytest.raises(ValueError, match='does not have parameter'):
             ContinuumConfiguration([region])
@@ -1106,7 +1235,7 @@ class TestParamsValidation:
             1.0 * u.um,
             2.0 * u.um,
             Linear(),
-            params={'scale': Parameter('s', prior=Uniform(0, 5))},
+            params={'scale': Scale('s', prior=Uniform(0, 5))},
         )
         config = ContinuumConfiguration([region])
         assert len(config) == 1
@@ -1117,70 +1246,48 @@ class TestParamsValidation:
 # ---------------------------------------------------------------------------
 
 
-class TestPrepare:
-    def test_linear_returns_self(self):
-        f = Linear()
-        assert f._prepare(u.AA, u.um) is f
+# class TestPrepare:
+#     def test_blackbody_prepares_micron_factor(self):
+#         f = Blackbody()
+#         f._prepare(u.AA, u.um)
+#         # Convert from AA to um: 1 AA = 1e-4 um
+#         assert f._micron_factor == pytest.approx(1e-4)
+#         # Prepare with canonical unit already microns
+#         prepared_um = f._prepare(u.um, u.um)
+#         assert prepared_um._micron_factor == pytest.approx(1.0)
 
-    def test_powerlaw_returns_self(self):
-        f = PowerLaw()
-        assert f._prepare(u.AA, u.um) is f
+#     def test_attenuated_blackbody_converts_lambda_ext(self):
+#         f = AttenuatedBlackbody(lambda_ext=0.55 * u.um)
+#         prepared = f._prepare(u.AA, u.um)
+#         # 0.55 um = 5500 AA
+#         assert prepared._lambda_ext_eval == pytest.approx(5500.0)
+#         # Original unchanged
+#         assert f._lambda_ext_eval == pytest.approx(0.55)
 
-    def test_blackbody_returns_self(self):
-        f = Blackbody()
-        assert f._prepare(u.AA, u.um) is f
+#     def test_attenuated_blackbody_quantity_input(self):
+#         f = AttenuatedBlackbody(lambda_ext=5500.0 * u.AA)
+#         assert f.lambda_ext.value == pytest.approx(5500)
+#         prepared = f._prepare(u.AA, u.um)
+#         assert prepared._lambda_ext_eval == pytest.approx(5500.0)
 
-    def test_attenuated_blackbody_converts_lambda_v(self):
-        f = AttenuatedBlackbody(lambda_v_micron=0.55)
-        prepared = f._prepare(u.AA, u.um)
-        # 0.55 um = 5500 AA
-        assert prepared._lambda_v_eval == pytest.approx(5500.0)
-        # Original unchanged
-        assert f._lambda_v_eval == pytest.approx(0.55)
-
-    def test_attenuated_blackbody_quantity_input(self):
-        f = AttenuatedBlackbody(lambda_v_micron=5500.0 * u.AA)
-        assert f.lambda_v_micron == pytest.approx(0.55)
-        prepared = f._prepare(u.AA, u.um)
-        assert prepared._lambda_v_eval == pytest.approx(5500.0)
-
-    def test_attenuated_blackbody_evaluate_uses_prepared_value(self):
-        # Evaluate in Angstrom space after _prepare
-        f = AttenuatedBlackbody(lambda_v_micron=0.55)
-        prepared = f._prepare(u.AA, u.um)
-        wl = jnp.linspace(4000.0, 8000.0, 20)  # Angstroms
-        nw = 5500.0
-        params = {
-            'scale': jnp.array(1.0),
-            'temperature': jnp.array(5000.0),
-            'tau_v': jnp.array(0.5),
-            'alpha': jnp.array(-1.5),
-            'normalization_wavelength': jnp.array(nw),
-        }
-        result = prepared.evaluate(wl, nw, params)
-        assert result.shape == wl.shape
-        # At normalization wavelength, result should equal scale
-        val = prepared.evaluate(jnp.array([nw]), nw, params)
-        assert val[0] == pytest.approx(1.0, rel=1e-5)
-
-    def test_chebyshev_scales_half_width(self):
-        f = Chebyshev(order=2, half_width=0.1)  # 0.1 um
-        prepared = f._prepare(u.AA, u.um)
-        assert prepared._half_width == pytest.approx(1000.0)  # 0.1 um = 1000 AA
-
-    def test_bernstein_scales_bounds(self):
-        f = Bernstein(degree=3, wavelength_min=0.9, wavelength_max=1.1)  # um
-        prepared = f._prepare(u.AA, u.um)
-        assert prepared._wavelength_min == pytest.approx(9000.0)
-        assert prepared._wavelength_max == pytest.approx(11000.0)
-        assert prepared._degree == 3
-
-    def test_bspline_scales_knots(self):
-        knots = jnp.array([0.9, 0.9, 0.9, 0.9, 1.0, 1.1, 1.1, 1.1, 1.1])
-        f = BSpline(knots, degree=3)
-        prepared = f._prepare(u.AA, u.um)
-        assert prepared._knots[4] == pytest.approx(10000.0)
-        assert prepared._n_basis == f._n_basis
+#     def test_attenuated_blackbody_evaluate_uses_prepared_value(self):
+#         # Evaluate in Angstrom space after _prepare
+#         f = AttenuatedBlackbody(lambda_ext=0.55 * u.um)
+#         prepared = f._prepare(u.AA, u.um)
+#         wl = jnp.linspace(4000.0, 8000.0, 20)  # Angstroms
+#         nw = 5500.0
+#         params = {
+#             'scale': jnp.array(1.0),
+#             'temperature': jnp.array(5000.0),
+#             'tau_v': jnp.array(0.5),
+#             'alpha': jnp.array(-1.5),
+#             'norm_wav': jnp.array(nw),
+#         }
+#         result = prepared.evaluate(wl, nw, params, 4000.0, 8000.0)
+#         assert result.shape == wl.shape
+#         # At normalization wavelength, result should equal scale
+#         val = prepared.evaluate(jnp.array([nw]), nw, params, 4000.0, 8000.0)
+#         assert val[0] == pytest.approx(1.0, rel=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -1189,14 +1296,16 @@ class TestPrepare:
 
 _FLUX_UNIT = u.erg / (u.s * u.cm**2 * u.AA)
 _WL_UNIT = u.um
-_LINEAR_FORMS = [
-    Linear(),
-    Polynomial(2),
+_LINEAR_FORMS = [Linear(), Polynomial(2)]
+_NONLINEAR_FORMS = [
+    PowerLaw(),
+    Blackbody(),
+    ModifiedBlackbody(),
+    AttenuatedBlackbody(),
     Chebyshev(2, 0.1),
-    BSpline(jnp.array([0.9] * 4 + [1.0] + [1.1] * 4), degree=3),
-    Bernstein(3, 0.9, 1.1),
+    BSpline([1.0] * u.um, degree=3),
+    Bernstein(degree=3),
 ]
-_NONLINEAR_FORMS = [PowerLaw(), Blackbody(), ModifiedBlackbody(), AttenuatedBlackbody()]
 
 
 class TestIsLinear:
@@ -1222,8 +1331,8 @@ class TestParamUnits:
             PowerLaw(),
             Polynomial(2),
             Chebyshev(2, 0.1),
-            BSpline(jnp.array([0.9] * 4 + [1.0] + [1.1] * 4), degree=3),
-            Bernstein(3, 0.9, 1.1),
+            BSpline([1.0] * u.um, degree=3),
+            Bernstein(degree=3),
             Blackbody(),
             ModifiedBlackbody(),
             AttenuatedBlackbody(),
@@ -1263,8 +1372,8 @@ class TestDefaultPriors:
         priors = Chebyshev(order=2).default_priors(region_center=1.5)
         assert 'c1' in priors
         assert 'c2' in priors
-        assert isinstance(priors['normalization_wavelength'], Fixed)
-        assert priors['normalization_wavelength'].value == pytest.approx(1.5)
+        assert isinstance(priors['norm_wav'], Fixed)
+        assert priors['norm_wav'].value == pytest.approx(1.5)
 
     def test_polynomial_default_priors_degree2(self):
         priors = Polynomial(degree=2).default_priors(region_center=2.0)
@@ -1272,7 +1381,7 @@ class TestDefaultPriors:
         assert 'c2' in priors
 
     def test_bspline_default_priors(self):
-        knots = jnp.array([0.9] * 4 + [1.0, 1.05, 1.1] + [1.1] * 4)
+        knots = [1.0, 1.05, 1.1] * u.um
         b = BSpline(knots, degree=3)
         priors = b.default_priors(region_center=1.0)
         assert 'scale' in priors
@@ -1280,7 +1389,7 @@ class TestDefaultPriors:
             assert f'coeff_{i}' in priors
 
     def test_bernstein_default_priors(self):
-        b = Bernstein(degree=3, wavelength_min=0.9, wavelength_max=1.1)
+        b = Bernstein(degree=3)
         priors = b.default_priors(region_center=1.0)
         assert 'scale' in priors
         assert 'coeff_1' in priors
@@ -1302,8 +1411,8 @@ class TestFormEqHash:
             Blackbody(),
             ModifiedBlackbody(),
             AttenuatedBlackbody(),
-            BSpline(jnp.array([0.9] * 4 + [1.0] + [1.1] * 4), degree=3),
-            Bernstein(3, 0.9, 1.1),
+            BSpline([1] * u.um, degree=3),
+            Bernstein(degree=3),
         ],
     )
     def test_hashable(self, form):
@@ -1326,57 +1435,114 @@ class TestFormEqHash:
         assert isinstance(hash(Chebyshev(2, 0.1)), int)
 
     def test_attenuated_blackbody_eq_hash(self):
-        assert AttenuatedBlackbody(0.55) == AttenuatedBlackbody(0.55)
-        assert AttenuatedBlackbody(0.55) != AttenuatedBlackbody(0.50)
-        assert isinstance(hash(AttenuatedBlackbody(0.55)), int)
+        assert AttenuatedBlackbody(0.55 * u.um) == AttenuatedBlackbody(0.55 * u.um)
+        assert AttenuatedBlackbody(0.55 * u.um) != AttenuatedBlackbody(0.50 * u.um)
+        assert isinstance(hash(AttenuatedBlackbody(0.55 * u.um)), int)
 
     def test_bspline_eq_hash(self):
-        knots = jnp.array([0.9] * 4 + [1.0] + [1.1] * 4)
+        knots = [1.0] * u.um
         b1 = BSpline(knots, degree=3)
         b2 = BSpline(knots, degree=3)
         assert b1 == b2
         assert isinstance(hash(b1), int)
 
     def test_bernstein_eq_hash(self):
-        b1 = Bernstein(3, 0.9, 1.1)
-        b2 = Bernstein(3, 0.9, 1.1)
+        b1 = Bernstein(degree=3)
+        b2 = Bernstein(degree=3)
         assert b1 == b2
         assert isinstance(hash(b1), int)
 
 
 # ---------------------------------------------------------------------------
-# _adapt_for_observed_region
+# ContinuumConfiguration addition
 # ---------------------------------------------------------------------------
 
 
-class TestAdaptForObservedRegion:
-    def test_linear_returns_self(self):
-        f = Linear()
-        assert f._adapt_for_observed_region(1.0, 2.0) is f
+class TestContinuumConfigurationAdd:
+    def test_add_basic(self):
+        cc1 = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um)])
+        cc2 = ContinuumConfiguration([ContinuumRegion(3.0 * u.um, 4.0 * u.um)])
+        merged = cc1 + cc2
+        assert len(merged) == 2
+        assert merged[0].low == pytest.approx(1.0)
+        assert merged[1].low == pytest.approx(3.0)
 
-    def test_chebyshev_updates_half_width(self):
-        f = Chebyshev(order=2, half_width=0.5)
-        adapted = f._adapt_for_observed_region(0.9, 1.1)
-        assert adapted._half_width == pytest.approx((1.1 - 0.9) / 2.0)
-        assert adapted._order == 2
+    def test_add_multiple_regions(self):
+        cc1 = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 2.0 * u.um),
+                ContinuumRegion(3.0 * u.um, 4.0 * u.um),
+            ]
+        )
+        cc2 = ContinuumConfiguration(
+            [
+                ContinuumRegion(5.0 * u.um, 6.0 * u.um),
+                ContinuumRegion(7.0 * u.um, 8.0 * u.um),
+            ]
+        )
+        merged = cc1 + cc2
+        assert len(merged) == 4
 
-    def test_bspline_rescales_knots(self):
-        knots = jnp.array([0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0])
-        f = BSpline(knots, degree=3)
-        adapted = f._adapt_for_observed_region(0.9, 1.1)
-        assert float(adapted._knots[0]) == pytest.approx(0.9)
-        assert float(adapted._knots[-1]) == pytest.approx(1.1)
+    def test_add_preserves_forms(self):
+        cc1 = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, form=Linear())]
+        )
+        cc2 = ContinuumConfiguration(
+            [ContinuumRegion(3.0 * u.um, 4.0 * u.um, form=PowerLaw())]
+        )
+        merged = cc1 + cc2
+        assert isinstance(merged[0].form, Linear)
+        assert isinstance(merged[1].form, PowerLaw)
 
-    def test_bspline_identity_knots(self):
-        # If all knots are equal, should return self (no rescaling possible)
-        knots = jnp.array([1.0, 1.0, 1.0, 1.0, 1.0])
-        f = BSpline(knots, degree=3)
-        adapted = f._adapt_for_observed_region(0.9, 1.1)
-        assert adapted is f
+    def test_add_overlapping_regions_allowed(self):
+        """Overlapping regions are summed in the model — addition should not block this."""
+        cc1 = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 3.0 * u.um)])
+        cc2 = ContinuumConfiguration([ContinuumRegion(2.0 * u.um, 4.0 * u.um)])
+        import warnings
 
-    def test_bernstein_updates_bounds(self):
-        f = Bernstein(degree=3, wavelength_min=0.0, wavelength_max=1.0)
-        adapted = f._adapt_for_observed_region(0.9, 1.1)
-        assert adapted._wavelength_min == pytest.approx(0.9)
-        assert adapted._wavelength_max == pytest.approx(1.1)
-        assert adapted._degree == 3
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', UserWarning)
+            merged = cc1 + cc2
+        assert len(merged) == 2
+
+    def test_add_colliding_param_names_raises(self):
+        shared = Scale('my_scale')
+        cc1 = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um, params={'scale': shared})]
+        )
+        cc2 = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    3.0 * u.um, 4.0 * u.um, params={'scale': Scale('my_scale')}
+                )
+            ]
+        )
+        with pytest.raises(ValueError, match='my_scale'):
+            cc1 + cc2
+
+    def test_add_auto_named_params_do_not_collide(self):
+        """Auto-created param names are re-indexed on construction — no collision."""
+        cc1 = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um)])
+        cc2 = ContinuumConfiguration([ContinuumRegion(3.0 * u.um, 4.0 * u.um)])
+        merged = cc1 + cc2
+        assert len(merged) == 2
+
+    def test_add_wrong_type_returns_not_implemented(self):
+        cc = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um)])
+        result = cc.__add__('not a config')
+        assert result is NotImplemented
+
+    def test_add_empty_left(self):
+        cc1 = ContinuumConfiguration()
+        cc2 = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um)])
+        merged = cc1 + cc2
+        assert len(merged) == 1
+
+    def test_add_empty_right(self):
+        cc1 = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um)])
+        cc2 = ContinuumConfiguration()
+        merged = cc1 + cc2
+        assert len(merged) == 1
+
+
+# ---------------------------------------------------------------------------

@@ -20,6 +20,8 @@ from unite.continuum.library import (
 CENTER = 1.0  # microns
 N = 30
 WL = jnp.linspace(0.8, 1.2, N)
+OBS_LOW = 0.8
+OBS_HIGH = 1.2
 ERROR = jnp.ones(N) * 0.01
 
 
@@ -35,37 +37,37 @@ class TestFitLinear:
         """Fit a known linear continuum and check params are close."""
         # True: scale=2.0, angle=1.0, center=1.0
         form = Linear()
-        true_params = {'scale': 2.0, 'angle': 1.0, 'normalization_wavelength': CENTER}
-        flux = form.evaluate(WL, CENTER, true_params)
+        true_params = {'scale': 2.0, 'angle': 1.0, 'norm_wav': CENTER}
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
 
         assert isinstance(result, ContinuumFitResult)
         assert result.params['scale'] == pytest.approx(2.0, abs=1e-4)
         assert result.params['angle'] == pytest.approx(1.0, abs=1e-4)
-        assert result.params['normalization_wavelength'] == pytest.approx(CENTER)
+        assert result.params['norm_wav'] == pytest.approx(CENTER)
 
-    def test_linear_normalization_wavelength_default(self):
-        """normalization_wavelength defaults to center when not provided."""
+    def test_linear_norm_wav_default(self):
+        """norm_wav defaults to center when not provided."""
         form = Linear()
         flux = jnp.ones(N)
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
-        assert result.params['normalization_wavelength'] == pytest.approx(CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
+        assert result.params['norm_wav'] == pytest.approx(CENTER)
 
-    def test_linear_explicit_normalization_wavelength(self):
-        """Passing normalization_wavelength explicitly uses that value."""
+    def test_linear_explicit_norm_wav(self):
+        """Passing norm_wav explicitly uses that value."""
         form = Linear()
         flux = jnp.ones(N)
         result = fit_continuum_form(
-            form, WL, flux, ERROR, CENTER, normalization_wavelength=0.9
+            form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH, norm_wav=0.9
         )
-        assert result.params['normalization_wavelength'] == pytest.approx(0.9)
+        assert result.params['norm_wav'] == pytest.approx(0.9)
 
     def test_linear_chi2_red_computed(self):
         """chi2_red is a float when dof > 0."""
         form = Linear()
         flux = jnp.ones(N)
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
         assert result.chi2_red is not None
         assert isinstance(result.chi2_red, float)
         assert result.dof > 0
@@ -73,31 +75,21 @@ class TestFitLinear:
     def test_polynomial_fit(self):
         """Polynomial (degree=2) is linear and recovers params."""
         form = Polynomial(degree=2)
-        true_params = {
-            'scale': 2.0,
-            'c1': 0.5,
-            'c2': -0.2,
-            'normalization_wavelength': CENTER,
-        }
-        flux = form.evaluate(WL, CENTER, true_params)
+        true_params = {'scale': 2.0, 'c1': 0.5, 'c2': -0.2, 'norm_wav': CENTER}
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
 
         assert result.params['scale'] == pytest.approx(2.0, abs=1e-3)
         assert result.params['c1'] == pytest.approx(0.5, abs=1e-3)
 
     def test_chebyshev_fit(self):
         """Chebyshev (order=2) is linear."""
-        form = Chebyshev(order=2, half_width=0.2)
-        true_params = {
-            'scale': 1.0,
-            'c1': 0.3,
-            'c2': 0.05,
-            'normalization_wavelength': CENTER,
-        }
-        flux = form.evaluate(WL, CENTER, true_params)
+        form = Chebyshev(order=2, stretch=1)
+        true_params = {'scale': 1.0, 'c1': 0.3, 'c2': 0.05, 'norm_wav': CENTER}
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
         assert isinstance(result, ContinuumFitResult)
         assert result.params['scale'] == pytest.approx(1.0, abs=1e-3)
 
@@ -105,10 +97,10 @@ class TestFitLinear:
         """chi2_red is None when n_data == n_params (dof=0)."""
         # Linear has 2 params; use 2 data points
         form = Linear()
-        wl2 = jnp.array([0.9, 1.1])
-        flux2 = jnp.array([1.0, 2.0])
-        err2 = jnp.array([0.01, 0.01])
-        result = fit_continuum_form(form, wl2, flux2, err2, CENTER)
+        wl = jnp.array([0.9, 1.1])
+        flux = jnp.array([1.0, 2.0])
+        err = jnp.array([0.01, 0.01])
+        result = fit_continuum_form(form, wl, flux, err, CENTER, OBS_LOW, OBS_HIGH)
         assert result.chi2_red is None
         assert result.dof == 0
 
@@ -116,7 +108,7 @@ class TestFitLinear:
         """model in result has same shape as input wavelength."""
         form = Linear()
         flux = jnp.ones(N)
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
         assert result.model.shape == (N,)
 
 
@@ -131,14 +123,10 @@ class TestFitNonlinear:
     def test_blackbody_fit_converges(self):
         """Blackbody fit converges to reasonable parameters."""
         form = Blackbody()
-        true_params = {
-            'scale': 1e-3,
-            'temperature': 5000.0,
-            'normalization_wavelength': CENTER,
-        }
-        flux = form.evaluate(WL, CENTER, true_params)
+        true_params = {'scale': 1e-3, 'temperature': 5000.0, 'norm_wav': CENTER}
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
-        result = fit_continuum_form(form, WL, flux, ERROR * 1e-3, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
 
         assert isinstance(result, ContinuumFitResult)
         assert result.params['temperature'] == pytest.approx(5000.0, rel=0.05)
@@ -147,10 +135,10 @@ class TestFitNonlinear:
     def test_powerlaw_fit(self):
         """PowerLaw is nonlinear (Gauss-Newton) and recovers params."""
         form = PowerLaw()
-        true_params = {'scale': 1.5, 'beta': -1.0, 'normalization_wavelength': CENTER}
-        flux = form.evaluate(WL, CENTER, true_params)
+        true_params = {'scale': 1.5, 'beta': -1.0, 'norm_wav': CENTER}
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
-        result = fit_continuum_form(form, WL, flux, ERROR, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
 
         assert result.params['scale'] == pytest.approx(1.5, rel=0.05)
         assert result.params['beta'] == pytest.approx(-1.0, abs=0.1)
@@ -162,11 +150,11 @@ class TestFitNonlinear:
             'scale': 1e-3,
             'temperature': 5000.0,
             'beta': 2.0,
-            'normalization_wavelength': CENTER,
+            'norm_wav': CENTER,
         }
-        flux = form.evaluate(WL, CENTER, true_params)
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
-        result = fit_continuum_form(form, WL, flux, ERROR * 1e-3, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
 
         assert isinstance(result, ContinuumFitResult)
         assert 'temperature' in result.params
@@ -176,30 +164,22 @@ class TestFitNonlinear:
     def test_nonlinear_chi2_red_computed(self):
         """chi2_red is a float (not None) for well-constrained nonlinear fit."""
         form = Blackbody()
-        true_params = {
-            'scale': 1e-3,
-            'temperature': 5000.0,
-            'normalization_wavelength': CENTER,
-        }
-        flux = form.evaluate(WL, CENTER, true_params)
+        true_params = {'scale': 1e-3, 'temperature': 5000.0, 'norm_wav': CENTER}
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
-        result = fit_continuum_form(form, WL, flux, ERROR * 1e-3, CENTER)
+        result = fit_continuum_form(form, WL, flux, ERROR, CENTER, OBS_LOW, OBS_HIGH)
         assert result.chi2_red is not None
 
-    def test_nonlinear_explicit_normalization_wavelength(self):
-        """Explicit normalization_wavelength is used in nonlinear fit."""
+    def test_nonlinear_explicit_norm_wav(self):
+        """Explicit norm_wav is used in nonlinear fit."""
         form = Blackbody()
-        true_params = {
-            'scale': 1e-3,
-            'temperature': 5000.0,
-            'normalization_wavelength': 0.9,
-        }
-        flux = form.evaluate(WL, CENTER, true_params)
+        true_params = {'scale': 1e-3, 'temperature': 5000.0, 'norm_wav': 0.9}
+        flux = form.evaluate(WL, CENTER, true_params, OBS_LOW, OBS_HIGH)
 
         result = fit_continuum_form(
-            form, WL, flux, ERROR * 1e-3, CENTER, normalization_wavelength=0.9
+            form, WL, flux, ERROR * 1e-3, CENTER, OBS_LOW, OBS_HIGH, norm_wav=0.9
         )
-        assert result.params['normalization_wavelength'] == pytest.approx(0.9)
+        assert result.params['norm_wav'] == pytest.approx(0.9)
 
 
 # ---------------------------------------------------------------------------

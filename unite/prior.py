@@ -378,36 +378,51 @@ class Fixed(Prior):
     Delta distributions, which are not differentiable and would break
     gradient-based samplers.
 
+    The value may be a literal number or a :class:`ParameterRef` expression
+    (or a :class:`Parameter` token, which is automatically converted to a
+    ``ParameterRef``).  When the value is a ``ParameterRef``, the fixed
+    parameter resolves to the referenced parameter's value at model-build
+    time, enabling deterministic dependencies without sampling.
+
     Parameters
     ----------
-    value : float or int
-        The constant value.
+    value : float, int, ParameterRef, or Parameter
+        The constant value, or a reference to another parameter.
 
     Examples
     --------
+    Literal value:
+
     >>> Fixed(6564.61)
     Fixed(6564.61)
+
+    Reference to another parameter (e.g. tie a redshift to an existing one):
+
+    >>> Fixed(narrow_z)
     """
 
-    def __init__(self, value: float | int) -> None:
-        if not isinstance(value, int | float):
-            msg = f'Fixed value must be int or float, got {type(value).__name__}'
+    def __init__(self, value: Bound | Parameter) -> None:
+        if not isinstance(value, int | float | ParameterRef | Parameter):
+            msg = (
+                f'Fixed value must be int, float, ParameterRef, or Parameter, '
+                f'got {type(value).__name__}'
+            )
             raise TypeError(msg)
-        self.value = float(value)
+        self.value = _normalize_bound(value)
 
     def to_dist(self, context: dict) -> None:
         """Return ``None`` — the parameter is constant and must not be sampled."""
         return None
 
     def dependencies(self) -> set:
-        return set()
+        return _bound_deps(self.value)
 
     def to_dict(self, param_namer: dict | None = None) -> dict:
-        return {'type': 'Fixed', 'value': self.value}
+        return {'type': 'Fixed', 'value': _serialize_bound(self.value, param_namer)}
 
     @classmethod
     def from_dict(cls, d: dict, token_registry: dict | None = None) -> Fixed:
-        return cls(d['value'])
+        return cls(_deserialize_bound(d['value'], token_registry))
 
     def __repr__(self) -> str:
         return f'Fixed({self.value!r})'
@@ -490,14 +505,16 @@ class Parameter:
                     f'reference the same kind of parameter.'
                 )
                 raise TypeError(msg)
-        self.name = name
+        self.label: str | None = name  # user-supplied semantic label
+        self.name: str | None = None  # NumPyro site name (set at registration)
         self.prior = prior
 
     def __repr__(self) -> str:
         """Return a readable string representation."""
         parts = []
-        if self.name is not None:
-            parts.append(repr(self.name))
+        label = self.label or self.name
+        if label is not None:
+            parts.append(repr(label))
         parts.append(f'prior={self.prior!r}')
         return f'{self.__class__.__name__}({", ".join(parts)})'
 

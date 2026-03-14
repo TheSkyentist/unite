@@ -27,7 +27,7 @@ class ContinuumFitResult:
         Best-fit model values at the *fitted* wavelengths (i.e. the
         unmasked pixels passed to :func:`fit_continuum_form`).
     params : dict of str to float
-        Best-fit parameter values (including ``normalization_wavelength``).
+        Best-fit parameter values (including ``norm_wav``).
     chi2_red : float or None
         Reduced chi-squared of the fit, or ``None`` if degrees of
         freedom ≤ 0.
@@ -47,7 +47,9 @@ def fit_continuum_form(
     flux: ArrayLike,
     error: ArrayLike,
     center: float,
-    normalization_wavelength: float | None = None,
+    obs_low: float,
+    obs_high: float,
+    norm_wav: float | None = None,
 ) -> ContinuumFitResult:
     """Fit a continuum form to data using least squares.
 
@@ -68,7 +70,11 @@ def fit_continuum_form(
         Flux density uncertainty (same length as *wavelength*).
     center : float
         Region midpoint wavelength (passed to ``form.evaluate``).
-    normalization_wavelength : float, optional
+    obs_low : float
+        Lower observed-frame wavelength bound of the region.
+    obs_high : float
+        Upper observed-frame wavelength bound of the region.
+    norm_wav : float, optional
         Reference wavelength.  Defaults to *center*.
 
     Returns
@@ -79,19 +85,32 @@ def fit_continuum_form(
     flux = jnp.asarray(flux, dtype=float)
     error = jnp.asarray(error, dtype=float)
 
-    if normalization_wavelength is None:
-        normalization_wavelength = center
-    nw = normalization_wavelength
+    if norm_wav is None:
+        norm_wav = center
+    nw = norm_wav
 
     param_names = list(form.param_names())
-    fitted_names = [p for p in param_names if p != 'normalization_wavelength']
+    fitted_names = [p for p in param_names if p != 'norm_wav']
     n_params = len(fitted_names)
     n_data = wavelength.shape[0]
     dof = n_data - n_params
 
     if form.is_linear:
-        return _fit_linear(form, wavelength, flux, error, center, nw, fitted_names, dof)
-    return _fit_nonlinear(form, wavelength, flux, error, center, nw, fitted_names, dof)
+        return _fit_linear(
+            form,
+            wavelength,
+            flux,
+            error,
+            center,
+            obs_low,
+            obs_high,
+            nw,
+            fitted_names,
+            dof,
+        )
+    return _fit_nonlinear(
+        form, wavelength, flux, error, center, obs_low, obs_high, nw, fitted_names, dof
+    )
 
 
 # ------------------------------------------------------------------
@@ -99,15 +118,17 @@ def fit_continuum_form(
 # ------------------------------------------------------------------
 
 
-def _fit_linear(form, wavelength, flux, error, center, nw, fitted_names, dof):
+def _fit_linear(
+    form, wavelength, flux, error, center, obs_low, obs_high, nw, fitted_names, dof
+):
     """Weighted least squares for linear forms."""
     # Build design matrix: evaluate form with one parameter = 1, rest = 0.
     columns = []
     for target_name in fitted_names:
         params = {p: 0.0 for p in form.param_names()}
-        params['normalization_wavelength'] = nw
+        params['norm_wav'] = nw
         params[target_name] = 1.0
-        col = form.evaluate(wavelength, center, params)
+        col = form.evaluate(wavelength, center, params, obs_low, obs_high)
         columns.append(col)
 
     design = jnp.stack(columns, axis=-1)  # (n_data, n_params)
@@ -120,7 +141,7 @@ def _fit_linear(form, wavelength, flux, error, center, nw, fitted_names, dof):
     params_dict: dict[str, float] = {
         name: float(coeffs[i]) for i, name in enumerate(fitted_names)
     }
-    params_dict['normalization_wavelength'] = nw
+    params_dict['norm_wav'] = nw
 
     model = design @ coeffs
 
@@ -138,15 +159,26 @@ def _fit_linear(form, wavelength, flux, error, center, nw, fitted_names, dof):
 
 
 def _fit_nonlinear(
-    form, wavelength, flux, error, center, nw, fitted_names, dof, max_iter=30, tol=1e-8
+    form,
+    wavelength,
+    flux,
+    error,
+    center,
+    obs_low,
+    obs_high,
+    nw,
+    fitted_names,
+    dof,
+    max_iter=30,
+    tol=1e-8,
 ):
     """Gauss-Newton iteration for nonlinear forms."""
     x = _initial_guess(fitted_names, flux)
 
     def residual_fn(param_vec):
         params_dict = {name: param_vec[i] for i, name in enumerate(fitted_names)}
-        params_dict['normalization_wavelength'] = nw
-        model = form.evaluate(wavelength, center, params_dict)
+        params_dict['norm_wav'] = nw
+        model = form.evaluate(wavelength, center, params_dict, obs_low, obs_high)
         return (flux - model) / error
 
     for _ in range(max_iter):
@@ -160,11 +192,11 @@ def _fit_nonlinear(
     params_dict: dict[str, float] = {
         name: float(x[i]) for i, name in enumerate(fitted_names)
     }
-    params_dict['normalization_wavelength'] = nw
+    params_dict['norm_wav'] = nw
 
     # Evaluate final model.
     full_params = dict(params_dict)
-    model = form.evaluate(wavelength, center, full_params)
+    model = form.evaluate(wavelength, center, full_params, obs_low, obs_high)
 
     residuals = (flux - model) / error
     chi2_red = float(jnp.sum(residuals**2) / dof) if dof > 0 else None

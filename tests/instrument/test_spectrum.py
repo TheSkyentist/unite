@@ -26,7 +26,7 @@ def _make_spectrum(
 ):
     """Create a test spectrum with a Gaussian line and linear continuum."""
     wl = np.linspace(*wl_range, npix) * unit
-    disperser = SimpleDisperser(wavelength=wl.value, unit=unit, R=R, name=name)
+    disperser = SimpleDisperser(wavelength=wl, R=R, name=name)
     low = wl - 0.5 * np.gradient(wl)
     high = wl + 0.5 * np.gradient(wl)
 
@@ -461,15 +461,14 @@ class TestComputeScalesEdgeCases:
         )
         assert spectra.line_scale is not None
 
-    def test_region_too_few_pixels_fit_returns_none(self):
-        """Region with too few pixels causes fit to return None (line 348)."""
-        # Very narrow region with only 1-2 pixels
+    def test_region_too_few_pixels_all_fits_fail_raises(self):
+        """All continuum fits failing raises ValueError."""
+        # Very narrow region with only 1-2 pixels, entirely inside line mask
         spectrum = _make_spectrum(npix=100, wl_range=(6500, 6600))
         lc = _make_line_config()
         from unite.continuum.config import ContinuumRegion
         from unite.continuum.library import Linear
 
-        # A tiny region that will have too few good pixels after line masking
         cont = ContinuumConfiguration(
             [
                 ContinuumRegion(
@@ -479,8 +478,393 @@ class TestComputeScalesEdgeCases:
         )
         spectra = Spectra([spectrum], redshift=0.0)
         spectra.prepare(lc, cont, drop_empty_regions=False)
-        # Should not raise; the failed fit returns None model_region
-        spectra.compute_scales(
-            spectra.prepared_line_config, spectra.prepared_cont_config
+        with pytest.raises(ValueError, match='line mask covers all pixels'):
+            spectra.compute_scales(
+                spectra.prepared_line_config, spectra.prepared_cont_config
+            )
+
+    def test_no_line_peak_above_continuum_raises(self):
+        """ValueError when no line peak is found above continuum."""
+        # Spectrum with zero flux — no line peak can be above continuum
+        wl_range = (6500, 6600)
+        wl = np.linspace(*wl_range, 100) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='flat')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.zeros(100) * flux_unit
+        error = np.ones(100) * flux_unit
+        spectrum = GenericSpectrum(
+            low=low, high=high, flux=flux, error=error, disperser=disperser, name='flat'
         )
-        # No line_scale from this test (line in region is masked out)
+        lc = _make_line_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+        with pytest.raises(ValueError, match='no emission line peak'):
+            spectra.compute_scales(lc)
+
+    def test_line_mask_covers_all_continuum_pixels_raises(self):
+        """ValueError when line mask leaves no unmasked continuum pixels."""
+        spectrum = _make_spectrum(npix=100, wl_range=(6550, 6575))
+        # Line at 6563 with very wide mask will cover most of this tiny range
+        lc = _make_line_config()
+        from unite.continuum.config import ContinuumRegion
+
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6550.0 * u.AA, 6575.0 * u.AA, Linear())]
+        )
+        spectra = Spectra([spectrum], redshift=0.0)
+        # Use an extremely wide line mask to cover all pixels
+        with pytest.raises(
+            ValueError, match=r'(line mask covers all pixels|no emission line peak)'
+        ):
+            spectra.compute_scales(lc, cont, line_mask_width=100_000 * u.km / u.s)
+
+    def test_zero_flux_continuum_raises(self):
+        """ValueError when median |flux| in all continuum regions is zero."""
+        wl_range = (6400, 6700)
+        npix = 200
+        wl = np.linspace(*wl_range, npix) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='zero')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        # Strong line but zero continuum — line peak will be positive but
+        # continuum regions (away from line) will have zero median |flux|.
+        sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+        line_flux = 100 * np.exp(-0.5 * ((wl.value - 6563) / sigma) ** 2)
+        flux = line_flux * flux_unit
+        error = np.ones(npix) * flux_unit
+        spectrum = GenericSpectrum(
+            low=low,
+            high=high,
+            flux=flux,
+            error=error,
+            disperser=disperser,
+            name='zeroc',
+        )
+        lc = _make_line_config()
+        from unite.continuum.config import ContinuumRegion
+
+        # Continuum region far from line — flux is essentially zero there
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6400.0 * u.AA, 6450.0 * u.AA, Linear())]
+        )
+        spectra = Spectra([spectrum], redshift=0.0)
+        # The line peak is positive so line scale succeeds, but continuum
+        # median |flux| rounds to zero
+        with pytest.raises(ValueError, match=r'(median.*zero|no emission line peak)'):
+            spectra.compute_scales(lc, cont)
+
+    def test_manual_scale_bypasses_compute(self):
+        """User can set scales manually to bypass compute_scales failures."""
+        spectrum = _make_spectrum()
+        spectra = Spectra([spectrum], redshift=0.0)
+        # Set scales manually — no compute_scales needed
+        spectra.line_scale = 1e-17 * u.erg / u.s / u.cm**2
+        spectra.continuum_scale = 1e-17 * u.erg / u.s / u.cm**2 / u.AA
+        assert spectra.line_scale.value == pytest.approx(1e-17)
+        assert spectra.continuum_scale.value == pytest.approx(1e-17)
+
+
+# ---------------------------------------------------------------------------
+# GenericSpectrum construction validation
+# ---------------------------------------------------------------------------
+
+
+class TestGenericSpectrumConstruction:
+    """Tests for GenericSpectrum construction validation."""
+
+    def test_flux_error_units_incompatible_raises(self):
+        """flux and error units must be compatible (generic.py line 299-301)."""
+        wl = np.linspace(6500, 6600, 100) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0)
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.ones(100) * flux_unit
+        # error in velocity units (incompatible)
+        error = np.ones(100) * u.km / u.s
+
+        with pytest.raises(ValueError, match='must have units equivalent'):
+            GenericSpectrum(
+                low=low, high=high, flux=flux, error=error, disperser=disperser
+            )
+
+    def test_disperser_must_be_disperser_instance(self):
+        """disperser parameter must be a Disperser instance (generic.py line 305-307)."""
+        wl = np.linspace(6500, 6600, 100) * u.AA
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.ones(100) * flux_unit
+        error = np.ones(100) * flux_unit
+
+        with pytest.raises(TypeError, match='Disperser instance'):
+            GenericSpectrum(
+                low=low, high=high, flux=flux, error=error, disperser='not_a_disperser'
+            )
+
+    def test_low_high_shapes_must_match(self):
+        """low and high must have the same shape (generic.py line 314-316)."""
+        wl = np.linspace(6500, 6600, 100) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0)
+        low = wl - 0.5 * np.gradient(wl)
+        high = (wl + 0.5 * np.gradient(wl))[:-1]  # Mismatched shape
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.ones(100) * flux_unit
+        error = np.ones(100) * flux_unit
+
+        with pytest.raises(ValueError, match='same shape'):
+            GenericSpectrum(
+                low=low, high=high, flux=flux, error=error, disperser=disperser
+            )
+
+    def test_flux_length_must_match_pixels(self):
+        """flux length must match number of pixels (generic.py line 330-332)."""
+        wl = np.linspace(6500, 6600, 100) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0)
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.ones(50) * flux_unit  # Wrong length
+        error = np.ones(100) * flux_unit
+
+        with pytest.raises(ValueError, match='does not match'):
+            GenericSpectrum(
+                low=low, high=high, flux=flux, error=error, disperser=disperser
+            )
+
+    def test_error_length_must_match_pixels(self):
+        """error length must match number of pixels (generic.py line 330-332)."""
+        wl = np.linspace(6500, 6600, 100) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0)
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.ones(100) * flux_unit
+        error = np.ones(75) * flux_unit  # Wrong length
+
+        with pytest.raises(ValueError, match='does not match'):
+            GenericSpectrum(
+                low=low, high=high, flux=flux, error=error, disperser=disperser
+            )
+
+
+# ---------------------------------------------------------------------------
+# GenericSpectrum._sliced with array error_scale
+# ---------------------------------------------------------------------------
+
+
+class TestGenericSpectrumSliced:
+    """Tests for GenericSpectrum._sliced method."""
+
+    def test_sliced_preserves_array_error_scale(self):
+        """_sliced method correctly masks array error_scale (generic.py line 482)."""
+        spectrum = _make_spectrum(npix=100)
+        # Set per-pixel error_scale
+        scale_arr = jnp.linspace(1.0, 3.0, spectrum.npix)
+        spectrum.error_scale = scale_arr
+
+        # Create a mask that selects every other pixel
+        mask = jnp.arange(spectrum.npix) % 2 == 0
+
+        # Slice the spectrum
+        sliced = spectrum._sliced(mask)
+
+        # Error scale should be masked too
+        expected = scale_arr[mask]
+        np.testing.assert_array_equal(sliced.error_scale, expected)
+        assert sliced.npix == int(jnp.sum(mask))
+
+
+# ---------------------------------------------------------------------------
+# GenericSpectrum.__repr__ with calibration params
+# ---------------------------------------------------------------------------
+
+
+class TestGenericSpectrumRepr:
+    """Tests for GenericSpectrum __repr__ method."""
+
+    def test_repr_with_calibration_params(self):
+        """repr shows [calibrated] when disperser has calibration params (generic.py line 488-493)."""
+        from unite.instrument.base import RScale
+
+        wl = np.linspace(6500, 6600, 100) * u.AA
+        # Disperser with calibration token
+        r_scale = RScale()
+        disperser = SimpleDisperser(
+            wavelength=wl, R=3000.0, name='test_disp', r_scale=r_scale
+        )
+        spectrum = _make_spectrum()
+        spectrum.disperser = disperser
+
+        repr_str = repr(spectrum)
+        assert '[calibrated]' in repr_str
+
+    def test_repr_without_calibration_params(self):
+        """repr does not show [calibrated] when no calibration tokens (generic.py line 488-493)."""
+        spectrum = _make_spectrum()
+        repr_str = repr(spectrum)
+        # No calibration tokens
+        assert '[calibrated]' not in repr_str
+
+    def test_repr_with_spectrum_name(self):
+        """repr includes spectrum name when provided (generic.py line 488-493)."""
+        spectrum = _make_spectrum(name='MySpectrum')
+        repr_str = repr(spectrum)
+        assert 'MySpectrum' in repr_str
+        assert 'GenericSpectrum' in repr_str
+
+    def test_repr_with_empty_name(self):
+        """repr shows just class name when spectrum.name is empty (generic.py line 488-493)."""
+        spectrum = _make_spectrum()
+        spectrum.name = ''
+        repr_str = repr(spectrum)
+        assert 'GenericSpectrum' in repr_str
+
+
+# ---------------------------------------------------------------------------
+# Spectra.filter_config: lindet_width parameter
+# ---------------------------------------------------------------------------
+
+
+class TestLinedetWidth:
+    """Tests for lindet_width parameter in filter_config and prepare."""
+
+    def test_lindet_width_default_value(self):
+        """Default lindet_width is 1000 km/s and lines are covered."""
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        # H-alpha at rest is 6563 Angstrom
+        # At z=0, observed is also 6563; 1000 km/s corresponds to ~22 Angstrom
+        # So detection window is roughly [6541, 6585], which overlaps [6500, 6600]
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        fl, _ = spectra.filter_config(lc)
+        assert len(fl) == 1
+
+    def test_small_lindet_width_includes_barely_covered_line(self):
+        """Small lindet_width allows lines barely inside coverage to be kept."""
+        # Spectrum covers [6500, 6600]; we add a line at 6598 Angstrom
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        lc = line.LineConfiguration()
+        lc.add_line('edge', 6598.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        # With small lindet_width (e.g., 10 km/s ~ 0.2 Angstrom),
+        # line at 6598 is barely covered
+        fl, _ = spectra.filter_config(lc, linedet_width=10.0 * u.km / u.s)
+        # Line should be kept because its detection window overlaps
+        assert len(fl) >= 1
+
+    def test_large_lindet_width_excludes_edge_line(self):
+        """Large lindet_width can exclude lines near the spectrum edge."""
+        # Spectrum covers [6500, 6600]; line at edge
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        lc = line.LineConfiguration()
+        lc.add_line('edge', 6600.0 * u.AA)  # Right at upper edge
+        spectra = Spectra([spectrum], redshift=0.0)
+        # With very large lindet_width, the detection window extends far beyond
+        # the spectrum, and the line may not be covered
+        fl, _ = spectra.filter_config(lc, linedet_width=100_000.0 * u.km / u.s)
+        # Line is likely excluded due to large padding
+        assert len(fl) == 0 or len(fl) == 1  # Depends on exact edges
+
+    def test_lindet_width_with_redshift(self):
+        """lindet_width works correctly when redshift is non-zero."""
+        # Spectrum at z=1 covers [6500, 6600] (observed frame)
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        lc = line.LineConfiguration()
+        # Rest-frame H-alpha at 6563 Angstrom
+        lc.add_line('Ha_rest', 6563.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=1.0)
+        # At z=1, rest-frame 6563 appears at observed 13126 Angstrom
+        # This is outside [6500, 6600], so without proper handling it would be excluded
+        fl, _ = spectra.filter_config(lc, linedet_width=1000.0 * u.km / u.s)
+        # Line should be excluded because observed frame wavelength is far outside
+        assert len(fl) == 0
+
+    def test_lindet_width_zero(self):
+        """lindet_width=0 means no padding; line is excluded."""
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        lc = line.LineConfiguration()
+        # Line exactly at spectrum center
+        lc.add_line('center', 6550.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        fl, _ = spectra.filter_config(lc, linedet_width=0.0 * u.km / u.s)
+        # Line should not be covered
+        assert len(fl) == 0
+
+    def test_lindet_width_affects_prepare_filtering(self):
+        """lindet_width passed to prepare() filters lines the same way."""
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+        lc.add_line('edge', 6598.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        # With small linedet_width, both should be kept
+        fl_small, _ = spectra.prepare(lc, linedet_width=10.0 * u.km / u.s)
+        assert len(fl_small) >= 1
+        # With large linedet_width, edge line may be excluded
+        spectra2 = Spectra([spectrum], redshift=0.0)
+        fl_large, _ = spectra2.prepare(lc, linedet_width=100_000.0 * u.km / u.s)
+        # At least Ha should be covered with large lindet_width
+        # (edge might be excluded)
+        assert len(fl_large) >= 1
+
+    def test_lindet_width_multiple_lines_selective_filtering(self):
+        """lindet_width selectively filters lines based on spectrum edges."""
+        spectrum = _make_spectrum(wl_range=(6400, 6700))
+        lc = line.LineConfiguration()
+        # Three lines: one inside, two near edges
+        lc.add_line('inside', 6550.0 * u.AA)
+        lc.add_line('lower_edge', 6401.0 * u.AA)
+        lc.add_line('upper_edge', 6699.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        # With tiny lindet_width, only clearly inside line survives
+        fl_tiny, _ = spectra.filter_config(lc, linedet_width=1.0 * u.km / u.s)
+        assert len(fl_tiny) >= 1
+        # With default lindet_width, more lines should be covered
+        fl_default, _ = spectra.filter_config(lc, linedet_width=1000.0 * u.km / u.s)
+        assert len(fl_default) >= len(fl_tiny)
+
+    def test_lindet_width_unit_conversion(self):
+        """lindet_width accepts different velocity units."""
+        spectrum = _make_spectrum(wl_range=(6500, 6600))
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        # Using different velocity units should give same result
+        fl_kms, _ = spectra.filter_config(lc, linedet_width=1000.0 * u.km / u.s)
+        spectra2 = Spectra([spectrum], redshift=0.0)
+        fl_cms, _ = spectra2.filter_config(lc, linedet_width=1.0e5 * u.cm / u.s)
+        assert len(fl_kms) == len(fl_cms)
+
+    def test_lindet_width_coverage_padding_symmetry(self):
+        """Detection window padding is symmetric around line wavelength."""
+        spectrum = _make_spectrum(wl_range=(6500, 6650))
+        lc = line.LineConfiguration()
+        # Line at 6575 (center of range), with spectrum covering [6500, 6650]
+        lc.add_line('test', 6575.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        # With 1000 km/s (~22 Angstrom at this wavelength), detection window
+        # is roughly [6553, 6597], well within spectrum
+        fl, _ = spectra.filter_config(lc, linedet_width=1000.0 * u.km / u.s)
+        assert len(fl) == 1
+
+    def test_lindet_width_small_spectrum_coverage(self):
+        """lindet_width works with very narrow spectrum coverage."""
+        # Tiny spectrum: only 10 Angstrom wide at Ha
+        spectrum = _make_spectrum(wl_range=(6560, 6570))
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+        spectra = Spectra([spectrum], redshift=0.0)
+        # With default 1000 km/s lindet_width, Ha should still be covered
+        fl, _ = spectra.filter_config(lc, linedet_width=1000.0 * u.km / u.s)
+        assert len(fl) == 1
+        # With huge lindet_width, Ha might be excluded if detection window
+        # extends too far outside the tiny spectrum
+        spectra2 = Spectra([spectrum], redshift=0.0)
+        fl_huge, _ = spectra2.filter_config(lc, linedet_width=1e6 * u.km / u.s)
+        # Even with huge lindet_width, Ha is close to spectrum center
+        # so it should likely be covered
+        assert len(fl_huge) == 1

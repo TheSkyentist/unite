@@ -290,7 +290,7 @@ def test_fixed_int_coerced_to_float():
 
 
 def test_fixed_type_error():
-    with pytest.raises(TypeError, match='int or float'):
+    with pytest.raises(TypeError, match='int, float, ParameterRef, or Parameter'):
         Fixed('bad')  # type: ignore[arg-type]
 
 

@@ -57,37 +57,52 @@ class TestUniqueNames:
 
 
 # ---------------------------------------------------------------------------
-# Multiplet: same name + same tokens, different wavelengths → wavelength suffix
+# Multiplet: use add_lines which auto-generates unique names
 # ---------------------------------------------------------------------------
 
 
 class TestMultiplet:
-    def test_doublet_appends_wavelength(self):
+    def test_doublet_names_via_add_lines(self):
         z = _z('z_nlr')
         fwhm = _fwhm('fwhm_nlr')
         flux = _flux('flux_nii')
         lc = _lc()
-        lc.add_line('[NII]', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
-        lc.add_line('[NII]', 6550.0 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
+        lc.add_lines(
+            '[NII]',
+            [6585.0 * u.AA, 6550.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm,
+            flux=flux,
+        )
         assert _make_line_labels(lc) == ['[NII]_6585', '[NII]_6550']
 
-    def test_triplet_appends_wavelength(self):
+    def test_triplet_names_via_add_lines(self):
         z = _z('z_oiii')
         fwhm = _fwhm('fwhm_oiii')
         flux = _flux('flux_oiii')
         lc = _lc()
-        for wl in [5007.0, 4959.0, 4363.0]:
-            lc.add_line('[OIII]', wl * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
+        lc.add_lines(
+            '[OIII]',
+            [5007.0 * u.AA, 4959.0 * u.AA, 4363.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm,
+            flux=flux,
+        )
         assert _make_line_labels(lc) == ['[OIII]_5007', '[OIII]_4959', '[OIII]_4363']
 
-    def test_wavelength_suffix_is_rounded_integer(self):
+    def test_wavelength_suffix_preserves_value(self):
         z = _z()
         fwhm = _fwhm('fwhm')
         flux = _flux('f')
         lc = _lc()
-        lc.add_line('X', 1234.56 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
-        lc.add_line('X', 1300.49 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
-        assert _make_line_labels(lc) == ['X_1235', 'X_1300']
+        lc.add_lines(
+            'X',
+            [1234.56 * u.AA, 1300.49 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm,
+            flux=flux,
+        )
+        assert _make_line_labels(lc) == ['X_1234.56', 'X_1300.49']
 
     def test_multiplet_mixed_with_unique_name(self):
         z = _z('z_nlr')
@@ -95,57 +110,60 @@ class TestMultiplet:
         flux = _flux('flux_nii')
         lc = _lc()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('[NII]', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
-        lc.add_line('[NII]', 6550.0 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
+        lc.add_lines(
+            '[NII]',
+            [6585.0 * u.AA, 6550.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm,
+            flux=flux,
+        )
         assert _make_line_labels(lc) == ['Ha', '[NII]_6585', '[NII]_6550']
 
 
 # ---------------------------------------------------------------------------
-# Multiple components: same name + same wavelength, tokens differ
+# Multiple components: use unique names directly
 # ---------------------------------------------------------------------------
 
 
 class TestMultipleComponents:
     def test_two_components_different_fwhm(self):
-        """Narrow + broad: different FWHM token names appear in the label."""
+        """Narrow + broad: encoded directly in the unique line names."""
         z = _z('z')
         flux = _flux('f_ha')
         fwhm_n = _fwhm('narrow')
         fwhm_b = _fwhm('broad')
         lc = _lc()
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm_n, flux=flux)
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm_b, flux=flux)
+        lc.add_line(
+            'Ha_narrow', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm_n, flux=flux
+        )
+        lc.add_line('Ha_broad', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm_b, flux=flux)
         assert _make_line_labels(lc) == ['Ha_narrow', 'Ha_broad']
 
-    def test_three_components_shared_flux_different_fwhm(self):
-        """The motivating bug: three components sharing one flux token.
-        Only the FWHM name varies, so only that appears in the label."""
+    def test_three_components_distinct_names(self):
         z = _z('z')
         flux = _flux('flux')
         fwhm1 = _fwhm('f1')
         fwhm2 = _fwhm('f2')
         fwhm3 = _fwhm('f3')
         lc = _lc()
-        lc.add_line('a', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm1, flux=flux)
-        lc.add_line('a', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm2, flux=flux)
-        lc.add_line('a', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm3, flux=flux)
+        lc.add_line('a_f1', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm1, flux=flux)
+        lc.add_line('a_f2', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm2, flux=flux)
+        lc.add_line('a_f3', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm3, flux=flux)
         labels = _make_line_labels(lc)
         assert labels == ['a_f1', 'a_f2', 'a_f3']
         assert len(set(labels)) == 3
 
     def test_two_components_different_redshift(self):
-        """Components distinguished only by their redshift token name."""
         z1 = _z('z_nlr')
         z2 = _z('z_blr')
         fwhm = _fwhm('fwhm')
-        flux = _flux('f_ha')  # shared — must NOT appear in label
+        flux = _flux('f_ha')
         lc = _lc()
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z1, fwhm_gauss=fwhm, flux=flux)
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z2, fwhm_gauss=fwhm, flux=flux)
-        assert _make_line_labels(lc) == ['Ha_z_nlr', 'Ha_z_blr']
+        lc.add_line('Ha_nlr', 6563.0 * u.AA, redshift=z1, fwhm_gauss=fwhm, flux=flux)
+        lc.add_line('Ha_blr', 6563.0 * u.AA, redshift=z2, fwhm_gauss=fwhm, flux=flux)
+        assert _make_line_labels(lc) == ['Ha_nlr', 'Ha_blr']
 
     def test_two_components_all_axes_vary(self):
-        """All token axes differ: z, fwhm, and flux all appear in the label."""
         z1 = _z('z_nlr')
         z2 = _z('z_blr')
         fwhm1 = _fwhm('fwhm_nlr')
@@ -153,27 +171,20 @@ class TestMultipleComponents:
         flux1 = _flux('flux_nlr')
         flux2 = _flux('flux_blr')
         lc = _lc()
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z1, fwhm_gauss=fwhm1, flux=flux1)
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z2, fwhm_gauss=fwhm2, flux=flux2)
-        assert _make_line_labels(lc) == [
-            'Ha_z_nlr_fwhm_nlr_flux_nlr',
-            'Ha_z_blr_fwhm_blr_flux_blr',
-        ]
+        lc.add_line('Ha_nlr', 6563.0 * u.AA, redshift=z1, fwhm_gauss=fwhm1, flux=flux1)
+        lc.add_line('Ha_blr', 6563.0 * u.AA, redshift=z2, fwhm_gauss=fwhm2, flux=flux2)
+        assert _make_line_labels(lc) == ['Ha_nlr', 'Ha_blr']
 
-    def test_only_varying_axes_included(self):
-        """Axes that are identical across all entries must NOT appear in the label."""
-        z = _z('z_shared')  # same for both — must NOT appear
-        fwhm1 = _fwhm('narrow')  # differs — MUST appear
+    def test_only_varying_axes_encoded_in_name(self):
+        z = _z('z_shared')
+        fwhm1 = _fwhm('narrow')
         fwhm2 = _fwhm('broad')
-        flux = _flux('flux_shared')  # same for both — must NOT appear
+        flux = _flux('flux_shared')
         lc = _lc()
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm1, flux=flux)
-        lc.add_line('Ha', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm2, flux=flux)
+        lc.add_line('Ha_narrow', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm1, flux=flux)
+        lc.add_line('Ha_broad', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm2, flux=flux)
         labels = _make_line_labels(lc)
         assert labels == ['Ha_narrow', 'Ha_broad']
-        for lb in labels:
-            assert 'z_shared' not in lb
-            assert 'flux_shared' not in lb
 
 
 # ---------------------------------------------------------------------------
@@ -183,23 +194,32 @@ class TestMultipleComponents:
 
 class TestMultipletPlusComponents:
     def test_doublet_two_kinematic_components(self):
-        """[NII] doublet in narrow and broad components:
-        wavelength varies (→ wl suffix) and fwhm varies (→ fwhm name suffix)."""
         z = _z('z_nlr')
         fwhm_n = _fwhm('narrow')
         fwhm_b = _fwhm('broad')
         flux1 = _flux('flux_n')
         flux2 = _flux('flux_b')
         lc = _lc()
-        lc.add_line('[NII]', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm_n, flux=flux1)
-        lc.add_line('[NII]', 6550.0 * u.AA, redshift=z, fwhm_gauss=fwhm_n, flux=flux1)
-        lc.add_line('[NII]', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm_b, flux=flux2)
-        lc.add_line('[NII]', 6550.0 * u.AA, redshift=z, fwhm_gauss=fwhm_b, flux=flux2)
-        assert _make_line_labels(lc) == [
-            '[NII]_6585_narrow_flux_n',
-            '[NII]_6550_narrow_flux_n',
-            '[NII]_6585_broad_flux_b',
-            '[NII]_6550_broad_flux_b',
+        lc.add_lines(
+            '[NII]_narrow',
+            [6585.0 * u.AA, 6550.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm_n,
+            flux=flux1,
+        )
+        lc.add_lines(
+            '[NII]_broad',
+            [6585.0 * u.AA, 6550.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm_b,
+            flux=flux2,
+        )
+        labels = _make_line_labels(lc)
+        assert labels == [
+            '[NII]_narrow_6585',
+            '[NII]_narrow_6550',
+            '[NII]_broad_6585',
+            '[NII]_broad_6550',
         ]
 
     def test_all_labels_unique(self):
@@ -208,21 +228,31 @@ class TestMultipletPlusComponents:
         fwhm2 = _fwhm('b')
         flux = _flux('f')
         lc = _lc()
-        for fwhm in (fwhm1, fwhm2):
-            for wl in (5007.0, 4959.0):
-                lc.add_line('[OIII]', wl * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
+        lc.add_lines(
+            '[OIII]_narrow',
+            [5007.0 * u.AA, 4959.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm1,
+            flux=flux,
+        )
+        lc.add_lines(
+            '[OIII]_broad',
+            [5007.0 * u.AA, 4959.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm2,
+            flux=flux,
+        )
         labels = _make_line_labels(lc)
         assert len(labels) == len(set(labels)), f'Duplicate labels: {labels}'
 
 
 # ---------------------------------------------------------------------------
-# PseudoVoigt: two fwhm params (fwhm_gauss + fwhm_lorentz) both included
+# PseudoVoigt: two fwhm params, unique names per component
 # ---------------------------------------------------------------------------
 
 
 class TestMultiFwhmProfile:
     def test_pseudo_voigt_both_fwhm_names_included(self):
-        """When the profile has two fwhm slots and they vary, both appear."""
         z = _z('z')
         flux = _flux('f')
         fwhm_g1 = _fwhm('fg_narrow')
@@ -231,7 +261,7 @@ class TestMultiFwhmProfile:
         fwhm_l2 = _fwhm('fl_broad')
         lc = _lc()
         lc.add_line(
-            'Ha',
+            'Ha_narrow',
             6563.0 * u.AA,
             profile='pseudovoigt',
             redshift=z,
@@ -240,7 +270,7 @@ class TestMultiFwhmProfile:
             flux=flux,
         )
         lc.add_line(
-            'Ha',
+            'Ha_broad',
             6563.0 * u.AA,
             profile='pseudovoigt',
             redshift=z,
@@ -249,7 +279,7 @@ class TestMultiFwhmProfile:
             flux=flux,
         )
         labels = _make_line_labels(lc)
-        assert labels == ['Ha_fg_narrow_fl_narrow', 'Ha_fg_broad_fl_broad']
+        assert labels == ['Ha_narrow', 'Ha_broad']
 
 
 # ---------------------------------------------------------------------------
@@ -272,8 +302,13 @@ class TestEdgeCases:
         fwhm = _fwhm('fwhm')
         flux = _flux('f')
         lc = _lc()
-        for wl in [5007.0, 4959.0, 4363.0, 6563.0]:
-            lc.add_line('line', wl * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
+        lc.add_lines(
+            'line',
+            [5007.0 * u.AA, 4959.0 * u.AA, 4363.0 * u.AA, 6563.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm,
+            flux=flux,
+        )
         assert len(_make_line_labels(lc)) == 4
 
     def test_no_leading_or_trailing_underscores(self):
@@ -281,15 +316,19 @@ class TestEdgeCases:
         fwhm = _fwhm('fwhm_nlr')
         flux = _flux('flux_nii')
         lc = _lc()
-        lc.add_line('[NII]', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
-        lc.add_line('[NII]', 6550.0 * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux)
+        lc.add_lines(
+            '[NII]',
+            [6585.0 * u.AA, 6550.0 * u.AA],
+            redshift=z,
+            fwhm_gauss=fwhm,
+            flux=flux,
+        )
         for lb in _make_line_labels(lc):
             assert not lb.startswith('_')
             assert not lb.endswith('_')
 
     def test_unique_name_never_gets_token_suffixes(self):
-        """A name that appears only once must always be returned bare,
-        even when token names are long and distinctive."""
+        """A name that appears only once must always be returned bare."""
         lc = _lc()
         lc.add_line(
             'Ha',

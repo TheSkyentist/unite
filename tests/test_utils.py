@@ -8,12 +8,10 @@ from unite._utils import (
     _alpha_name,
     _broadcast,
     _ensure_flux_density,
-    _ensure_flux_density_quantity,
     _ensure_velocity,
     _ensure_wavelength,
-    _flux_density_conversion_factor,
+    _get_conversion_factor,
     _make_register,
-    _wavelength_conversion_factor,
 )
 
 # ---------------------------------------------------------------------------
@@ -122,31 +120,33 @@ class TestEnsureWavelength:
 
     def test_valid_angstrom(self):
         q = 5000.0 * u.AA
-        result = _ensure_wavelength(q)
+        result = _ensure_wavelength(q, 'test', ndim=0)
         assert result is q
 
     def test_valid_micron(self):
         q = 0.5 * u.um
-        result = _ensure_wavelength(q)
+        result = _ensure_wavelength(q, 'test', ndim=0)
         assert result is q
 
     def test_not_quantity_raises(self):
         with pytest.raises(TypeError, match='must be an astropy Quantity'):
-            _ensure_wavelength(5000.0)
+            _ensure_wavelength(5000.0, 'test', ndim=0)
 
     def test_wrong_units_raises(self):
-        with pytest.raises(ValueError, match=r'wavelength.*length.*units'):
-            _ensure_wavelength(100.0 * u.km / u.s)
+        with pytest.raises(
+            ValueError, match=r'must have units equivalent to m, got km / s'
+        ):
+            _ensure_wavelength(100.0 * u.km / u.s, 'test', ndim=0)
 
     def test_ndim_validation(self):
         q = [5000.0, 6000.0] * u.AA
-        result = _ensure_wavelength(q, ndim=1)
+        result = _ensure_wavelength(q, 'test', ndim=1)
         assert result is q
 
     def test_wrong_ndim_raises(self):
         q = 5000.0 * u.AA
         with pytest.raises(ValueError, match='must be 1-D'):
-            _ensure_wavelength(q, ndim=1)
+            _ensure_wavelength(q, 'test', ndim=1)
 
 
 # ---------------------------------------------------------------------------
@@ -155,18 +155,18 @@ class TestEnsureWavelength:
 
 
 class TestWavelengthConversion:
-    """Tests for _wavelength_conversion_factor."""
+    """Tests for _get_conversion_factor."""
 
     def test_identity(self):
-        f = _wavelength_conversion_factor(u.AA, u.AA)
+        f = _get_conversion_factor(u.AA, u.AA)
         assert f == pytest.approx(1.0)
 
     def test_angstrom_to_micron(self):
-        f = _wavelength_conversion_factor(u.AA, u.um)
+        f = _get_conversion_factor(u.AA, u.um)
         assert f == pytest.approx(1e-4)
 
     def test_micron_to_angstrom(self):
-        f = _wavelength_conversion_factor(u.um, u.AA)
+        f = _get_conversion_factor(u.um, u.AA)
         assert f == pytest.approx(1e4)
 
 
@@ -180,16 +180,18 @@ class TestEnsureVelocity:
 
     def test_valid(self):
         q = 300 * u.km / u.s
-        result = _ensure_velocity(q)
+        result = _ensure_velocity(q, 'test', ndim=0)
         assert result is q
 
     def test_not_quantity_raises(self):
         with pytest.raises(TypeError, match='must be an astropy Quantity'):
-            _ensure_velocity(300.0)
+            _ensure_velocity(300.0, 'test', ndim=0)
 
     def test_wrong_units_raises(self):
-        with pytest.raises(ValueError, match='velocity units'):
-            _ensure_velocity(300.0 * u.AA)
+        with pytest.raises(
+            ValueError, match='must have units equivalent to km / s, got Angstrom'
+        ):
+            _ensure_velocity(300.0 * u.AA, 'test', ndim=0)
 
 
 # ---------------------------------------------------------------------------
@@ -201,34 +203,40 @@ class TestEnsureFluxDensity:
     """Tests for flux density validation functions."""
 
     def test_valid_unit(self):
-        _ensure_flux_density(u.erg / u.s / u.cm**2 / u.AA)
+        _ensure_flux_density(1 * u.erg / u.s / u.cm**2 / u.AA, 'test', ndim=0)
 
     def test_invalid_unit_raises(self):
-        with pytest.raises(ValueError, match='spectral flux density'):
-            _ensure_flux_density(u.Jy)
+        with pytest.raises(
+            ValueError,
+            match=r'must have units equivalent to erg / \(Angstrom s cm2\), got Jy',
+        ):
+            _ensure_flux_density(1 * u.Jy, 'test', ndim=0)
 
     def test_quantity_valid(self):
         q = 1.0 * u.erg / u.s / u.cm**2 / u.AA
-        result = _ensure_flux_density_quantity(q)
+        result = _ensure_flux_density(q, 'test', ndim=0)
         assert result is q
 
     def test_quantity_not_quantity_raises(self):
         with pytest.raises(TypeError, match='must be an astropy Quantity'):
-            _ensure_flux_density_quantity(1.0)
+            _ensure_flux_density(1.0, 'test', ndim=0)
 
     def test_quantity_wrong_unit_raises(self):
-        with pytest.raises(ValueError, match='spectral flux density'):
-            _ensure_flux_density_quantity(1.0 * u.Jy)
+        with pytest.raises(
+            ValueError,
+            match=r'must have units equivalent to erg / \(Angstrom s cm2\), got Jy',
+        ):
+            _ensure_flux_density(1.0 * u.Jy, 'test', ndim=0)
 
     def test_quantity_ndim(self):
         q = [1.0, 2.0] * u.erg / u.s / u.cm**2 / u.AA
-        result = _ensure_flux_density_quantity(q, ndim=1)
+        result = _ensure_flux_density(q, 'test', ndim=1)
         assert result is q
 
     def test_quantity_wrong_ndim_raises(self):
         q = 1.0 * u.erg / u.s / u.cm**2 / u.AA
         with pytest.raises(ValueError, match='must be 1-D'):
-            _ensure_flux_density_quantity(q, ndim=1)
+            _ensure_flux_density(q, 'test', ndim=1)
 
 
 # ---------------------------------------------------------------------------
@@ -237,15 +245,15 @@ class TestEnsureFluxDensity:
 
 
 class TestFluxDensityConversion:
-    """Tests for _flux_density_conversion_factor."""
+    """Tests for _get_conversion_factor."""
 
     def test_identity(self):
         unit = u.erg / u.s / u.cm**2 / u.AA
-        f = _flux_density_conversion_factor(unit, unit)
+        f = _get_conversion_factor(unit, unit)
         assert f == pytest.approx(1.0)
 
     def test_cgs_to_scaled(self):
         cgs = u.erg / u.s / u.cm**2 / u.AA
         scaled = 1e-17 * u.erg / u.s / u.cm**2 / u.AA
-        f = _flux_density_conversion_factor(cgs, scaled)
+        f = _get_conversion_factor(cgs, scaled)
         assert f == pytest.approx(1e17, rel=1e-6)

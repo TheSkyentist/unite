@@ -1,6 +1,6 @@
 """Emission line fitting framework — profiles and configuration."""
 
-from unite.line.config import FWHM, Flux, LineConfiguration, Param, Redshift
+from unite.line.config import FWHM, Flux, LineConfiguration, LineShape, Redshift
 from unite.line.profiles import (
     SEMG,
     Cauchy,
@@ -20,8 +20,7 @@ __all__ = [
     'Gaussian',
     'Laplace',
     'LineConfiguration',
-    'Param',
-    'Profile',
+    'LineShape',
     'PseudoVoigt',
     'Redshift',
     'SplitNormal',

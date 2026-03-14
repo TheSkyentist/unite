@@ -17,9 +17,7 @@ from unite.instrument.generic import GenericDisperser, GenericSpectrum, SimpleDi
 def _setup():
     """Create a simple model and get posterior samples."""
     wavelength = np.linspace(6500, 6600, 80) * u.AA
-    disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='test'
-    )
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
 
@@ -123,9 +121,7 @@ class TestEvaluateModel:
 def _setup_fixed():
     """Model where all line parameters are Fixed (no sampled params)."""
     wavelength = np.linspace(6500, 6600, 80) * u.AA
-    disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='fixed_test'
-    )
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='fixed_test')
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
     flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
@@ -250,9 +246,7 @@ class TestEvaluatePixOffset:
 def _setup_continuum():
     """Model with a continuum configuration."""
     wavelength = np.linspace(6500, 6600, 80) * u.AA
-    disperser = SimpleDisperser(
-        wavelength=wavelength.value, unit=u.AA, R=3000.0, name='cont_test'
-    )
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='cont_test')
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
     flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')

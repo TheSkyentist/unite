@@ -2,9 +2,10 @@
 
 from unite.continuum.config import (
     ContinuumConfiguration,
-    ContinuumNormalizationWavelength,
     ContinuumRegion,
-    ContinuumScale,
+    ContShape,
+    NormWavelength,
+    Scale,
 )
 from unite.continuum.fit import ContinuumFitResult, fit_continuum_form
 from unite.continuum.library import (
@@ -28,16 +29,17 @@ __all__ = [
     'Bernstein',
     'Blackbody',
     'Chebyshev',
+    'ContShape',
     'ContinuumConfiguration',
     'ContinuumFitResult',
     'ContinuumForm',
-    'ContinuumNormalizationWavelength',
     'ContinuumRegion',
-    'ContinuumScale',
     'Linear',
     'ModifiedBlackbody',
+    'NormWavelength',
     'Polynomial',
     'PowerLaw',
+    'Scale',
     'fit_continuum_form',
     'form_from_dict',
     'get_form',

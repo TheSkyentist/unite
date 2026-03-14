@@ -207,7 +207,7 @@ class Gaussian(Profile):
 class Cauchy(Profile):
     """Cauchy (Lorentzian) line profile.
 
-    Requires a single parameter ``fwhm_lorentzian``.  The LSF is **not**
+    Requires a single parameter ``fwhm_lorentz``.  The LSF is **not**
     convolved — this profile is a pure Lorentzian.
 
     Note: This profile is implemented as a PseudoVoigt with LSF=0 for consistency
@@ -218,14 +218,14 @@ class Cauchy(Profile):
     code = 1
 
     def param_names(self) -> tuple[str, ...]:
-        return ('fwhm_lorentzian',)
+        return ('fwhm_lorentz',)
 
     def default_priors(self) -> dict[str, Prior]:
-        return {'fwhm_lorentzian': Uniform(0, 1000)}
+        return {'fwhm_lorentz': Uniform(0, 1000)}
 
     def jax_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
-            # p0 = fwhm_lorentzian; pure Cauchy via PseudoVoigt with zero Gaussian width
+            # p0 = fwhm_lorentz; pure Cauchy via PseudoVoigt with zero Gaussian width
             return integrate_voigt(lo, hi, c, lsf, 0.0, p0)
 
         return _fn

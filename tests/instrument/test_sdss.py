@@ -35,33 +35,26 @@ class TestSDSSDisperser:
         d = SDSSDisperser()
         assert d.unit == u.AA
         assert d.name == 'SDSS'
-        assert not d._has_data
-
-    def test_placeholder_R(self):
-        d = SDSSDisperser()
-        wl = jnp.array([5000.0, 6000.0])
-        r = d.R(wl)
-        np.testing.assert_allclose(r, 2000.0)
-
-    def test_placeholder_dlam_dpix(self):
-        d = SDSSDisperser()
-        wl = jnp.array([5000.0, 6000.0])
-        dlam = d.dlam_dpix(wl)
-        np.testing.assert_allclose(dlam, 1.0)
 
     def test_construction_with_data(self):
         wl = np.linspace(3800, 9200, 100)
         wdisp = np.full(100, 1.0)  # 1 Angstrom/pixel sigma
-        d = SDSSDisperser(wavelength=wl, wdisp=wdisp)
-        assert d._has_data
+        d = SDSSDisperser()
+        # Manually set wavelength and R grids to simulate from_fits
+        d._wavelength_grid = jnp.asarray(wl, dtype=float)
+        d._R_grid = jnp.asarray(wl / (2.355 * wdisp), dtype=float)
+        d._dlam_dpix_grid = jnp.gradient(d._wavelength_grid)
         # R = lambda / (2.355 * wdisp)
         expected_r = wl / (2.355 * wdisp)
         np.testing.assert_allclose(d.R(jnp.asarray(wl)), expected_r, rtol=1e-5)
 
     def test_construction_with_wavelength_only(self):
         wl = np.linspace(3800, 9200, 100)
-        d = SDSSDisperser(wavelength=wl)
-        assert d._has_data
+        d = SDSSDisperser()
+        # Manually set wavelength and default R grid
+        d._wavelength_grid = jnp.asarray(wl, dtype=float)
+        d._R_grid = jnp.full_like(d._wavelength_grid, 2000.0)
+        d._dlam_dpix_grid = jnp.gradient(d._wavelength_grid)
         # Default R = 2000
         np.testing.assert_allclose(d.R(jnp.asarray(wl)), 2000.0)
 
@@ -78,11 +71,15 @@ class TestSDSSDisperser:
     def test_repr(self):
         d = SDSSDisperser()
         assert 'SDSSDisperser' in repr(d)
-        assert 'no data' in repr(d)
+        assert d.name == 'SDSS'
 
         wl = np.linspace(3800, 9200, 100)
-        d2 = SDSSDisperser(wavelength=wl)
-        assert '100 px' in repr(d2)
+        d2 = SDSSDisperser(name='SDSS-test')
+        d2._wavelength_grid = jnp.asarray(wl, dtype=float)
+        d2._R_grid = jnp.full_like(d2._wavelength_grid, 2000.0)
+        d2._dlam_dpix_grid = jnp.gradient(d2._wavelength_grid)
+        # Repr should still work with data loaded
+        assert 'SDSS-test' in repr(d2)
 
 
 class TestSDSSSpectrum:
@@ -101,8 +98,13 @@ class TestSDSSSpectrum:
         flux_unit = 1e-17 * u.erg / (u.s * u.cm**2 * u.AA)
         flux = np.ones(npix) * flux_unit
         error = np.full(npix, 0.1) * flux_unit
-        d = SDSSDisperser(wavelength=np.linspace(4000, 8000, npix))
-        spec = SDSSSpectrum.from_arrays(low, high, flux, error, d)
+        d = SDSSDisperser()
+        # Set wavelength grid to allow proper construction
+        d._wavelength_grid = jnp.asarray(np.linspace(4000, 8000, npix), dtype=float)
+        d._R_grid = jnp.full_like(d._wavelength_grid, 2000.0)
+        d._dlam_dpix_grid = jnp.gradient(d._wavelength_grid)
+        # Use constructor directly (not from_arrays)
+        spec = SDSSSpectrum(low=low, high=high, flux=flux, error=error, disperser=d)
         assert spec.npix == npix
         assert spec.name == 'SDSS'
 
@@ -148,8 +150,10 @@ class TestSDSSFromFits:
             disperser = SDSSDisperser()
             SDSSSpectrum.from_fits('fake.fits', disperser)
 
-        assert disperser._has_data
+        # Verify that from_fits updated the disperser's grids
+        assert hasattr(disperser, '_wavelength_grid')
         assert disperser._wavelength_grid is not None
+        assert len(disperser._wavelength_grid) == 50
 
     def test_from_fits_custom_name(self):
         """from_fits uses the provided name."""

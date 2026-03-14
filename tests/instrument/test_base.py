@@ -24,12 +24,16 @@ class TestRScale:
         assert isinstance(r.prior, Uniform)
 
     def test_auto_name(self):
+        # Before attachment to a Disperser, name is None (set at attachment time).
         r = RScale()
-        assert r.name.startswith('r_')
+        assert r.name is None
+        assert r.label is None
 
     def test_custom_name(self):
+        # A custom name becomes the label; site name is set at attachment.
         r = RScale(name='my_r')
-        assert r.name == 'my_r'
+        assert r.label == 'my_r'
+        assert r.name is None  # not yet attached to a disperser
 
 
 class TestFluxScale:
@@ -45,12 +49,16 @@ class TestFluxScale:
         assert isinstance(f.prior, TruncatedNormal)
 
     def test_auto_name(self):
+        # Before attachment to a Disperser, name is None (set at attachment time).
         f = FluxScale()
-        assert f.name.startswith('flux_')
+        assert f.name is None
+        assert f.label is None
 
     def test_custom_name(self):
+        # A custom name becomes the label; site name is set at attachment.
         f = FluxScale(name='my_flux')
-        assert f.name == 'my_flux'
+        assert f.label == 'my_flux'
+        assert f.name is None  # not yet attached to a disperser
 
 
 class TestPixOffset:
@@ -66,12 +74,16 @@ class TestPixOffset:
         assert isinstance(p.prior, Uniform)
 
     def test_auto_name(self):
+        # Before attachment to a Disperser, name is None (set at attachment time).
         p = PixOffset()
-        assert p.name.startswith('pix_')
+        assert p.name is None
+        assert p.label is None
 
     def test_custom_name(self):
+        # A custom name becomes the label; site name is set at attachment.
         p = PixOffset(name='my_pix')
-        assert p.name == 'my_pix'
+        assert p.label == 'my_pix'
+        assert p.name is None  # not yet attached to a disperser
 
 
 # ---------------------------------------------------------------------------

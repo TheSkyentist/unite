@@ -16,15 +16,8 @@ Collection and configuration::
     from unite.instrument import Spectra, InstrumentConfig, RScale, FluxScale, PixOffset
 """
 
-from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.base import FluxScale, PixOffset, RScale
 from unite.instrument.config import InstrumentConfig
 from unite.instrument.spectrum import Spectra
 
-__all__ = [
-    'Disperser',
-    'FluxScale',
-    'InstrumentConfig',
-    'PixOffset',
-    'RScale',
-    'Spectra',
-]
+__all__ = ['FluxScale', 'InstrumentConfig', 'PixOffset', 'RScale', 'Spectra']

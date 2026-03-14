@@ -11,7 +11,7 @@ import numpy as np
 import yaml
 from astropy import units as u
 
-from unite._utils import C_KMS, _ensure_velocity, _ensure_wavelength
+from unite._utils import C_KMS, _alpha_name, _ensure_velocity, _ensure_wavelength
 from unite.continuum.library import ContinuumForm, Linear, form_from_dict, get_form
 from unite.prior import Fixed, Parameter, Prior, Uniform, prior_from_dict
 
@@ -20,15 +20,15 @@ from unite.prior import Fixed, Parameter, Prior, Uniform, prior_from_dict
 # ------------------------------------------------------------------
 
 
-class ContinuumScale(Parameter):
+class Scale(Parameter):
     """Typed token for the ``'scale'`` parameter slot.
 
-    ``scale`` is the continuum flux at ``normalization_wavelength``.  When
-    the same :class:`ContinuumScale` instance is placed in the ``'scale'``
+    ``scale`` is the continuum flux at ``norm_wav``.  When
+    the same :class:`Scale` instance is placed in the ``'scale'``
     slot of multiple :class:`ContinuumRegion` objects, those regions share a
     single sampled amplitude in the model.
 
-    Placing a :class:`ContinuumScale` token in any slot **other** than
+    Placing a :class:`Scale` token in any slot **other** than
     ``'scale'`` raises a :exc:`ValueError` at
     :class:`ContinuumConfiguration` construction time.
 
@@ -37,30 +37,30 @@ class ContinuumScale(Parameter):
     name : str, optional
         Human-readable label used as the numpyro site name.
     prior : Prior, optional
-        Prior distribution.  Defaults to ``Uniform(0, 10)``.
+        Prior distribution.  Defaults to ``Uniform(0, 2)``.
     """
 
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
-            prior = Uniform(0, 10)
+            prior = Uniform(0, 2)
         super().__init__(name, prior=prior)
 
 
-class ContinuumNormalizationWavelength(Parameter):
-    """Typed token for the ``'normalization_wavelength'`` parameter slot.
+class NormWavelength(Parameter):
+    """Typed token for the ``'norm_wav'`` parameter slot.
 
-    ``normalization_wavelength`` is the rest-frame reference wavelength at
+    ``norm_wav`` is the rest-frame reference wavelength at
     which the continuum equals ``scale``.  The model automatically applies
     the systemic redshift before evaluating the continuum form.
 
-    Sharing the same :class:`ContinuumNormalizationWavelength` instance
+    Sharing the same :class:`NormWavelength` instance
     across multiple regions ties them to a single consistent reference
     wavelength — essential for globally-normalised forms such as
     :class:`~unite.continuum.library.PowerLaw` and
     :class:`~unite.continuum.library.Blackbody`.
 
-    Placing a :class:`ContinuumNormalizationWavelength` token in any slot
-    **other** than ``'normalization_wavelength'`` raises a :exc:`ValueError`
+    Placing a :class:`NormWavelength` token in any slot
+    **other** than ``'norm_wav'`` raises a :exc:`ValueError`
     at :class:`ContinuumConfiguration` construction time.
 
     Parameters
@@ -68,14 +68,36 @@ class ContinuumNormalizationWavelength(Parameter):
     name : str, optional
         Human-readable label used as the numpyro site name.
     prior : Prior, optional
-        Prior distribution.  Defaults to ``Fixed(1.0)``.  In practice,
-        use ``Fixed(value)`` with your chosen rest-frame reference
-        wavelength.
+        Prior distribution. Defaults to ``Fixed(1.0)`` (1 micron).
     """
 
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Fixed(1.0)
+        super().__init__(name, prior=prior)
+
+
+class ContShape(Parameter):
+    """Typed token for form-specific shape/parameter slots.
+
+    Used for continuum form parameters such as spectral indices (``beta``),
+    polynomial coefficients (``c1``, ``c2``, etc.), and other dimensionless
+    or form-specific parameters (e.g. ``angle``, ``temperature``, ``tau_v``).
+    The default prior is ``Uniform(-10, 10)``; in practice the form's
+    :meth:`~unite.continuum.library.ContinuumForm.default_priors` provides
+    a more specific default when no token is supplied explicitly.
+
+    Parameters
+    ----------
+    name : str, optional
+        Human-readable label used as the numpyro site name.
+    prior : Prior, optional
+        Prior distribution. Defaults to ``Uniform(-10, 10)``.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Uniform(-10, 10)
         super().__init__(name, prior=prior)
 
 
@@ -101,6 +123,11 @@ class ContinuumRegion:
         :meth:`ContinuumForm.param_names`.  Parameters not listed here
         receive auto-created tokens with the form's default priors when
         the region is added to a :class:`ContinuumConfiguration`.
+    name : str, optional
+        Human-readable label for this region.  When provided, auto-created
+        parameter tokens use this as a suffix (e.g. ``scale_blue``,
+        ``beta_blue``).  Region names must be unique within a
+        :class:`ContinuumConfiguration`.
 
         **Custom priors** — supply a :class:`~unite.prior.Parameter`
         with the desired prior for any slot you want to override::
@@ -111,7 +138,7 @@ class ContinuumRegion:
                 params={
                     'scale': Parameter('my_scale',
                                        prior=TruncatedNormal(2.0, 0.5, 0, 10)),
-                    # 'beta' and 'normalization_wavelength' get default priors
+                    # 'beta' and 'norm_wav' get default priors
                 },
             )
 
@@ -126,9 +153,9 @@ class ContinuumRegion:
             region2 = ContinuumRegion(2.0 * u.um, 2.5 * u.um, form=PowerLaw(),
                                       params={'scale': shared_scale})
 
-        Use :class:`ContinuumScale` and
-        :class:`ContinuumNormalizationWavelength` typed tokens for the
-        ``'scale'`` and ``'normalization_wavelength'`` slots respectively;
+        Use :class:`Scale` and
+        :class:`NormWavelength` typed tokens for the
+        ``'scale'`` and ``'norm_wav'`` slots respectively;
         they add a validation check that prevents accidentally assigning
         them to the wrong slot.
 
@@ -144,19 +171,28 @@ class ContinuumRegion:
     high: u.Quantity
     form: ContinuumForm | str = field(default_factory=Linear)
     params: dict[str, Parameter] = field(default_factory=dict)
+    name: str | None = None
 
     def __post_init__(self) -> None:
         # Resolve string form names to ContinuumForm instances.
         if isinstance(self.form, str):
             self.form = get_form(self.form)
-        low_q = _ensure_wavelength(self.low, 'low')
-        high_q = _ensure_wavelength(self.high, 'high')
+
+        # Ensure wavelength bounds are Quantities with length units, and that low < high.
+        low_q = _ensure_wavelength(self.low, 'low', ndim=0)
+        high_q = _ensure_wavelength(self.high, 'high', ndim=0)
+        if low_q >= high_q:
+            msg = f'ContinuumRegion low must be < high, got low={low_q}, high={high_q}'
+            raise ValueError(msg)
+        high_q = high_q.to(low_q.unit)
+
+        # Convert to region wavelengths
         self._unit: u.UnitBase = low_q.unit
         self.low: float = float(low_q.value)
-        self.high: float = float(high_q.to(low_q.unit).value)
-        if self.low >= self.high:
-            msg = f'ContinuumRegion low must be < high, got low={self.low}, high={self.high}'
-            raise ValueError(msg)
+        self.high: float = float(high_q.value)
+
+        # Prepare the form (e.g. for forms that need to know the wavelength range)
+        self.form._prepare(low_q, high_q)
 
     @property
     def center(self) -> float:
@@ -191,6 +227,33 @@ def _merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, 
         else:
             merged.append((low, high))
     return merged
+
+
+# ------------------------------------------------------------------
+# Parameter type rules
+# ------------------------------------------------------------------
+
+
+def _param_class_for(pn: str) -> type[Parameter]:
+    """Return the expected :class:`Parameter` subclass for a continuum form param.
+
+    Parameters
+    ----------
+    pn : str
+        Form parameter name (e.g. ``'scale'``, ``'beta'``, ``'angle'``).
+
+    Returns
+    -------
+    type
+        :class:`Scale` for ``'scale'``, :class:`NormWavelength` for
+        ``'norm_wav'``, :class:`ContShape`
+        for all others.
+    """
+    if pn == 'scale':
+        return Scale
+    if pn in 'norm_wav':
+        return NormWavelength
+    return ContShape
 
 
 # ------------------------------------------------------------------
@@ -241,7 +304,7 @@ class ContinuumConfiguration:
     ...     params={
     ...         'scale': Parameter('my_scale',
     ...                            prior=TruncatedNormal(2.0, 0.5, 0.0, 10.0)),
-    ...         'normalization_wavelength': Parameter('my_nw', prior=Fixed(1.25)),
+    ...         'norm_wav': Parameter('my_nw', prior=Fixed(1.25)),
     ...         # 'slope' receives the default Uniform(-10, 10) prior
     ...     },
     ... )
@@ -251,22 +314,21 @@ class ContinuumConfiguration:
 
     >>> from astropy import units as u
     >>> from unite.continuum.config import (
-    ...     ContinuumConfiguration, ContinuumRegion,
-    ...     ContinuumNormalizationWavelength)
+    ...     ContinuumConfiguration, ContinuumRegion, Scale, NormWavelength, ContShape)
     >>> from unite.continuum.library import PowerLaw
-    >>> from unite.prior import Parameter, Uniform, Fixed
+    >>> from unite.prior import Uniform, Fixed
     >>> pl = PowerLaw()
-    >>> shared_scale = Parameter('pl_scale', prior=Uniform(0, 10))
-    >>> shared_beta  = Parameter('pl_beta',  prior=Uniform(-5, 5))
-    >>> shared_nw    = ContinuumNormalizationWavelength(
+    >>> shared_scale = Scale('pl_scale', prior=Uniform(0, 10))
+    >>> shared_beta  = ContShape('pl_beta',  prior=Uniform(-5, 5))
+    >>> shared_nw    = NormWavelength(
     ...     'pl_nw', prior=Fixed(1.0))  # single reference wavelength
     >>> cont = ContinuumConfiguration([
     ...     ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=pl,
     ...                     params={'scale': shared_scale, 'beta': shared_beta,
-    ...                             'normalization_wavelength': shared_nw}),
+    ...                             'norm_wav': shared_nw}),
     ...     ContinuumRegion(1.7 * u.um, 2.5 * u.um, form=pl,
     ...                     params={'scale': shared_scale, 'beta': shared_beta,
-    ...                             'normalization_wavelength': shared_nw}),
+    ...                             'norm_wav': shared_nw}),
     ... ])
     >>> # → one 'pl_scale', one 'pl_beta', one 'pl_nw' site in the numpyro model
     """
@@ -276,7 +338,16 @@ class ContinuumConfiguration:
             list(regions) if regions else [], key=lambda r: r.low
         )
         self._check_overlaps()
+        self._check_duplicate_region_names()
         self._resolved_params: list[dict[str, Parameter]] = self._resolve_params()
+
+    def _check_duplicate_region_names(self) -> None:
+        """Raise if two regions share the same non-None name."""
+        names = [r.name for r in self._regions if r.name is not None]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            msg = f'Duplicate ContinuumRegion name(s): {dupes}. Region names must be unique.'
+            raise ValueError(msg)
 
     def _check_overlaps(self) -> None:
         """Warn if any two regions overlap; overlapping contributions are summed."""
@@ -293,24 +364,32 @@ class ContinuumConfiguration:
                 )
 
     def _resolve_params(self) -> list[dict[str, Parameter]]:
-        """Assign auto-created tokens to any unspecified params.
+        """Assign names to all parameter tokens.
 
-        Each region receives independently named auto-created tokens for
-        every parameter not provided in ``ContinuumRegion.params``.
-        Naming follows ``cont_{form_type}_{region_idx}_{param_name}``
-        where *region_idx* counts instances of each form type in sorted
-        order.  Explicitly provided tokens are used as-is.
+        Naming priority for each token:
+
+        1. ``tok.name`` already set (finalized, e.g. re-used across configs).
+        2. ``tok.label`` set by user → ``'{param_name}_{label}'``.
+        3. Region has a ``name`` → ``'{param_name}_{region.name}'``.
+        4. Fallback: global alphabetic counter per param name
+           (``scale_a``, ``scale_b``, …).
+
+        **Shared tokens** (same instance in multiple regions) are named on
+        first encounter and skipped on subsequent ones, so a shared anonymous
+        token gets a single alphabetic name regardless of how many regions
+        reference it.
 
         Raises
         ------
         ValueError
-            If a :class:`ContinuumScale` token is placed in a slot other
-            than ``'scale'``, or a
-            :class:`ContinuumNormalizationWavelength` token is placed in a
-            slot other than ``'normalization_wavelength'``.
+            If a parameter name is not recognized by the form.
+        TypeError
+            If a token has the wrong type for its slot.
         """
-        type_counts: dict[str, int] = {}
         resolved_list: list[dict[str, Parameter]] = []
+        seen: set[int] = set()  # id(tok) → already named
+        counters: dict[str, int] = {}  # param_name → next alpha index
+
         for region in self._regions:
             # Validate that all param keys match the form's param_names.
             valid_names = set(region.form.param_names())
@@ -322,32 +401,49 @@ class ContinuumConfiguration:
                 )
                 raise ValueError(msg)
 
-            # Validate typed tokens before resolving.
+            # Validate token types before resolving.
             for pn, tok in region.params.items():
-                if isinstance(tok, ContinuumScale) and pn != 'scale':
-                    msg = f'ContinuumScale token can only be placed in the "scale" slot, got "{pn}"'
-                    raise ValueError(msg)
-                if (
-                    isinstance(tok, ContinuumNormalizationWavelength)
-                    and pn != 'normalization_wavelength'
-                ):
-                    msg = (
-                        f'ContinuumNormalizationWavelength token can only be placed '
-                        f'in the "normalization_wavelength" slot, got "{pn}"'
-                    )
-                    raise ValueError(msg)
+                expected = _param_class_for(pn)
+                if not isinstance(tok, expected):
+                    msg = f"Parameter '{pn}' must be a {expected.__name__}, got {type(tok).__name__}."
+                    raise TypeError(msg)
 
-            tk = type(region.form).__name__.lower()
-            idx = type_counts.get(tk, 0)
-            type_counts[tk] = idx + 1
             default_priors = region.form.default_priors(region_center=region.center)
             resolved: dict[str, Parameter] = {}
+
             for pn in region.form.param_names():
                 if pn in region.params:
-                    resolved[pn] = region.params[pn]
+                    tok = region.params[pn]
+                    if id(tok) not in seen:
+                        seen.add(id(tok))
+                        if tok.name is None:
+                            if tok.label is not None:
+                                tok.name = f'{pn}_{tok.label}'
+                            elif region.name is not None:
+                                tok.name = f'{pn}_{region.name}'
+                                tok.label = region.name
+                            else:
+                                idx = counters.get(pn, 0)
+                                counters[pn] = idx + 1
+                                label = _alpha_name(idx)
+                                tok.name = f'{pn}_{label}'
+                                tok.label = label
+                    resolved[pn] = tok
                 else:
-                    auto_name = f'cont_{tk}_{idx}_{pn}'
-                    resolved[pn] = Parameter(auto_name, prior=default_priors[pn])
+                    # Auto-create a fresh token for this region.
+                    if region.name is not None:
+                        auto_label = region.name
+                    else:
+                        idx = counters.get(pn, 0)
+                        counters[pn] = idx + 1
+                        auto_label = _alpha_name(idx)
+                    auto_name = f'{pn}_{auto_label}'
+                    param_class = _param_class_for(pn)
+                    new_tok = param_class(prior=default_priors[pn])
+                    new_tok.name = auto_name
+                    new_tok.label = auto_label
+                    resolved[pn] = new_tok
+
             resolved_list.append(resolved)
         return resolved_list
 
@@ -399,8 +495,8 @@ class ContinuumConfiguration:
         ValueError
             If *wavelengths* is empty or *width* is not positive.
         """
-        wl_q = _ensure_wavelength(wavelengths, 'wavelengths')
-        width_q = _ensure_velocity(width, 'width')
+        wl_q = _ensure_wavelength(wavelengths, 'wavelengths', ndim=1)
+        width_q = _ensure_velocity(width, 'width', ndim=0)
         width_kms = float(width_q.to(u.km / u.s).value)
         if width_kms <= 0:
             msg = f'width must be positive, got {width_kms} km/s.'
@@ -485,6 +581,8 @@ class ContinuumConfiguration:
                 'form': form_names[id(region.form)],
                 'params': {pn: tok.name for pn, tok in resolved.items()},
             }
+            if region.name is not None:
+                rd['name'] = region.name
             regions_section.append(rd)
 
         return {
@@ -512,10 +610,30 @@ class ContinuumConfiguration:
         }
 
         # 2. Reconstruct Parameter tokens (two passes for dependent priors).
-        # Pass 1: create tokens with placeholder priors to build the registry.
-        token_registry: dict[str, Parameter] = {
-            name: Parameter(name, prior=Uniform(0, 1)) for name in d['params']
-        }
+        # Build a mapping of token names to their expected types based on usage in regions.
+        token_name_to_type: dict[str, type[Parameter]] = {}
+        token_name_to_slot: dict[str, str] = {}
+        for rd in d['regions']:
+            for param_name, token_name in rd['params'].items():
+                # Map token_name to its expected parameter type
+                token_name_to_type[token_name] = _param_class_for(param_name)
+                token_name_to_slot[token_name] = param_name
+
+        # Pass 1: create tokens with finalized names and labels to build the registry.
+        token_registry: dict[str, Parameter] = {}
+        for tok_name in d['params']:
+            param_class = token_name_to_type.get(tok_name, ContShape)
+            tok = param_class(prior=Uniform(0, 1))
+            tok.name = tok_name
+            slot = token_name_to_slot.get(tok_name, '')
+            prefix = slot + '_' if slot else ''
+            tok.label = (
+                tok_name[len(prefix) :]
+                if prefix and tok_name.startswith(prefix)
+                else tok_name
+            )
+            token_registry[tok_name] = tok
+
         # Pass 2: overwrite with real priors (may reference tokens in registry).
         for name, pd in d['params'].items():
             token_registry[name].prior = prior_from_dict(
@@ -533,6 +651,7 @@ class ContinuumConfiguration:
                     high=rd['high'] * wl_unit,
                     form=form_objects[rd['form']],
                     params=params,
+                    name=rd.get('name', None),
                 )
             )
         return cls(regions)
@@ -612,6 +731,42 @@ class ContinuumConfiguration:
     def __getitem__(self, idx: int) -> ContinuumRegion:
         return self._regions[idx]
 
+    def __add__(self, other: ContinuumConfiguration) -> ContinuumConfiguration:
+        """Combine two configurations (strict mode — raises on parameter name collisions).
+
+        Parameters
+        ----------
+        other : ContinuumConfiguration
+
+        Returns
+        -------
+        ContinuumConfiguration
+            New configuration containing regions from both *self* and *other*.
+
+        Raises
+        ------
+        ValueError
+            If any user-provided parameter token name appears in both configs.
+        TypeError
+            If *other* is not a :class:`ContinuumConfiguration`.
+        """
+        if not isinstance(other, ContinuumConfiguration):
+            return NotImplemented
+
+        # Collect user-provided token names from each config (region.params only;
+        # auto-created tokens are re-indexed on construction and never collide).
+        self_names = {tok.name for r in self._regions for tok in r.params.values()}
+        other_names = {tok.name for r in other._regions for tok in r.params.values()}
+        collisions = sorted(self_names & other_names)
+        if collisions:
+            msg = (
+                f'Parameter name collision(s) when adding ContinuumConfigurations: '
+                f'{collisions}. Rename the conflicting tokens before adding.'
+            )
+            raise ValueError(msg)
+
+        return ContinuumConfiguration(list(self._regions) + list(other._regions))
+
     def __repr__(self) -> str:
         if not self._regions:
             return 'ContinuumConfiguration: empty'
@@ -628,11 +783,12 @@ class ContinuumConfiguration:
         rows = []
         for region, resolved in zip(self._regions, self._resolved_params, strict=True):
             range_str = f'[{region.low}, {region.high}]'
+            unit_str = str(region._unit)
             form_str = repr(region.form)
             params_str = ', '.join(tok.name for tok in resolved.values())
-            rows.append((range_str, form_str, params_str))
+            rows.append((range_str, unit_str, form_str, params_str))
 
-        col_headers = ('Range', 'Form', 'Parameters')
+        col_headers = ('Range', 'Unit', 'Form', 'Parameters')
         widths = [len(h) for h in col_headers]
         for row in rows:
             for i, cell in enumerate(row):
