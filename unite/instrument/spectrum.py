@@ -88,7 +88,7 @@ class SpectrumScaleDiagnostic:
     name : str
         Spectrum name (from :attr:`GenericSpectrum.name`).
     wavelength : jnp.ndarray
-        Pixel-centre wavelengths (disperser's unit), shape ``(npix,)``.
+        Pixel-center wavelengths (disperser's unit), shape ``(npix,)``.
     flux : jnp.ndarray
         Observed flux values, shape ``(npix,)``.
     error : jnp.ndarray
@@ -141,7 +141,7 @@ class Spectra:
         conversion during coverage checks.  Default ``0.0``.
     canonical_unit : astropy.units.UnitBase, optional
         Wavelength unit used for all internal model computations (line
-        centres, continuum bounds, pixel edges).  Defaults to the first
+        centers, continuum bounds, pixel edges).  Defaults to the first
         spectrum's disperser unit.  Override this if you want a specific
         unit regardless of spectrum order.
 

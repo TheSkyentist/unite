@@ -416,7 +416,7 @@ def _compute_rew_columns(
 
     where ``F_line`` is the physical integrated line flux
     (``flux_unit * canonical_wl_unit``), ``C_obs`` is the continuum flux
-    density evaluated at the observed-frame line centre (``flux_unit``),
+    density evaluated at the observed-frame line center (``flux_unit``),
     and the ``(1 + z_total)`` factor converts the observer-frame equivalent
     width to rest frame.  The result is in rest-frame canonical wavelength
     units.
@@ -505,11 +505,11 @@ def _compute_rew_columns(
                 val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
             cont_p[pn] = val
 
-        # Observed-frame line centre per sample: (n_samples,)
+        # Observed-frame line center per sample: (n_samples,)
         z_j = z_per_line[:, j]
         obs_wl_j = rest_wl * (1.0 + z_sys + z_j)
 
-        # Continuum flux density at line centre (un-scaled, from form.evaluate).
+        # Continuum flux density at line center (un-scaled, from form.evaluate).
         cont_val = np.asarray(
             form.evaluate(obs_wl_j, obs_center, cont_p, obs_low, obs_high)
         )

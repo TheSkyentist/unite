@@ -101,7 +101,7 @@ class GenericDisperser(Disperser):
 class SimpleDisperser(Disperser):
     """A disperser defined on a pixel-sampled wavelength grid.
 
-    The wavelength array is interpreted as a sequence of pixel centres so that
+    The wavelength array is interpreted as a sequence of pixel centers so that
     *dλ/dpix* is computed directly from the spacing of the array (via
     ``jnp.gradient``).
 
@@ -119,7 +119,7 @@ class SimpleDisperser(Disperser):
     Parameters
     ----------
     wavelength : u.Quantity
-        Pixel-centre wavelengths.  Must be 1-D.
+        Pixel-center wavelengths.  Must be 1-D.
     R : ArrayLike, optional
         Resolving power (scalar or per-pixel array).
     dlam : u.Quantity, optional
@@ -352,7 +352,7 @@ class GenericSpectrum:
 
     @property
     def wavelength(self) -> jnp.ndarray:
-        """Pixel-centre wavelengths (mean of low and high edges)."""
+        """Pixel-center wavelengths (mean of low and high edges)."""
         return (self._low + self._high) / 2.0
 
     @property

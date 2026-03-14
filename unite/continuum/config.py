@@ -467,7 +467,7 @@ class ContinuumConfiguration:
         """Auto-generate continuum regions from line wavelengths.
 
         Each line gets a region of total width *width* (i.e. ``±width/2``
-        in velocity space around the line centre).  Overlapping regions
+        in velocity space around the line center).  Overlapping regions
         are merged.  All generated regions are independent: each receives
         its own auto-created parameter tokens.
 

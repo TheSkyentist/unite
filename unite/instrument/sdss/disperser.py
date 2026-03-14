@@ -38,7 +38,7 @@ class SDSSDisperser(Disperser):
     Parameters
     ----------
     wavelength : ArrayLike, optional
-        Pixel-centre wavelengths in Angstroms.  When not provided,
+        Pixel-center wavelengths in Angstroms.  When not provided,
         :meth:`R` and :meth:`dlam_dpix` return placeholder values
         (constant R=2000, dlam_dpix=1.0).
     wdisp : ArrayLike, optional

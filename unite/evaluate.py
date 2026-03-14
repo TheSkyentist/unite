@@ -26,7 +26,7 @@ class SpectrumPrediction:
     All arrays are in original (un-normalized) flux units.
     """
 
-    #: Pixel-centre wavelengths in the disperser's unit. Shape ``(n_pixels,)``.
+    #: Pixel-center wavelengths in the disperser's unit. Shape ``(n_pixels,)``.
     wavelength: np.ndarray
     #: Total model flux (lines + continuum). Shape ``(n_samples, n_pixels)``.
     total: np.ndarray

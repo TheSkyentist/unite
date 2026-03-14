@@ -210,7 +210,7 @@ def unite_model(args: ModelArgs) -> None:
 
         wavelength = (low + high) / 2.0
 
-        # LSF FWHM at each line centre (n_lines,).
+        # LSF FWHM at each line center (n_lines,).
         # R() expects disperser-unit wavelengths, result is in canonical unit.
         lsf_fwhm = centers / (disp.R(centers * inv_wl_scale) * r_scale)
 
