@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 from astropy import units as u
 
-from unite._utils import C_KMS, _ensure_velocity, _get_conversion_factor
+from unite._utils import (
+    C_KMS,
+    _ensure_flux,
+    _ensure_flux_density,
+    _ensure_velocity,
+    _get_conversion_factor,
+)
 from unite.instrument.generic import GenericSpectrum
 
 if TYPE_CHECKING:
@@ -216,17 +222,7 @@ class Spectra:
 
     @line_scale.setter
     def line_scale(self, value: u.Quantity) -> None:
-        if not isinstance(value, u.Quantity):
-            msg = (
-                f'line_scale must be an astropy Quantity with flux units '
-                f'(flux_density * wavelength), got {type(value).__name__}.'
-            )
-            raise TypeError(msg)
-        # Validate unit: must be flux_density * wavelength (integrated flux).
-        ref = u.erg / u.s / u.cm**2
-        if not value.unit.is_equivalent(ref):
-            msg = f'line_scale must have integrated flux units (e.g. erg/s/cm^2), got {value.unit!r}.'
-            raise u.UnitConversionError(msg)
+        value = _ensure_flux(value, 'line_scale', ndim=0)
         if value.value <= 0:
             msg = f'line_scale must be > 0, got {value}'
             raise ValueError(msg)
@@ -239,13 +235,7 @@ class Spectra:
 
     @continuum_scale.setter
     def continuum_scale(self, value: u.Quantity) -> None:
-        if not isinstance(value, u.Quantity):
-            msg = f'continuum_scale must be an astropy Quantity with flux density units, got {type(value).__name__}.'
-            raise TypeError(msg)
-        ref = u.erg / u.s / u.cm**2 / u.AA
-        if not value.unit.is_equivalent(ref):
-            msg = f'continuum_scale must have flux density units (e.g. erg/s/cm^2/Angstrom), got {value.unit!r}.'
-            raise u.UnitConversionError(msg)
+        value = _ensure_flux_density(value, 'continuum_scale', ndim=0)
         if value.value <= 0:
             msg = f'continuum_scale must be > 0, got {value}'
             raise ValueError(msg)

@@ -138,7 +138,7 @@ def _ensure_quantity(
 
     # 2. Unit equivalence validation
     if not value.unit.is_equivalent(ref_unit):
-        raise ValueError(
+        raise u.UnitConversionError(
             f'{name} must have units equivalent to {ref_unit}, got {value.unit}.'
         )
 
@@ -166,6 +166,11 @@ def _ensure_velocity(value, name, ndim):
 
 def _ensure_flux_density(value, name, ndim):
     ref = u.erg / (u.s * u.cm**2 * u.AA)
+    return _ensure_quantity(value, ref, name, ndim)
+
+
+def _ensure_flux(value, name, ndim):
+    ref = u.erg / (u.s * u.cm**2)
     return _ensure_quantity(value, ref, name, ndim)
 
 

@@ -7,6 +7,7 @@ from unite._utils import (
     C_KMS,
     _alpha_name,
     _broadcast,
+    _ensure_flux,
     _ensure_flux_density,
     _ensure_velocity,
     _ensure_wavelength,
@@ -134,7 +135,7 @@ class TestEnsureWavelength:
 
     def test_wrong_units_raises(self):
         with pytest.raises(
-            ValueError, match=r'must have units equivalent to m, got km / s'
+            u.UnitConversionError, match=r'must have units equivalent to m, got km / s'
         ):
             _ensure_wavelength(100.0 * u.km / u.s, 'test', ndim=0)
 
@@ -189,7 +190,8 @@ class TestEnsureVelocity:
 
     def test_wrong_units_raises(self):
         with pytest.raises(
-            ValueError, match='must have units equivalent to km / s, got Angstrom'
+            u.UnitConversionError,
+            match='must have units equivalent to km / s, got Angstrom',
         ):
             _ensure_velocity(300.0 * u.AA, 'test', ndim=0)
 
@@ -207,7 +209,7 @@ class TestEnsureFluxDensity:
 
     def test_invalid_unit_raises(self):
         with pytest.raises(
-            ValueError,
+            u.UnitConversionError,
             match=r'must have units equivalent to erg / \(Angstrom s cm2\), got Jy',
         ):
             _ensure_flux_density(1 * u.Jy, 'test', ndim=0)
@@ -223,7 +225,7 @@ class TestEnsureFluxDensity:
 
     def test_quantity_wrong_unit_raises(self):
         with pytest.raises(
-            ValueError,
+            u.UnitConversionError,
             match=r'must have units equivalent to erg / \(Angstrom s cm2\), got Jy',
         ):
             _ensure_flux_density(1.0 * u.Jy, 'test', ndim=0)
@@ -257,3 +259,48 @@ class TestFluxDensityConversion:
         scaled = 1e-17 * u.erg / u.s / u.cm**2 / u.AA
         f = _get_conversion_factor(cgs, scaled)
         assert f == pytest.approx(1e17, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Flux validation
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureFlux:
+    """Tests for flux validation function."""
+
+    def test_valid_unit(self):
+        _ensure_flux(1 * u.erg / u.s / u.cm**2, 'test', ndim=0)
+
+    def test_invalid_unit_raises(self):
+        with pytest.raises(
+            u.UnitConversionError,
+            match=r'must have units equivalent to erg / \(s cm2\), got Jy',
+        ):
+            _ensure_flux(1 * u.Jy, 'test', ndim=0)
+
+    def test_quantity_valid(self):
+        q = 1.0 * u.erg / u.s / u.cm**2
+        result = _ensure_flux(q, 'test', ndim=0)
+        assert result is q
+
+    def test_quantity_not_quantity_raises(self):
+        with pytest.raises(TypeError, match='must be an astropy Quantity'):
+            _ensure_flux(1.0, 'test', ndim=0)
+
+    def test_quantity_wrong_unit_raises(self):
+        with pytest.raises(
+            u.UnitConversionError,
+            match=r'must have units equivalent to erg / \(s cm2\), got Jy',
+        ):
+            _ensure_flux(1.0 * u.Jy, 'test', ndim=0)
+
+    def test_quantity_ndim(self):
+        q = [1.0, 2.0] * u.erg / u.s / u.cm**2
+        result = _ensure_flux(q, 'test', ndim=1)
+        assert result is q
+
+    def test_quantity_wrong_ndim_raises(self):
+        q = 1.0 * u.erg / u.s / u.cm**2
+        with pytest.raises(ValueError, match='must be 1-D'):
+            _ensure_flux(q, 'test', ndim=1)
