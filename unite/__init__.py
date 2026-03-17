@@ -15,22 +15,38 @@ Typical workflow
    and run with your own numpyro sampler.
 """
 
+import subprocess
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+
+def _read_pyproject_version():
+    try:
+        import tomllib
+
+        pyproject = Path(__file__).resolve().parents[1] / 'pyproject.toml'
+        data = tomllib.loads(pyproject.read_text())
+        return data['project']['version']
+    except Exception:
+        return '0.0.0.dev0'
+
+
+def _git_hash():
+    try:
+        return (
+            subprocess.check_output(
+                ['git', 'rev-parse', '--short', 'HEAD'], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return None
+
 
 try:
     __version__ = version('unite')
-except PackageNotFoundError:  # pragma: no cover
-    __version__ = '0.0.0'  # pragma: no cover
-
-from unite.config import Configuration
-from unite.evaluate import SpectrumPrediction, evaluate_model
-from unite.results import make_hdul, make_parameter_table, make_spectra_tables
-
-__all__ = [
-    'Configuration',
-    'SpectrumPrediction',
-    'evaluate_model',
-    'make_hdul',
-    'make_parameter_table',
-    'make_spectra_tables',
-]
+except PackageNotFoundError:
+    base = _read_pyproject_version()
+    gh = _git_hash()
+    __version__ = f'{base}.dev0+git.{gh}' if gh else f'{base}.dev0'

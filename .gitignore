@@ -30,6 +30,8 @@ htmlcov/
 docs/_build/
 docs/_static/
 docs/_templates/
+docs/auto_tutorials/
+docs/sg_execution_times.rst
 
 # IDE / editor files
 .idea/
