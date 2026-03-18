@@ -1,7 +1,8 @@
 # Core Concepts
 
 This page explains the key ideas behind `unite`'s design. Understanding these concepts will
-make the tutorials and guides much easier to follow.
+make the tutorials and guides much easier to follow. Please reference the relevant usage sections
+for detailed examples, explanation, and API documentation.
 
 ---
 
@@ -59,7 +60,7 @@ evaluated at pixel centers or Riemann-summed. This is:
 - **Robust for undersampled data** — critical for NIRSpec PRISM where lines can be narrower
   than a single pixel
 
-The continuum is evaluated at pixel centres (not integrated), since it varies slowly enough
+The continuum is evaluated at pixel centers (not integrated), since it varies slowly enough
 that the sub-pixel variation is negligible.
 
 ---
@@ -95,18 +96,6 @@ lc.add_line('H_alpha_narrow', 6563.0 * u.AA, redshift=z_narrow, ...)
 lc.add_line('H_alpha_broad',  6563.0 * u.AA, redshift=z_broad,  ...)
 ```
 
-### Available Tokens
-
-| Token | Role | Unit |
-|-------|------|------|
-| {class}`~unite.line.Redshift` | Kinematic redshift | dimensionless |
-| {class}`~unite.line.FWHM` | Line width (Gaussian FWHM) | km/s |
-| {class}`~unite.line.Flux` | Line flux normalization | (internal units) |
-| {class}`~unite.line.Param` | Arbitrary profile parameter | user-defined |
-| {class}`~unite.disperser.RScale` | Resolution scale on a disperser | dimensionless |
-| {class}`~unite.disperser.FluxScale` | Flux calibration scale on a disperser | dimensionless |
-| {class}`~unite.disperser.PixOffset` | Pixel wavelength offset on a disperser | pixels |
-
 ---
 
 ## Priors
@@ -129,7 +118,7 @@ fwhm_narrow = line.FWHM('fwhm_narrow', prior=prior.Uniform(100, 1000))
 fwhm_broad  = line.FWHM('fwhm_broad',  prior=prior.Uniform(fwhm_narrow + 150, 5000))
 ```
 
-See {doc}`guides/priors` for the full reference on supported priors, dependent priors, and
+See {doc}`usage/priors` for the full reference on supported priors, dependent priors, and
 topological sorting.
 
 ---
@@ -137,7 +126,7 @@ topological sorting.
 ## Line Configuration
 
 {class}`~unite.line.LineConfiguration` is the container for emission line specifications.
-Lines are added with `add_line`, specifying the rest-frame centre wavelength, kinematic
+Lines are added with `add_line`, specifying the rest-frame center wavelength, kinematic
 tokens, flux, and (optionally) a profile shape.
 
 ```python
@@ -153,7 +142,7 @@ lc.add_line(
 ```
 
 Multiple calls with the same name create **multiple components** (e.g., narrow + broad) whose
-fluxes are summed. See {doc}`guides/line_configuration` for the full guide including all
+fluxes are summed. See {doc}`usage/line_configuration` for the full guide including all
 seven profile shapes, parameter sharing patterns, and merging configurations.
 
 ---
@@ -162,14 +151,13 @@ seven profile shapes, parameter sharing patterns, and merging configurations.
 
 {class}`~unite.continuum.ContinuumConfiguration` defines wavelength regions with a
 functional continuum form attached to each. The easiest way to build one is automatically
-from the line centres:
+from the line centers:
 
 ```python
 from unite.continuum import ContinuumConfiguration, Linear
 
 cc = ContinuumConfiguration.from_lines(
-    lc.centers,    # wavelength array of line rest-frame centres
-    pad=0.05,      # fractional padding on each side
+    lc.centers,    # wavelength array of line rest-frame centers
     form=Linear(), # continuum form (or string name, e.g. 'Linear')
 )
 ```
@@ -186,8 +174,36 @@ that can be overridden per-region via `ContinuumRegion(params={...})`. Sharing t
 {class}`~unite.prior.Parameter` instance across regions ties them to a single model
 parameter — the same token pattern used for emission lines.
 
-See {doc}`guides/continuum_configuration` for all available functional forms, custom priors,
+See {doc}`usage/continuum_configuration` for all available functional forms, custom priors,
 parameter sharing, and the quick-reference table.
+
+---
+
+## Dispersers & Spectra
+
+A **disperser** represents an instrument's wavelength dispersion and resolution properties. It encodes two calibrations: the resolving power $R(\lambda)$ (used to compute the instrumental line spread function) and the wavelength dispersion per pixel $d\lambda/\mathrm{dpix}(\lambda)$. Built-in support is provided for JWST/NIRSpec and SDSS; custom instruments can be configured using generic disperser classes. Optional calibration tokens ({class}`~unite.instrument.RScale`, {class}`~unite.instrument.FluxScale`, {class}`~unite.instrument.PixOffset`) can absorb uncertainties in resolution, flux calibration, and wavelength solution.
+
+{class}`~unite.spectrum.Spectra` is a container for one or more spectra:
+
+```python
+from unite.instrument import nirspec
+from unite.spectrum import Spectra
+
+# Configure dispersers
+g235h = nirspec.G235H()
+g395m = nirspec.G395M()
+
+# Load spectra (NIRSpec example)
+spectrum1 = nirspec.NIRSpecSpectrum.from_DJA('g235h.fits', disperser=g235h)
+spectrum2 = nirspec.NIRSpecSpectrum.from_DJA('g395m.fits', disperser=g395m)
+
+# Wrap in Spectra container
+spectra = Spectra([spectrum1, spectrum2], redshift=5.28)
+```
+
+The `redshift` argument shifts all line centers to the observed frame before coverage
+filtering. See {doc}`usage/instrument` for more on data handling, error scaling, and
+multi-spectrum fits.
 
 ---
 
@@ -219,27 +235,7 @@ MCMC sampling — parameters spanning many orders of magnitude lead to poor post
 and slow convergence.
 
 **Error scaling** (when `error_scale=True`). Spectral reduction pipelines — including
-NIRSpec's — often produce error arrays that underestimate the true noise. This happens
-because:
-
-- Pipeline errors capture photon noise and read noise but not **correlated noise** from
-  resampling (drizzling), flat-fielding, or background subtraction.
-- The reduction process introduces pixel-to-pixel correlations that formal error bars do not
-  account for.
-- The result is artificially small uncertainties and overconfident posteriors.
-
-The error scaling algorithm:
-
-1. Masks pixels near emission lines.
-2. Fits a low-order polynomial to the unmasked pixels in each continuum region.
-3. Computes the reduced $\chi^2$ of the residuals.
-4. Inflates errors by $\sqrt{\max(\chi^2_\mathrm{red}, 1)}$ per region.
-
-This is **conservative**: regions where pipeline errors are already correct
-($\chi^2_\mathrm{red} \approx 1$) are left unchanged, while regions with underestimated
-errors are inflated to match the observed scatter.
-
-See {doc}`guides/spectra` for the full guide on Spectrum, Spectra, and the scaling pipeline.
+NIRSpec's — often produce error arrays that over/underestimate the true noise. `unite` can optionally rescale errorbars to mitigate this effect, though it does not currently take into account correlated noise.
 
 ### 3. `ModelBuilder.build()`
 
@@ -285,25 +281,5 @@ config.save('my_fit.yaml')
 config2 = Configuration.load('my_fit.yaml')
 ```
 
-See {doc}`guides/serialization` for the full workflow, YAML format, and sub-configuration
+See {doc}`usage/serialization` for the full workflow, YAML format, and sub-configuration
 serialization.
-
----
-
-## Spectra Collection
-
-{class}`~unite.spectrum.Spectra` is a container for one or more spectra:
-
-```python
-from unite.spectrum import Spectra
-
-# Single spectrum
-spectra = Spectra([spectrum], redshift=0.0)
-
-# Multiple spectra (e.g., two NIRSpec gratings)
-spectra = Spectra([prism_spectrum, g395m_spectrum], redshift=5.28)
-```
-
-The `redshift` argument shifts all line centres to the observed frame before coverage
-filtering. See {doc}`guides/spectra` for more on data handling, error scaling, and
-multi-spectrum fits.

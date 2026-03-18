@@ -21,44 +21,37 @@ with shared kinematics, calibration tokens, and flexible priors.
 
 ---
 
-## Getting Started
-
 ```{toctree}
 :maxdepth: 1
 :caption: Getting Started
 
-getting_started
+installation
 concepts
+contributing
 ```
-
-## Tutorials
 
 ```{toctree}
-:maxdepth: 2
+:maxdepth: 1
 :caption: Tutorials
 
-tutorials/generic
-tutorials/nirspec
-tutorials/programmatic
+auto_tutorials/tutorial_nirspec
+auto_tutorials/tutorial_generic
+sg_execution_times
 ```
-
-## Usage
 
 ```{toctree}
 :maxdepth: 3
 :caption: Usage
 
-guides/priors
-guides/line_configuration
-guides/continuum_configuration
-guides/instruments
-guides/spectra
-guides/serialization
-guides/running_model
-guides/results
+usage/priors
+usage/line_configuration
+usage/continuum_configuration
+usage/instrument
+usage/serialization
+usage/build_model
+usage/inference
+usage/results
 ```
-
-## API Reference
 
 ```{toctree}
 :maxdepth: 1
@@ -67,17 +60,8 @@ guides/results
 api/index
 ```
 
-## Development
-
-```{toctree}
-:maxdepth: 1
-:caption: Development
-
-contributing
-```
-
 ## Indices and Tables
 
 - {ref}`genindex`
 - {ref}`modindex`
-- {ref}`search`
+<!--- {ref}`search`-->

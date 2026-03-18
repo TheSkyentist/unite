@@ -20,10 +20,11 @@ extensions = [
     'sphinx_autodoc_typehints',
     'myst_parser',
     'numpydoc',
+    'sphinx_gallery.gen_gallery',
 ]
 
 templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'tutorials/README.rst']
 
 # Suppress cross-reference ambiguity warnings that arise because public classes
 # are registered at both the package level (e.g. unite.line.LineConfiguration)
@@ -84,11 +85,27 @@ intersphinx_mapping = {
 # -- Options for HTML output -------------------------------------------------
 
 html_theme = 'furo'
-html_title = f'unite v{version}'
-html_static_path = ['_static']
-
 html_theme_options = {
-    'source_repository': 'https://github.com/TheSkyentist/unite',
-    'source_branch': 'main',
-    'source_directory': 'docs/',
+    "light_css_variables": {
+        "color-brand-primary": "#A40122",
+        "color-brand-content": "#E20134",
+        "color-link--visited": "#E20134",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#FFC33B",
+        "color-brand-content": "#FF6E3A",
+        "color-link--visited": "#FF6E3A",
+    },
+    # 'style_nav_header_background': '#2ecc71',
+}
+html_title = f'unite v{version}'
+
+sphinx_gallery_conf = {
+    'examples_dirs': ['tutorials'],
+    'gallery_dirs': ['auto_tutorials'],
+    'filename_pattern': r'/tutorial_',
+    'plot_gallery': True,
+    'abort_on_example_error': True,
+    'reset_modules': ('matplotlib',),
+    'min_reported_time': 0,
 }
