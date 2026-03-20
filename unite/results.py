@@ -16,6 +16,44 @@ from unite.model import ModelArgs
 from unite.prior import Fixed
 
 
+def count_parameters(model_fn, model_args) -> int:
+    """Count the number of free scalar parameters (degrees of freedom) in the model.
+
+    Traces the model with a dummy PRNG key and counts every latent
+    (non-observed) sample site, summing the sizes of all their shapes.
+    This gives the total number of unconstrained scalar parameters —
+    i.e. the model degrees of freedom.
+
+    Parameters
+    ----------
+    model_fn : callable
+        The numpyro model function returned by :meth:`~unite.model.ModelBuilder.build`.
+    model_args : ModelArgs
+        The model arguments returned by :meth:`~unite.model.ModelBuilder.build`.
+
+    Returns
+    -------
+    int
+        Total number of free scalar parameters.
+
+    Examples
+    --------
+    >>> model_fn, model_args = builder.build()
+    >>> print(f'Free parameters: {count_parameters(model_fn, model_args)}')
+    Free parameters: 14
+    """
+    import jax
+    from numpyro import handlers
+
+    seeded = handlers.seed(model_fn, jax.random.PRNGKey(0))
+    trace = handlers.trace(seeded).get_trace(model_args)
+    return sum(
+        int(np.prod(site['value'].shape))
+        for site in trace.values()
+        if site['type'] == 'sample' and not site.get('is_observed', False)
+    )
+
+
 def make_parameter_table(
     samples: dict[str, np.ndarray],
     args: ModelArgs,

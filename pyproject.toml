@@ -4,7 +4,7 @@ description = "Unified liNe Integration Turbo Engine"
 readme = "README.md"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
-version = "1.4.1"
+version = "2.0.0"
 dependencies = [
   "numpyro>=0.20.0,<0.21",
   "astropy>=7.2.0,<8",
@@ -26,15 +26,16 @@ classifiers = [
 
 [project.optional-dependencies]
 test = [
-  "pytest>=8.0",
-  "pytest-cov>=6.0",
+  "pytest>=9.0.2, <10",
+  "pytest-cov>=7.0.0, <8",
 ]
 docs = [
-  "sphinx>=8.0",
-  "sphinx-autodoc-typehints>=2.0",
-  "myst-parser>=4.0",
-  "furo",
-  "numpydoc",
+  "sphinx>=9.1.0, <10",
+  "sphinx-autodoc-typehints>=3.7.0, <4",
+  "myst-parser>=5.0.0, <6",
+  "numpydoc>=1.10.0, <2",
+  "sphinx-gallery>=0.19.0, <1",
+  "furo>=2025.12.19,<2026",
 ]
 test-lowest = [
   "unite[test]",
@@ -47,7 +48,9 @@ dev = [
   "ruff>=0.11.9",
   "pre-commit",
 ]
-
+build = [
+    "build>=1.4.0, <2",
+]
 
 [build-system]
 build-backend = "hatchling.build"
@@ -64,17 +67,14 @@ packages = ["unite"]
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64"]
 
-[tool.pixi.environments]
-default = {features = [], solve-group = "default"}
-build = {features = ["build"], solve-group = "build"}
-test = {features = ["test"], solve-group = "default"}
-test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
-docs = {features = ["docs"], solve-group = "default"}
+[tool.pixi.activation.env]
+JAX_ENABLE_X64 = "1"
+JAX_LOGGING_LEVEL = "ERROR"
 
 [tool.pixi.tasks]
-format = "ruff format unite tests"
-lint = "ruff check unite tests"
-lint-fix = "ruff check --fix unite tests"
+format = "ruff format unite tests docs/tutorials"
+lint = "ruff check unite tests docs/tutorials"
+lint-fix = "ruff check --fix unite tests docs/tutorials"
 
 [tool.pixi.dependencies]
 python = ">=3.12.0,<3.15"
@@ -83,48 +83,34 @@ matplotlib = ">=3.10.8,<4"
 vulture = ">=2.14,<3"
 ipython = ">=9.10.0,<10"
 
-[tool.pixi.activation]
-env = {"JAX_ENABLE_X64" = "1", "JAX_LOGGING_LEVEL" = "ERROR"}
-
 [tool.pixi.pypi-dependencies]
 unite = { path = ".", editable = true }
 
-# -- build feature --
-[tool.pixi.feature.build]
-dependencies = { twine = ">=6.2.0,<7" }
-pypi-dependencies = { build = ">=1.4.0, <2" }
-tasks = { build = "python -m build" }
-
-# -- test features --
-[tool.pixi.feature.test.pypi-dependencies]
-pytest = ">=9.0.2, <10"
-pytest-cov = ">=7.0.0, <8"
+[tool.pixi.feature.build.tasks]
+build = "python -m build"
 
 [tool.pixi.feature.test.tasks]
 test = "pytest"
 test-cov = "pytest --cov=unite --cov-report=term-missing --cov-report=xml:coverage.xml"
 
-[tool.pixi.feature.test-lowest.dependencies]
-python = "3.12.*"
+[tool.pixi.feature.test-lowest]
+dependencies = { python = ">=3.12.0,<3.13" }
+tasks = { test-lowest = "pytest" }
 
-[tool.pixi.feature.test-lowest.pypi-dependencies]
-pytest = ">=9.0.2, <10"
-pytest-cov = ">=7.0.0, <8"
-
-[tool.pixi.feature.test-lowest.tasks]
-test-lowest = "pytest"
-
-# -- docs feature --
-[tool.pixi.feature.docs.pypi-dependencies]
-sphinx = ">=9.1.0, <10"
-sphinx-autodoc-typehints = ">=3.7.0, <4"
-myst-parser = ">=5.0.0, <6"
-furo = ">=2025.12.19, <2026"
-numpydoc = ">=1.10.0, <2"
+[tool.pixi.feature.docs.dependencies]
+graphviz = ">=14.1.2,<15"
 
 [tool.pixi.feature.docs.tasks]
 docs = "sphinx-build -b html docs docs/_build/html"
-docs-clean = "rm -rf docs/_build && sphinx-build -b html docs docs/_build/html"
+docs-clean = "rm -rf docs/_build docs/auto_tutorials docs/sg_execution_times.rst && sphinx-build -b html docs docs/_build/html"
+
+[tool.pixi.environments]
+default = {features = [], solve-group = "default"}
+dev = {features = ["dev"], solve-group = "default"}
+build = {features = ["build"], solve-group = "build"}
+test = {features = ["test"], solve-group = "default"}
+test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
+docs = {features = ["docs"], solve-group = "default"}
 
 # ---------------------------------------------------------------------------
 # ruff
@@ -162,6 +148,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D"]
+"docs/tutorials/**/*.py" = ["D", "E402", "I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["unite"]

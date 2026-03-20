@@ -4,7 +4,8 @@ Provides :class:`SDSSDisperser`, a concrete
 :class:`~unite.instrument.base.Disperser` for SDSS optical spectra.
 The resolving power *R(λ)* is derived from the ``wdisp`` column
 (wavelength dispersion per pixel, in Angstroms) of standard SDSS
-``spec-*.fits`` files at load time via :meth:`SDSSSpectrum.from_fits`.
+``spec-*.fits`` files at load time via
+:func:`~unite.instrument.from_sdss_fits`.
 
 Before data is loaded, the disperser can be constructed with
 default or placeholder R values, allowing calibration tokens
@@ -32,8 +33,8 @@ class SDSSDisperser(Disperser):
 
     The SDSS spectrographs use a log-linear wavelength grid.  The
     resolving power and linear dispersion are set from data at spectrum
-    load time (:meth:`SDSSSpectrum.from_fits`), but the disperser can
-    also be pre-constructed with calibration tokens for serialization.
+    load time (:func:`~unite.instrument.from_sdss_fits`), but the disperser
+    can also be pre-constructed with calibration tokens for serialization.
 
     Parameters
     ----------

@@ -9,7 +9,7 @@ In this section we will describe how to put these pieces together to build the f
 
 ## Spectra Collection
 
-{class}`~unite.instrument.spectrum.Spectra` is the main container for fitting. It holds one
+{class}`~unite.spectrum.Spectra` is the main container for fitting. It holds one
 or more `Spectrum` objects:
 
 ```python
@@ -129,50 +129,45 @@ This is a simple heuristic that can be effective for correcting under/overestima
 ### Inspecting the Continuum Fit
 
 After calling `compute_scales`, the fitted continuum model and per-region diagnostics are
-available via `Spectra.scale_diagnostics`. This is a list of
-`SpectrumScaleDiagnostic` objects — one per spectrum — each containing:
-
-You can access diagnostics by index or by spectrum name:
-
-```python
-diag = spectra.scale_diagnostics[0]             # integer index
-diag = spectra.scale_diagnostics['g235h']       # spectrum name (string key)
-```
+attached directly to each spectrum via `spectrum.scale_diagnostic`.  This is a
+`SpectrumScaleDiagnostic` object containing:
 
 | Attribute | Description |
 |---|---|
-| `wavelength` | Pixel-center wavelengths (disperser unit) |
-| `flux` / `error` | Observed flux and uncertainty arrays |
 | `line_mask` | Boolean array — `True` where a pixel was excluded near an emission line |
 | `continuum_model` | Full-length continuum model array; `NaN` outside any fitted region |
 | `regions` | List of `RegionDiagnostic` objects, one per continuum region |
-| `flux_unit` | Flux density unit of `flux` and `error` |
-| `wavelength_unit` | Wavelength unit of `wavelength` |
+
+The spectrum's own `wavelength`, `flux`, `error`, `flux_unit`, and `unit` attributes
+provide the rest of the picture — they are not duplicated in the diagnostic.
 
 Each `RegionDiagnostic` holds `obs_low`, `obs_high`, `in_region`, `good_mask`,
 `model_on_region`, `chi2_red`, and `fit_params`.
 
-A typical inspection loop:
+The preferred access pattern is to iterate directly over `spectra`:
 
 ```python
 spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 
-import numpy as np
-for diag in spectra.scale_diagnostics:
-    wl = np.asarray(diag.wavelength)
-    flux = np.asarray(diag.flux)
-    cont = np.asarray(diag.continuum_model)   # NaN outside regions
-    mask = np.asarray(diag.line_mask)
+for s in spectra:
+    diag = s.scale_diagnostic       # SpectrumScaleDiagnostic for this spectrum
+
+    wl   = s.wavelength             # pixel-center wavelengths
+    flux = s.flux                   # observed flux
+    cont = diag.continuum_model     # NaN outside fitted regions
+    mask = diag.line_mask           # True = excluded near a line
 
     for rinfo in diag.regions:
-        good = np.asarray(rinfo.good_mask)
-        model = np.asarray(rinfo.model_on_region)  # evaluated on in_region pixels
+        model = rinfo.model_on_region   # evaluated on in_region pixels
         print(f'  chi2_red = {rinfo.chi2_red:.2f}')
 ```
 
-See `examples/scale_diagnostic_example.py` for a complete plotting script that renders
-three-panel figures (spectrum + fit, residuals in σ, residual histogram) for every
-continuum region in every spectrum.
+You can also access diagnostics by index or name via `spectra.scale_diagnostics`:
+
+```python
+diag = spectra.scale_diagnostics[0]          # integer index
+diag = spectra.scale_diagnostics['g235h']    # spectrum name (string key)
+```
 
 ### Manual Scale Override
 

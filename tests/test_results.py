@@ -10,14 +10,15 @@ from numpyro.infer import Predictive
 from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
 from unite.continuum.config import ContinuumRegion
-from unite.instrument import Spectra
-from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument.generic import SimpleDisperser
 from unite.results import (
     _get_n_samples,
+    count_parameters,
     make_hdul,
     make_parameter_table,
     make_spectra_tables,
 )
+from unite.spectrum import Spectra, Spectrum
 
 
 def _setup():
@@ -34,7 +35,7 @@ def _setup():
     flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
     error = np.full(len(wavelength), 1.0) * flux_unit
 
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low,
         high=high,
         flux=flux,
@@ -167,7 +168,7 @@ def _setup_with_continuum():
     flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
     error = np.full(len(wavelength), 1.0) * flux_unit
 
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low,
         high=high,
         flux=flux,
@@ -398,7 +399,7 @@ def _setup_two_region_continuum():
     flux = np.ones(len(wavelength)) * 5.0 * flux_unit
     error = np.ones(len(wavelength)) * flux_unit
 
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low,
         high=high,
         flux=flux,
@@ -465,3 +466,171 @@ class TestInsertNan:
         model_vals = np.asarray(t['model_total'])
         # At least one row should contain NaN
         assert np.any(np.isnan(model_vals))
+
+
+# ---------------------------------------------------------------------------
+# count_parameters
+# ---------------------------------------------------------------------------
+
+
+def _setup_with_model_fn():
+    """Return (model_fn, args, samples) from the basic setup."""
+    wavelength = np.linspace(6500, 6600, 60) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    rng = np.random.default_rng(0)
+    flux = (5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
+    error = np.full(len(wavelength), 1.0) * flux_unit
+
+    spectrum = Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='s'
+    )
+
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha',
+        6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+        flux=line.Flux(prior=prior.Uniform(0, 5)),
+    )
+
+    spectra = Spectra([spectrum], redshift=0.0)
+    spectra.prepare(lc)
+    spectra.compute_scales(spectra.prepared_line_config)
+    model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, None, spectra
+    ).build()
+    return model_fn, args
+
+
+def _setup_with_calib_param():
+    """Create model with a calibration (instrument) parameter."""
+    from unite.instrument.base import FluxScale
+
+    wavelength = np.linspace(6500, 6600, 60) * u.AA
+    flux_scale_tok = FluxScale('test', prior=prior.Uniform(0.8, 1.2))
+    disperser = SimpleDisperser(
+        wavelength=wavelength, R=3000.0, name='test', flux_scale=flux_scale_tok
+    )
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+    line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
+    rng = np.random.default_rng(42)
+    flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
+    error = np.full(len(wavelength), 1.0) * flux_unit
+
+    spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='calib')
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha', 6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+        flux=line.Flux(prior=prior.Uniform(0, 5)),
+    )
+    spectra = Spectra([spectrum], redshift=0.0)
+    spectra.prepare(lc)
+    spectra.compute_scales(spectra.prepared_line_config)
+    model_fn, args = model.ModelBuilder(spectra.prepared_line_config, None, spectra).build()
+    rng_key = random.PRNGKey(0)
+    predictive = Predictive(model_fn, num_samples=4)
+    samples = predictive(rng_key, args)
+    return samples, args
+
+
+def _setup_with_continuum_scale():
+    """Create model with continuum scale computed (so csq is not None in make_hdul)."""
+    wavelength = np.linspace(6500, 6600, 60) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+    line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
+    rng = np.random.default_rng(42)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
+    error = np.full(len(wavelength), 1.0) * flux_unit
+    spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='cs')
+
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha', 6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+        flux=line.Flux(prior=prior.Uniform(0, 5)),
+    )
+    cont = ContinuumConfiguration.from_lines(lc.centers, width=30_000 * u.km / u.s, form=Linear())
+
+    spectra = Spectra([spectrum], redshift=0.0)
+    spectra.prepare(lc, cont)
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+
+    model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+    rng_key = random.PRNGKey(0)
+    predictive = Predictive(model_fn, num_samples=4)
+    samples = predictive(rng_key, args)
+    return samples, args
+
+
+class TestInstrumentGroupInParameterTable:
+    """Tests that calibration (instrument) parameters appear in the parameter table."""
+
+    def test_instrument_param_in_table(self):
+        """Instrument params (FluxScale) should appear in the parameter table."""
+        samples, args = _setup_with_calib_param()
+        table = make_parameter_table(samples, args)
+        assert any('flux_scale' in col for col in table.colnames)
+
+    def test_hdul_continuum_scale_in_header(self):
+        """make_hdul with continuum scale computed adds CNTSCL to header."""
+        samples, args = _setup_with_continuum_scale()
+        hdul = make_hdul(samples, args)
+        assert 'CNTSCL' in hdul[0].header
+        assert 'CNTUNT' in hdul[0].header
+
+
+class TestCountParameters:
+    """Tests for count_parameters."""
+
+    def test_returns_positive_int(self):
+        model_fn, args = _setup_with_model_fn()
+        n = count_parameters(model_fn, args)
+        assert isinstance(n, int)
+        assert n > 0
+
+    def test_matches_dependency_order_length(self):
+        """Free parameter count should equal non-Fixed params in dependency order."""
+        model_fn, args = _setup_with_model_fn()
+        n = count_parameters(model_fn, args)
+        # Ha has: redshift, fwhm_gauss, flux — all free → 3 free scalar params
+        assert n == 3
+
+
+# ---------------------------------------------------------------------------
+# Fixed params in percentile mode (results.py line 147-149)
+# ---------------------------------------------------------------------------
+
+
+class TestFixedParamPercentiles:
+    """Fixed prior params handled correctly in percentile mode."""
+
+    def test_fixed_param_appears_in_percentile_table(self):
+        """A Fixed prior param should still appear with its fixed value in percentile mode."""
+        samples, args = _setup_two_region_continuum()
+        percentiles = np.array([0.16, 0.5, 0.84])
+        table = make_parameter_table(samples, args, percentiles=percentiles)
+        # _setup_two_region_continuum has Fixed priors for redshift and fwhm
+        # Verify the table has the expected shape (3 percentile rows)
+        assert len(table) == 3
+        # Fixed params should have the same value across all percentile rows
+        for pname in args.dependency_order:
+            p = args.all_priors[pname]
+            if isinstance(p, prior.Fixed):
+                vals = np.asarray(table[pname])
+                assert np.all(vals == vals[0]), f'{pname} should be constant'

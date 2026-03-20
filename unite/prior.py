@@ -3,61 +3,60 @@
 Priors are inert data containers that describe numpyro distributions.
 At model-build time, a topological sort of their dependencies determines
 sampling order, and each prior's :meth:`to_dist` method receives a context
-dict of already-sampled values to resolve :class:`ParameterRef` expressions.
+dict of already-sampled values to resolve parameter expressions.
 
 Examples
 --------
 Simple fixed-bound prior:
 
->>> from unite.config.prior import Uniform
+>>> from unite.prior import Uniform
 >>> p = Uniform(0, 750)
 >>> p.to_dist({})
 Uniform(low=0, high=750)
 
 Dependent prior using arithmetic on parameter tokens:
 
->>> from unite.config.base import FWHM
->>> from unite.config.prior import Uniform
+>>> from unite.line.config import FWHM
+>>> from unite.prior import Uniform
 >>> narrow = FWHM('narrow', prior=Uniform(0, 750))
 >>> broad = FWHM('broad', prior=Uniform(low=narrow * 2 + 150, high=2500))
+
+Ratio constraint tying a flux diagnostic across two kinematic components:
+
+>>> flux_5007_narrow = Flux('5007_narrow')
+>>> flux_5007_broad = Flux('5007_broad')
+>>> flux_4363_narrow = Flux('4363_narrow')
+>>> flux_4363_broad = Flux('4363_broad',
+...     prior=Fixed(flux_4363_narrow * flux_5007_broad / flux_5007_narrow))
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
 import numpyro.distributions as dist
 
 # -------------------------------------------------------------------
-# ParameterRef: arithmetic expression referencing a parameter token
+# Private expression tree for parameter arithmetic
 # -------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ParameterRef:
-    """A linear expression referencing a parameter token.
+class _Expr(ABC):
+    """Private abstract base for parameter arithmetic expression trees.
 
-    Created by arithmetic on :class:`~unite.config.base.FWHM` or
-    :class:`~unite.config.base.Redshift` objects.  The resolved value is
-    ``context[param] * scale + offset``.
+    Instances are created by arithmetic on :class:`Parameter` tokens or
+    other ``_Expr`` instances.  Never construct subclasses directly —
+    use arithmetic operators on :class:`Parameter` tokens instead.
 
-    Parameters
-    ----------
-    param : object
-        The FWHM or Redshift token this expression references.
-    scale : float
-        Multiplicative factor.
-    offset : float
-        Additive offset (applied after scaling).
+    All four binary operators (``+``, ``-``, ``*``, ``/``) are supported
+    between any combination of :class:`Parameter` tokens, ``_Expr`` nodes,
+    and plain scalars.  The result is always an ``_Expr`` node that can be
+    passed as a prior bound or the value of a :class:`Fixed` prior.
     """
 
-    param: object
-    scale: float = 1.0
-    offset: float = 0.0
-
+    @abstractmethod
     def resolve(self, context: dict) -> float:
-        """Evaluate against already-sampled parameter values.
+        """Evaluate the expression against sampled parameter values.
 
         Parameters
         ----------
@@ -68,59 +67,185 @@ class ParameterRef:
         -------
         float
         """
-        return context[self.param] * self.scale + self.offset
 
-    # -- Chained arithmetic -------------------------------------------
+    @abstractmethod
+    def dependencies(self) -> set:
+        """Return the set of Parameter tokens this expression depends on.
 
-    def __mul__(self, other: int | float) -> ParameterRef:
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self.param, self.scale * other, self.offset * other)
+        Returns
+        -------
+        set
+        """
 
-    def __rmul__(self, other: int | float) -> ParameterRef:
-        return self.__mul__(other)
+    @abstractmethod
+    def to_dict(self, param_namer: dict) -> float | dict:
+        """Serialize to a YAML-safe value.
 
-    def __truediv__(self, other: int | float) -> ParameterRef:
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self.param, self.scale / other, self.offset / other)
+        Parameters
+        ----------
+        param_namer : dict
+            Mapping from parameter token objects to string names.
+        """
 
-    def __add__(self, other: int | float) -> ParameterRef:
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self.param, self.scale, self.offset + other)
+    # ------------------------------------------------------------------
+    # Arithmetic to build expression trees
+    # ------------------------------------------------------------------
 
-    def __radd__(self, other: int | float) -> ParameterRef:
-        return self.__add__(other)
+    def __mul__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('*', self, _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('*', self, other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('*', self, _ParamLeaf(other))
+        return NotImplemented
 
-    def __sub__(self, other: int | float) -> ParameterRef:
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self.param, self.scale, self.offset - other)
+    def __rmul__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('*', _LiteralLeaf(float(other)), self)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('*', _ParamLeaf(other), self)
+        return NotImplemented
 
-    def __rsub__(self, other: int | float) -> ParameterRef:
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self.param, -self.scale, other - self.offset)
+    def __truediv__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('/', self, _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('/', self, other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('/', self, _ParamLeaf(other))
+        return NotImplemented
+
+    def __rtruediv__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('/', _LiteralLeaf(float(other)), self)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('/', _ParamLeaf(other), self)
+        return NotImplemented
+
+    def __add__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('+', self, _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('+', self, other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('+', self, _ParamLeaf(other))
+        return NotImplemented
+
+    def __radd__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('+', _LiteralLeaf(float(other)), self)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('+', _ParamLeaf(other), self)
+        return NotImplemented
+
+    def __sub__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('-', self, _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('-', self, other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('-', self, _ParamLeaf(other))
+        return NotImplemented
+
+    def __rsub__(self, other):
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('-', _LiteralLeaf(float(other)), self)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('-', _ParamLeaf(other), self)
+        return NotImplemented
+
+
+class _ParamLeaf(_Expr):
+    """Expression leaf referencing a single Parameter token."""
+
+    def __init__(self, param) -> None:
+        self.param = param
+
+    def resolve(self, context: dict) -> float:
+        return context[self.param]
+
+    def dependencies(self) -> set:
+        return {self.param}
+
+    def to_dict(self, param_namer: dict) -> dict:
+        return {'ref': param_namer[self.param]}
 
     def __repr__(self) -> str:
-        parts = []
-        if self.scale != 1.0:
-            parts.append(f'{self.scale} *')
-        label = getattr(self.param, 'name', None) or type(self.param).__name__
-        parts.append(label)
-        if self.offset > 0:
-            parts.append(f'+ {self.offset}')
-        elif self.offset < 0:
-            parts.append(f'- {-self.offset}')
-        return f'Reference({" ".join(parts)})'
+        label = (
+            getattr(self.param, 'label', None)
+            or getattr(self.param, 'name', None)
+            or type(self.param).__name__
+        )
+        return label
+
+
+class _LiteralLeaf(_Expr):
+    """Expression leaf holding a fixed float value."""
+
+    def __init__(self, value: float) -> None:
+        self.value = float(value)
+
+    def resolve(self, context: dict) -> float:
+        return self.value
+
+    def dependencies(self) -> set:
+        return set()
+
+    def to_dict(self, param_namer: dict) -> float:
+        return self.value
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+
+class _BinOpExpr(_Expr):
+    """Binary operation node: left op right."""
+
+    _VALID_OPS = frozenset({'+', '-', '*', '/'})
+
+    def __init__(self, op: str, left, right) -> None:
+        if op not in self._VALID_OPS:
+            msg = f'Unknown operator {op!r}. Must be one of {sorted(self._VALID_OPS)}.'
+            raise ValueError(msg)
+        self.op = op
+        self.left = left if isinstance(left, _Expr) else _LiteralLeaf(float(left))
+        self.right = right if isinstance(right, _Expr) else _LiteralLeaf(float(right))
+
+    def resolve(self, context: dict) -> float:
+        l = self.left.resolve(context)  # noqa: E741
+        r = self.right.resolve(context)
+        match self.op:
+            case '+':
+                return l + r
+            case '-':
+                return l - r
+            case '*':
+                return l * r
+            case '/':
+                return l / r
+            case _:
+                raise ValueError(f'Unsupported operator: {self.op}')
+
+    def dependencies(self) -> set:
+        return self.left.dependencies() | self.right.dependencies()
+
+    def to_dict(self, param_namer: dict) -> dict:
+        return {
+            'op': self.op,
+            'left': self.left.to_dict(param_namer),
+            'right': self.right.to_dict(param_namer),
+        }
+
+    def __repr__(self) -> str:
+        return f'({self.left!r} {self.op} {self.right!r})'
 
 
 # -------------------------------------------------------------------
 # Bound type alias
 # -------------------------------------------------------------------
 
-Bound = float | ParameterRef
+Bound = float | _Expr
 """Type for a prior bound: either a fixed float or a parameter expression."""
 
 
@@ -144,14 +269,14 @@ class Prior(ABC):
         ----------
         context : dict
             Mapping of parameter token objects to already-sampled values.
-            Required for resolving :class:`ParameterRef` expressions.
+            Required for resolving parameter expressions in bounds.
 
         Returns
         -------
         numpyro.distributions.Distribution or None
-            ``None`` indicates the parameter is fixed and should not be
+            ``None`` indicates the parameter is fixed and must not be
             sampled.  The caller is responsible for injecting the fixed
-            value (from :attr:`~Fixed.value`) into the model context.
+            value (from :meth:`~Fixed.resolved_value`) into the model context.
         """
 
     @abstractmethod
@@ -161,7 +286,7 @@ class Prior(ABC):
         Returns
         -------
         set
-            Set of FWHM / Redshift objects.  Empty for independent priors.
+            Set of Parameter objects.  Empty for independent priors.
         """
 
     @abstractmethod
@@ -172,7 +297,7 @@ class Prior(ABC):
         ----------
         param_namer : dict, optional
             Mapping from parameter token objects to string names,
-            used to serialize :class:`ParameterRef` bounds.
+            used to serialize parameter expressions in bounds.
         """
 
     @classmethod
@@ -187,31 +312,26 @@ class Prior(ABC):
 
 
 def _resolve_bound(value: Bound, context: dict) -> float:
-    """Resolve a bound that may be a fixed float or a ParameterRef."""
-    if isinstance(value, ParameterRef):
+    """Resolve a bound that may be a fixed float or a parameter expression."""
+    if isinstance(value, _Expr):
         return value.resolve(context)
     return value
 
 
 def _bound_deps(value: Bound) -> set:
     """Extract parameter token dependencies from a bound."""
-    if isinstance(value, ParameterRef):
-        return {value.param}
+    if isinstance(value, _Expr):
+        return value.dependencies()
     return set()
 
 
 def _serialize_bound(value: Bound, param_namer: dict | None) -> float | dict:
     """Serialize a bound to a YAML-safe value."""
-    if isinstance(value, ParameterRef):
+    if isinstance(value, _Expr):
         if param_namer is None:
-            msg = 'Cannot serialize ParameterRef without param_namer'
+            msg = 'Cannot serialize parameter expression without param_namer'
             raise ValueError(msg)
-        d: dict = {'ref': param_namer[value.param]}
-        if value.offset != 0.0:
-            d['offset'] = value.offset
-        if value.scale != 1.0:
-            d['scale'] = value.scale
-        return d
+        return value.to_dict(param_namer)
     return value
 
 
@@ -224,17 +344,32 @@ def _deserialize_bound(value: float | dict, token_registry: dict | None) -> Boun
         The serialized bound.
     token_registry : dict, optional
         Mapping from string names to parameter token objects,
-        used to resolve serialized :class:`ParameterRef` bounds.
+        used to resolve serialized parameter expressions.
     """
     if isinstance(value, dict):
         if token_registry is None:
-            msg = 'Cannot deserialize ParameterRef without token_registry'
+            msg = 'Cannot deserialize parameter expression without token_registry'
             raise ValueError(msg)
-        param = token_registry[value['ref']]
-        return ParameterRef(
-            param=param, scale=value.get('scale', 1.0), offset=value.get('offset', 0.0)
-        )
+        if 'ref' in value:
+            return _ParamLeaf(token_registry[value['ref']])
+        if 'op' in value:
+            left = _deserialize_bound(value['left'], token_registry)
+            right = _deserialize_bound(value['right'], token_registry)
+            return _BinOpExpr(value['op'], left, right)
     return float(value)
+
+
+def _normalize_bound(value: Bound | Parameter) -> Bound:
+    """Convert a bound value to a Bound type (float or _Expr).
+
+    If value is a Parameter, wrap it in a _ParamLeaf expression.
+    """
+    if isinstance(value, _Expr):
+        return value
+    elif isinstance(value, Parameter):
+        return _ParamLeaf(value)
+    else:
+        return float(value)
 
 
 # -------------------------------------------------------------------
@@ -242,31 +377,15 @@ def _deserialize_bound(value: float | dict, token_registry: dict | None) -> Boun
 # -------------------------------------------------------------------
 
 
-def _normalize_bound(value: Bound | Parameter) -> Bound:
-    """Convert a bound value to a Bound type (float or ParameterRef).
-
-    If value is a Parameter, convert it to ParameterRef with no offset.
-    """
-    if isinstance(value, ParameterRef):
-        return value
-    elif isinstance(value, Parameter):
-        # Convert Parameter to ParameterRef with no offset
-        return ParameterRef(value, scale=1.0, offset=0.0)
-    else:
-        return float(value)
-
-
 class Uniform(Prior):
     """Uniform prior with bounds that may reference other parameters.
 
     Parameters
     ----------
-    low : float, ParameterRef, or Parameter
-        Lower bound. Can be a fixed float, a ParameterRef expression,
-        or a Parameter token (automatically converted to ParameterRef).
-    high : float, ParameterRef, or Parameter
-        Upper bound. Can be a fixed float, a ParameterRef expression,
-        or a Parameter token (automatically converted to ParameterRef).
+    low : float, or arithmetic expression on Parameter tokens
+        Lower bound.
+    high : float, or arithmetic expression on Parameter tokens
+        Upper bound.
 
     Examples
     --------
@@ -274,11 +393,11 @@ class Uniform(Prior):
 
     >>> Uniform(0, 750)
 
-    Dependent bound using arithmetic (broad fwhm > narrow fwhm + 150 km/s):
+    Dependent bound (broad fwhm > narrow fwhm + 150 km/s):
 
     >>> Uniform(low=narrow_fwhm * 2 + 150, high=2500)
 
-    Direct parameter reference (equivalent to param + 0):
+    Direct parameter reference:
 
     >>> Uniform(low=base_redshift, high=base_redshift + 0.1)
     """
@@ -318,17 +437,14 @@ class TruncatedNormal(Prior):
 
     Parameters
     ----------
-    loc : float, ParameterRef, or Parameter
-        Mean of the underlying normal distribution. Can be a fixed float,
-        a ParameterRef expression, or a Parameter token.
+    loc : float, or arithmetic expression on Parameter tokens
+        Mean of the underlying normal distribution.
     scale : float
         Standard deviation of the underlying normal distribution.
-    low : float, ParameterRef, or Parameter
-        Lower truncation bound. Can be a fixed float, a ParameterRef expression,
-        or a Parameter token (automatically converted to ParameterRef).
-    high : float, ParameterRef, or Parameter
-        Upper truncation bound. Can be a fixed float, a ParameterRef expression,
-        or a Parameter token (automatically converted to ParameterRef).
+    low : float, or arithmetic expression on Parameter tokens
+        Lower truncation bound.
+    high : float, or arithmetic expression on Parameter tokens
+        Upper truncation bound.
     """
 
     def __init__(self, loc: Bound, scale: float, low: Bound, high: Bound) -> None:
@@ -371,23 +487,23 @@ class TruncatedNormal(Prior):
 
 
 class Fixed(Prior):
-    """A fixed (non-sampled) constant value.
+    """A fixed (non-sampled) constant value or deterministic expression.
 
     ``Fixed`` parameters are injected directly into the model context as
     constants rather than being drawn from a distribution.  This avoids
     Delta distributions, which are not differentiable and would break
     gradient-based samplers.
 
-    The value may be a literal number or a :class:`ParameterRef` expression
-    (or a :class:`Parameter` token, which is automatically converted to a
-    ``ParameterRef``).  When the value is a ``ParameterRef``, the fixed
-    parameter resolves to the referenced parameter's value at model-build
-    time, enabling deterministic dependencies without sampling.
+    The value may be a literal number, a :class:`Parameter` token
+    (automatically converted to an expression), or any arithmetic expression
+    built from :class:`Parameter` tokens (e.g. ``flux_a * flux_b / flux_c``).
+    Expressions are evaluated at model-build time after their dependencies
+    have been sampled, enabling deterministic relationships between parameters.
 
     Parameters
     ----------
-    value : float, int, ParameterRef, or Parameter
-        The constant value, or a reference to another parameter.
+    value : float, int, or arithmetic expression on Parameter tokens
+        The constant value or deterministic expression.
 
     Examples
     --------
@@ -396,15 +512,20 @@ class Fixed(Prior):
     >>> Fixed(6564.61)
     Fixed(6564.61)
 
-    Reference to another parameter (e.g. tie a redshift to an existing one):
+    Tie a redshift to another parameter:
 
     >>> Fixed(narrow_z)
+
+    Tie the [OIII] 4363 flux ratio across narrow and broad components
+    (same electron temperature in both):
+
+    >>> Fixed(flux_4363_narrow * flux_5007_broad / flux_5007_narrow)
     """
 
     def __init__(self, value: Bound | Parameter) -> None:
-        if not isinstance(value, int | float | ParameterRef | Parameter):
+        if not isinstance(value, (int, float, _Expr, Parameter)):
             msg = (
-                f'Fixed value must be int, float, ParameterRef, or Parameter, '
+                f'Fixed value must be int, float, or a parameter expression, '
                 f'got {type(value).__name__}'
             )
             raise TypeError(msg)
@@ -413,6 +534,26 @@ class Fixed(Prior):
     def to_dist(self, context: dict) -> None:
         """Return ``None`` — the parameter is constant and must not be sampled."""
         return None
+
+    def resolved_value(self, context: dict) -> float:
+        """Evaluate the fixed value against a context of sampled parameters.
+
+        For literal values, returns the value directly.  For expression values
+        (including single-parameter references), evaluates the expression tree
+        against already-sampled parameter values.
+
+        Parameters
+        ----------
+        context : dict
+            Mapping of parameter token objects to their sampled values.
+
+        Returns
+        -------
+        float
+        """
+        if isinstance(self.value, _Expr):
+            return self.value.resolve(context)
+        return self.value
 
     def dependencies(self) -> set:
         return _bound_deps(self.value)
@@ -474,9 +615,10 @@ class Parameter:
     sampled value in the fitted model.  Sharing is identity-based — pass the
     **same instance** to multiple lines or dispersers.
 
-    Arithmetic on a ``Parameter`` produces a :class:`ParameterRef` expression
-    that can be used as a prior bound, enabling dependent priors such as
-    ``broad_fwhm > narrow_fwhm + 150 km/s``.
+    Arithmetic on a ``Parameter`` produces an expression tree that can be
+    used as a prior bound, enabling dependent priors such as
+    ``broad_fwhm > narrow_fwhm + 150 km/s`` or ratio constraints such as
+    ``flux_4363_broad = flux_4363_narrow * flux_5007_broad / flux_5007_narrow``.
 
     Parameters
     ----------
@@ -491,9 +633,9 @@ class Parameter:
     ------
     TypeError
         If any dependency of *prior* references a parameter that is not an
-        instance of the same subclass as *self*.  Cross-kind
-        :class:`ParameterRef` expressions (e.g. an ``FWHM`` bound on a
-        ``Redshift`` prior) are forbidden.
+        instance of the same subclass as *self*.  Cross-kind expressions
+        (e.g. an ``FWHM`` expression used as a ``Redshift`` prior bound)
+        are forbidden.
     """
 
     def __init__(self, name: str | None = None, *, prior: Prior) -> None:
@@ -501,7 +643,7 @@ class Parameter:
             if not isinstance(dep, type(self)):
                 msg = (
                     f'{type(self).__name__} prior references a '
-                    f'{type(dep).__name__} parameter. ParameterRefs must '
+                    f'{type(dep).__name__} parameter. Parameter expressions must '
                     f'reference the same kind of parameter.'
                 )
                 raise TypeError(msg)
@@ -518,43 +660,77 @@ class Parameter:
         parts.append(f'prior={self.prior!r}')
         return f'{self.__class__.__name__}({", ".join(parts)})'
 
-    def __mul__(self, other: int | float) -> ParameterRef:
-        """Return a scaled :class:`ParameterRef`."""
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self, scale=float(other))
+    def __mul__(self, other) -> _Expr:
+        """Return a product expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('*', _ParamLeaf(self), _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('*', _ParamLeaf(self), other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('*', _ParamLeaf(self), _ParamLeaf(other))
+        return NotImplemented
 
-    def __rmul__(self, other: int | float) -> ParameterRef:
-        """Return a scaled :class:`ParameterRef`."""
-        return self.__mul__(other)
+    def __rmul__(self, other) -> _Expr:
+        """Return a product expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('*', _LiteralLeaf(float(other)), _ParamLeaf(self))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('*', other, _ParamLeaf(self))
+        return NotImplemented
 
-    def __truediv__(self, other: int | float) -> ParameterRef:
-        """Return a :class:`ParameterRef` divided by a scalar."""
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self, scale=1.0 / float(other))
+    def __truediv__(self, other) -> _Expr:
+        """Return a division expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('/', _ParamLeaf(self), _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('/', _ParamLeaf(self), other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('/', _ParamLeaf(self), _ParamLeaf(other))
+        return NotImplemented
 
-    def __add__(self, other: int | float) -> ParameterRef:
-        """Return a :class:`ParameterRef` with an additive offset."""
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self, offset=float(other))
+    def __rtruediv__(self, other) -> _Expr:
+        """Return a division expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('/', _LiteralLeaf(float(other)), _ParamLeaf(self))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('/', other, _ParamLeaf(self))
+        return NotImplemented
 
-    def __radd__(self, other: int | float) -> ParameterRef:
-        """Return a :class:`ParameterRef` with an additive offset."""
-        return self.__add__(other)
+    def __add__(self, other) -> _Expr:
+        """Return an additive expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('+', _ParamLeaf(self), _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('+', _ParamLeaf(self), other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('+', _ParamLeaf(self), _ParamLeaf(other))
+        return NotImplemented
 
-    def __sub__(self, other: int | float) -> ParameterRef:
-        """Return a :class:`ParameterRef` with a subtractive offset."""
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self, offset=-float(other))
+    def __radd__(self, other) -> _Expr:
+        """Return an additive expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('+', _LiteralLeaf(float(other)), _ParamLeaf(self))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('+', other, _ParamLeaf(self))
+        return NotImplemented
 
-    def __rsub__(self, other: int | float) -> ParameterRef:
-        """Return a negated :class:`ParameterRef` with an offset."""
-        if not isinstance(other, int | float):
-            return NotImplemented
-        return ParameterRef(self, scale=-1.0, offset=float(other))
+    def __sub__(self, other) -> _Expr:
+        """Return a subtractive expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('-', _ParamLeaf(self), _LiteralLeaf(float(other)))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('-', _ParamLeaf(self), other)
+        if isinstance(other, Parameter):
+            return _BinOpExpr('-', _ParamLeaf(self), _ParamLeaf(other))
+        return NotImplemented
+
+    def __rsub__(self, other) -> _Expr:
+        """Return a subtractive expression."""
+        if isinstance(other, (int, float)):
+            return _BinOpExpr('-', _LiteralLeaf(float(other)), _ParamLeaf(self))
+        if isinstance(other, _Expr):
+            return _BinOpExpr('-', other, _ParamLeaf(self))
+        return NotImplemented
 
 
 # -------------------------------------------------------------------

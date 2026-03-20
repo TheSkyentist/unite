@@ -1,23 +1,25 @@
-"""Instrument models: dispersers, spectrum containers, and instrument-specific loaders.
+"""Instrument models: dispersers and calibration tokens.
 
 Generic building blocks are in :mod:`unite.instrument.generic`::
 
-    from unite.instrument import generic
-    generic.GenericDisperser, generic.SimpleDisperser, generic.GenericSpectrum
+    from unite.instrument.generic import GenericDisperser, SimpleDisperser
 
-Instrument-specific subclasses::
+Instrument-specific dispersers::
 
     from unite.instrument import nirspec, sdss
-    nirspec.G235H, nirspec.G395H, nirspec.NIRSpecSpectrum
-    sdss.SDSSDisperser, sdss.SDSSSpectrum
+    nirspec.G235H, nirspec.G395H, nirspec.NIRSpecDisperser
+    sdss.SDSSDisperser
 
-Collection and configuration::
+Calibration tokens and configuration::
 
-    from unite.instrument import Spectra, InstrumentConfig, RScale, FluxScale, PixOffset
+    from unite.instrument import RScale, FluxScale, PixOffset, InstrumentConfig
+
+Spectrum classes and loaders live in :mod:`unite.spectrum`::
+
+    from unite.spectrum import Spectrum, Spectra, from_arrays, from_DJA, from_sdss_fits
 """
 
 from unite.instrument.base import FluxScale, PixOffset, RScale
 from unite.instrument.config import InstrumentConfig
-from unite.instrument.spectrum import Spectra
 
-__all__ = ['FluxScale', 'InstrumentConfig', 'PixOffset', 'RScale', 'Spectra']
+__all__ = ['FluxScale', 'InstrumentConfig', 'PixOffset', 'RScale']

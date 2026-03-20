@@ -459,10 +459,9 @@ class LineConfiguration:
 
     def add_lines(
         self,
-        name: str,
+        name: str | Sequence[str],
         centers: u.Quantity,
         *,
-        names: Sequence[str] | None = None,
         profile: str | Profile = 'gaussian',
         redshift: Redshift | Sequence[Redshift | None] | None = None,
         flux: Flux | Sequence[Flux | None] | None = None,
@@ -472,21 +471,18 @@ class LineConfiguration:
         r"""Add multiple lines, each with an independent name.
 
         Each entry in *centers* becomes one line with a unique name.  When
-        *names* is omitted, names are auto-generated as
+        *name* is a single string, names are auto-generated as
         ``'{name}_{center.value:g}'`` (e.g. ``'NII_6585'``, ``'NII_6550'``).
+        When *name* is a sequence, it must have the same length as *centers*.
         All other arguments may be supplied as a single value (broadcast to
         every line) or as a sequence of the same length as *centers*.
 
         Parameters
         ----------
-        name : str
-            Base name.  Used as a prefix when auto-generating per-line names.
+        name : str | Sequence[str]
+            Single name or sequence of names, one per center.
         centers : Quantity
             Rest-frame wavelengths.  Must be non-empty.
-        names : sequence of str, optional
-            Explicit per-line names.  Must have the same length as *centers*.
-            When provided, *name* is ignored for naming purposes (it is only
-            used as a fallback label hint).
         profile : str or Profile, optional
             Line profile shared by all lines.  Default ``'gaussian'``.
         redshift : Redshift or sequence thereof, optional
@@ -503,26 +499,27 @@ class LineConfiguration:
         Raises
         ------
         ValueError
-            If *centers* is empty, if *names* has the wrong length, or if
+            If *centers* is empty, if *name* sequence has the wrong length, or if
             any sequence argument has a length other than 1 or
             ``len(centers)``.
         TypeError
             If any token has the wrong type for its slot.
         """
+        # Convert list of Quantities to a single Quantity array if needed
+        centers = _ensure_wavelength(centers, 'centers', ndim=1)
         n = len(centers)
         if n == 0:
             raise ValueError("'centers' must be non-empty.")
 
-        if names is not None:
-            names_seq = list(names)
-            if len(names_seq) != n:
-                msg = (
-                    f"'names' has {len(names_seq)} element(s) but 'centers' has {n}. "
-                    f'They must have the same length.'
-                )
-                raise ValueError(msg)
+        # Generate or validate line names
+        if isinstance(name, str):
+            names_seq = [f'{name}_{center.value:g}' for center in centers]
         else:
-            names_seq = None
+            if len(name) != n:
+                raise ValueError(
+                    f"'name' sequence has length {len(name)}, but 'centers' has length {n}."
+                )
+            names_seq = list(name)
 
         redshifts = _broadcast(redshift, 'redshift', n)
         fluxes = _broadcast(flux, 'flux', n)
@@ -530,10 +527,7 @@ class LineConfiguration:
         broadcasted_kwargs = {k: _broadcast(v, k, n) for k, v in param_kwargs.items()}
 
         for i, center in enumerate(centers):
-            if names_seq is not None:
-                line_name = names_seq[i]
-            else:
-                line_name = f'{name}_{center.value:g}'
+            line_name = names_seq[i]
             kw = {k: v[i] for k, v in broadcasted_kwargs.items()}
             self.add_line(
                 line_name,
@@ -705,7 +699,7 @@ class LineConfiguration:
         Parameters are grouped into named sections by kind (``'redshift'``,
         ``'fwhm_gauss'``, ``'flux'``, etc.).  Within each section the dict
         key is simply the parameter's name, so there is no redundant prefix.
-        ``ParameterRef`` bounds may only reference parameters in the same
+        Parameter expression bounds may only reference parameters in the same
         section; cross-kind references raise :exc:`TypeError`.
 
         Returns
@@ -823,7 +817,7 @@ class LineConfiguration:
 
         # Pass 1 — create token objects (name comes from the dict key).
         # All tokens must exist before priors are parsed because priors may
-        # contain ParameterRefs that point to other tokens.
+        # contain parameter expressions that point to other tokens.
         sec_prefix = {
             section: _prefix_for(section) for section in d if section != 'lines'
         }
@@ -846,7 +840,7 @@ class LineConfiguration:
             section_tokens[section] = tokens
 
         # Pass 2 — assign deserialized priors.
-        # ParameterRefs can reference parameters from any section, so we need a global registry.
+        # Parameter expressions can reference parameters from any section, so we need a global registry.
         global_token_registry: dict[str, Parameter] = {}
         for tokens in section_tokens.values():
             global_token_registry.update(tokens)

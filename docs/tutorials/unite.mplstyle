@@ -1,0 +1,48 @@
+# Unite project matplotlib style
+# Based on user configuration for consistent tutorial plots
+
+### LINES
+lines.solid_joinstyle: miter
+
+### FONTS
+font.family          : serif
+font.size            : 25.0
+
+### TEXT
+text.usetex          : True
+text.latex.preamble  : \usepackage{amsmath}
+
+### AXES
+axes.linewidth       : 2
+axes.axisbelow       : False
+axes.prop_cycle      : cycler(color=['3DB7E9', 'F748A5', '359B73', 'D55E00', 'E69F00', '2271B2', 'F0E442', '000000'])
+
+### TICKS
+xtick.top            : True
+xtick.bottom         : True
+xtick.major.size     : 8
+xtick.minor.size     : 5
+xtick.major.width    : 2
+xtick.minor.width    : 1.5
+xtick.direction      : in
+xtick.minor.visible  : True
+
+ytick.left           : True
+ytick.right          : True
+ytick.major.size     : 8
+ytick.minor.size     : 5
+ytick.major.width    : 2
+ytick.minor.width    : 1.5
+ytick.direction      : in
+ytick.minor.visible  : True
+
+### LEGEND
+legend.frameon       : False
+
+### IMAGES
+image.interpolation  : none
+image.cmap           : magma_r
+image.origin         : lower
+
+### SAVING
+savefig.bbox         : tight

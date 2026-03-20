@@ -1,6 +1,6 @@
 # unite
 
-**Unified Numerical Integration Tool for spEctroscopy**
+***Unified liNe Integration Turbo Engine**
 
 `unite` is a Python package for Bayesian inference of emission lines from astronomical spectra.
 It is built on [JAX](https://jax.readthedocs.io/), [NumPyro](https://num.pyro.ai/), and
@@ -36,6 +36,7 @@ contributing
 
 auto_tutorials/tutorial_nirspec
 auto_tutorials/tutorial_generic
+auto_tutorials/tutorial_config
 sg_execution_times
 ```
 

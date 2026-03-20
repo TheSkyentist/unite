@@ -5,165 +5,382 @@ import pytest
 from unite.prior import (
     Fixed,
     Parameter,
-    ParameterRef,
     TruncatedNormal,
     Uniform,
+    _BinOpExpr,
     _deserialize_bound,
+    _Expr,
+    _LiteralLeaf,
+    _ParamLeaf,
     _serialize_bound,
     prior_from_dict,
     topological_sort,
 )
 
 # ---------------------------------------------------------------------------
-# ParameterRef
+# Expression tree — single-parameter arithmetic
 # ---------------------------------------------------------------------------
 
 
-class _Tok:
-    """Minimal token stub for ParameterRef tests."""
+def _make_tok(name):
+    from unite.line.config import FWHM
 
-    def __init__(self, name: str):
-        self.name = name
-
-
-def test_parameter_ref_resolve():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, scale=2.0, offset=1.0)
-    assert ref.resolve({tok: 3.0}) == pytest.approx(7.0)
+    return FWHM(name=name)
 
 
-def test_parameter_ref_default_scale_offset():
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    assert ref.scale == 1.0
-    assert ref.offset == 0.0
-    assert ref.resolve({tok: 5.0}) == pytest.approx(5.0)
+def test_param_mul_scalar_returns_expr():
+    tok = _make_tok('x')
+    expr = tok * 2
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({tok: 3.0}) == pytest.approx(6.0)
 
 
-def test_parameter_ref_mul():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, scale=2.0, offset=1.0)
-    scaled = ref * 3
-    assert scaled.scale == pytest.approx(6.0)
-    assert scaled.offset == pytest.approx(3.0)
+def test_scalar_rmul_param_returns_expr():
+    tok = _make_tok('x')
+    expr = 4 * tok
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({tok: 3.0}) == pytest.approx(12.0)
 
 
-def test_parameter_ref_rmul():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, scale=1.0)
-    scaled = 4 * ref
-    assert scaled.scale == pytest.approx(4.0)
+def test_param_truediv_scalar_returns_expr():
+    tok = _make_tok('x')
+    expr = tok / 2
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({tok: 6.0}) == pytest.approx(3.0)
 
 
-def test_parameter_ref_truediv():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, scale=6.0, offset=3.0)
-    divided = ref / 3
-    assert divided.scale == pytest.approx(2.0)
-    assert divided.offset == pytest.approx(1.0)
+def test_param_add_scalar_returns_expr():
+    tok = _make_tok('x')
+    expr = tok + 5
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({tok: 10.0}) == pytest.approx(15.0)
 
 
-def test_parameter_ref_add():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, scale=1.0, offset=0.0)
-    shifted = ref + 5
-    assert shifted.offset == pytest.approx(5.0)
-    assert shifted.scale == pytest.approx(1.0)
+def test_scalar_radd_param_returns_expr():
+    tok = _make_tok('x')
+    expr = 5 + tok
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({tok: 10.0}) == pytest.approx(15.0)
 
 
-def test_parameter_ref_radd():
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    shifted = 5 + ref
-    assert shifted.offset == pytest.approx(5.0)
+def test_param_sub_scalar_returns_expr():
+    tok = _make_tok('x')
+    expr = tok - 4
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({tok: 10.0}) == pytest.approx(6.0)
 
 
-def test_parameter_ref_sub():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, offset=10.0)
-    shifted = ref - 4
-    assert shifted.offset == pytest.approx(6.0)
+def test_scalar_rsub_param_returns_expr():
+    tok = _make_tok('x')
+    expr = 10 - tok
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({tok: 3.0}) == pytest.approx(7.0)
 
 
-def test_parameter_ref_rsub():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, scale=1.0, offset=0.0)
-    result = 10 - ref
-    assert result.scale == pytest.approx(-1.0)
-    assert result.offset == pytest.approx(10.0)
+def test_chained_single_param():
+    """param * 2 + 150 chains correctly."""
+    tok = _make_tok('x')
+    expr = tok * 2 + 150
+    assert expr.resolve({tok: 100.0}) == pytest.approx(350.0)
 
 
-def test_parameter_ref_chained():
-    tok = _Tok('x')
-    ref = ParameterRef(tok) * 2 + 150
-    assert ref.resolve({tok: 100.0}) == pytest.approx(350.0)
+# ---------------------------------------------------------------------------
+# Expression tree — two-parameter arithmetic
+# ---------------------------------------------------------------------------
 
 
-def test_parameter_ref_unsupported_type_returns_not_implemented():
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    assert ref.__mul__('bad') is NotImplemented
-    assert ref.__add__('bad') is NotImplemented
+def test_param_mul_param():
+    a = _make_tok('a')
+    b = _make_tok('b')
+    expr = a * b
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(12.0)
 
 
-def test_parameter_ref_truediv_not_implemented():
-    """ParameterRef.__truediv__ returns NotImplemented for non-numeric (line 85)."""
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    assert ref.__truediv__('bad') is NotImplemented
+def test_param_div_param():
+    a = _make_tok('a')
+    b = _make_tok('b')
+    expr = a / b
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({a: 10.0, b: 2.0}) == pytest.approx(5.0)
 
 
-def test_parameter_ref_sub_not_implemented():
-    """ParameterRef.__sub__ returns NotImplemented for non-numeric (line 98)."""
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    assert ref.__sub__('bad') is NotImplemented
+def test_three_param_ratio():
+    """flux_a * flux_b / flux_c — the core use case."""
+    from unite.line.config import Flux
+
+    flux_a = Flux('a', prior=Uniform(0, 10))
+    flux_b = Flux('b', prior=Uniform(0, 10))
+    flux_c = Flux('c', prior=Uniform(0.1, 10))
+    expr = flux_a * flux_b / flux_c
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({flux_a: 2.0, flux_b: 3.0, flux_c: 6.0}) == pytest.approx(1.0)
 
 
-def test_parameter_ref_rsub_not_implemented():
-    """ParameterRef.__rsub__ returns NotImplemented for non-numeric (line 103)."""
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    assert ref.__rsub__('bad') is NotImplemented
+def test_two_param_dependencies():
+    a = _make_tok('a')
+    b = _make_tok('b')
+    expr = a * b
+    assert expr.dependencies() == {a, b}
 
 
-def test_parameter_ref_repr_with_negative_offset():
-    """ParameterRef.__repr__ with negative offset shows minus sign (lines 114-115)."""
-    tok = _Tok('x')
-    tok.name = 'x'
-    ref = ParameterRef(tok, scale=1.0, offset=-5.0)
-    r = repr(ref)
-    assert '-' in r or '5' in r
+def test_three_param_dependencies():
+    from unite.line.config import Flux
+
+    flux_a = Flux('a', prior=Uniform(0, 10))
+    flux_b = Flux('b', prior=Uniform(0, 10))
+    flux_c = Flux('c', prior=Uniform(0.1, 10))
+    expr = flux_a * flux_b / flux_c
+    assert expr.dependencies() == {flux_a, flux_b, flux_c}
 
 
-def test_parameter_ref_repr_default():
-    """ParameterRef.__repr__ with scale=1.0, offset=0.0 shows only label."""
-    tok = _Tok('x')
-    tok.name = 'x'
-    ref = ParameterRef(tok, scale=1.0, offset=0.0)
-    r = repr(ref)
-    assert 'x' in r
-    assert '+' not in r
+def test_expr_mul_param():
+    """_Expr * Parameter creates a new BinOpExpr."""
+    a = _make_tok('a')
+    b = _make_tok('b')
+    expr = (a * 2) * b
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(24.0)
 
 
-def test_parameter_ref_repr_with_scale():
-    """ParameterRef.__repr__ with scale != 1.0 shows scale * label (line 109)."""
-    tok = _Tok('x')
-    tok.name = 'x'
-    ref = ParameterRef(tok, scale=2.5, offset=0.0)
-    r = repr(ref)
-    assert '2.5' in r
-    assert '*' in r
+def test_param_mul_expr():
+    """Parameter * _Expr creates a new BinOpExpr."""
+    a = _make_tok('a')
+    b = _make_tok('b')
+    expr = a * (b + 1)
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(15.0)
 
 
-def test_parameter_ref_repr_with_positive_offset():
-    """ParameterRef.__repr__ with positive offset shows '+ offset' (line 113)."""
-    tok = _Tok('x')
-    tok.name = 'x'
-    ref = ParameterRef(tok, scale=1.0, offset=10.0)
-    r = repr(ref)
-    assert '+' in r
-    assert '10' in r
+def test_expr_div_param():
+    """_Expr / Parameter."""
+    a = _make_tok('a')
+    b = _make_tok('b')
+    expr = (a * 6) / b
+    assert expr.resolve({a: 2.0, b: 3.0}) == pytest.approx(4.0)
+
+
+def test_param_rtruediv_scalar():
+    """scalar / param."""
+    tok = _make_tok('x')
+    expr = 10.0 / tok
+    assert expr.resolve({tok: 2.0}) == pytest.approx(5.0)
+
+
+# _Expr op scalar/expr — coverage for _Expr arithmetic branches
+
+
+def test_expr_mul_scalar():
+    """_Expr * scalar hits _Expr.__mul__(scalar)."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = (a + b) * 2
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(14.0)
+
+
+def test_expr_mul_expr():
+    """_Expr * _Expr hits _Expr.__mul__(_Expr)."""
+    a, b, c, d = [_make_tok(x) for x in 'abcd']
+    expr = (a + b) * (c + d)
+    assert expr.resolve({a: 1.0, b: 2.0, c: 3.0, d: 4.0}) == pytest.approx(21.0)
+
+
+def test_scalar_rmul_expr():
+    """scalar * _Expr hits _Expr.__rmul__(scalar)."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = 2 * (a + b)
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(14.0)
+
+
+def test_expr_truediv_scalar():
+    """_Expr / scalar hits _Expr.__truediv__(scalar)."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = (a + b) / 2
+    assert expr.resolve({a: 3.0, b: 7.0}) == pytest.approx(5.0)
+
+
+def test_scalar_rtruediv_expr():
+    """scalar / _Expr hits _Expr.__rtruediv__(scalar)."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = 10.0 / (a + b)
+    assert expr.resolve({a: 2.0, b: 3.0}) == pytest.approx(2.0)
+
+
+def test_expr_add_expr():
+    """_Expr + _Expr hits _Expr.__add__(_Expr)."""
+    a, b, c, d = [_make_tok(x) for x in 'abcd']
+    expr = (a + b) + (c + d)
+    assert expr.resolve({a: 1.0, b: 2.0, c: 3.0, d: 4.0}) == pytest.approx(10.0)
+
+
+def test_expr_add_param():
+    """_Expr + Parameter hits _Expr.__add__(Parameter)."""
+    a, b, c = [_make_tok(x) for x in 'abc']
+    expr = (a + b) + c
+    assert expr.resolve({a: 1.0, b: 2.0, c: 3.0}) == pytest.approx(6.0)
+
+
+def test_scalar_radd_expr():
+    """scalar + _Expr hits _Expr.__radd__(scalar)."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = 2 + (a + b)
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(9.0)
+
+
+def test_expr_sub_expr():
+    """_Expr - _Expr hits _Expr.__sub__(_Expr)."""
+    a, b, c, d = [_make_tok(x) for x in 'abcd']
+    expr = (a + b) - (c + d)
+    assert expr.resolve({a: 10.0, b: 0.0, c: 3.0, d: 2.0}) == pytest.approx(5.0)
+
+
+def test_expr_sub_param():
+    """_Expr - Parameter hits _Expr.__sub__(Parameter)."""
+    a, b, c = [_make_tok(x) for x in 'abc']
+    expr = (a + b) - c
+    assert expr.resolve({a: 10.0, b: 5.0, c: 3.0}) == pytest.approx(12.0)
+
+
+def test_scalar_rsub_expr():
+    """scalar - _Expr hits _Expr.__rsub__(scalar)."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = 20 - (a + b)
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(13.0)
+
+
+# Parameter op Parameter / _Expr — coverage for Parameter arithmetic branches
+
+
+def test_param_add_param():
+    """Parameter + Parameter."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = a + b
+    assert expr.resolve({a: 3.0, b: 4.0}) == pytest.approx(7.0)
+
+
+def test_param_add_expr():
+    """Parameter + _Expr hits Parameter.__add__(_Expr)."""
+    a, b, c = [_make_tok(x) for x in 'abc']
+    expr = a + (b + c)
+    assert expr.resolve({a: 1.0, b: 2.0, c: 3.0}) == pytest.approx(6.0)
+
+
+def test_param_sub_param():
+    """Parameter - Parameter."""
+    a, b = _make_tok('a'), _make_tok('b')
+    expr = a - b
+    assert expr.resolve({a: 10.0, b: 3.0}) == pytest.approx(7.0)
+
+
+def test_param_sub_expr():
+    """Parameter - _Expr hits Parameter.__sub__(_Expr)."""
+    a, b, c = [_make_tok(x) for x in 'abc']
+    expr = a - (b + c)
+    assert expr.resolve({a: 10.0, b: 2.0, c: 1.0}) == pytest.approx(7.0)
+
+
+def test_param_truediv_expr():
+    """Parameter / _Expr hits Parameter.__truediv__(_Expr)."""
+    a, b, c = [_make_tok(x) for x in 'abc']
+    expr = a / (b + c)
+    assert expr.resolve({a: 6.0, b: 2.0, c: 1.0}) == pytest.approx(2.0)
+
+
+def test_deserialize_bound_binop():
+    """_deserialize_bound with 'op' dict reconstructs a _BinOpExpr."""
+    from unite.line.config import FWHM
+
+    tok = FWHM('x', prior=Uniform(0, 100))
+    tok.name = 'fwhm_x'
+    registry = {tok.name: tok}
+    d = {'op': '+', 'left': {'ref': 'fwhm_x'}, 'right': 1.5}
+    result = _deserialize_bound(d, registry)
+    assert isinstance(result, _BinOpExpr)
+    assert result.resolve({tok: 10.0}) == pytest.approx(11.5)
+
+
+# ---------------------------------------------------------------------------
+# unsupported operand types return NotImplemented
+# ---------------------------------------------------------------------------
+
+
+def test_param_mul_unsupported():
+    tok = _make_tok('x')
+    assert tok.__mul__('bad') is NotImplemented
+
+
+def test_param_truediv_unsupported():
+    tok = _make_tok('x')
+    assert tok.__truediv__('bad') is NotImplemented
+
+
+def test_param_add_unsupported():
+    tok = _make_tok('x')
+    assert tok.__add__('bad') is NotImplemented
+
+
+def test_param_sub_unsupported():
+    tok = _make_tok('x')
+    assert tok.__sub__('bad') is NotImplemented
+
+
+def test_param_rsub_unsupported():
+    tok = _make_tok('x')
+    assert tok.__rsub__('bad') is NotImplemented
+
+
+def test_expr_mul_unsupported():
+    tok = _make_tok('x')
+    expr = tok + 0
+    assert expr.__mul__('bad') is NotImplemented
+
+
+def test_expr_truediv_unsupported():
+    tok = _make_tok('x')
+    expr = tok + 0
+    assert expr.__truediv__('bad') is NotImplemented
+
+
+def test_expr_add_unsupported():
+    tok = _make_tok('x')
+    expr = tok + 0
+    assert expr.__add__('bad') is NotImplemented
+
+
+def test_expr_sub_unsupported():
+    tok = _make_tok('x')
+    expr = tok + 0
+    assert expr.__sub__('bad') is NotImplemented
+
+
+def test_expr_rsub_unsupported():
+    tok = _make_tok('x')
+    expr = tok + 0
+    assert expr.__rsub__('bad') is NotImplemented
+
+
+# ---------------------------------------------------------------------------
+# _Expr repr
+# ---------------------------------------------------------------------------
+
+
+def test_param_leaf_repr():
+    tok = _make_tok('x')
+    leaf = _ParamLeaf(tok)
+    assert 'x' in repr(leaf)
+
+
+def test_binop_repr():
+    tok = _make_tok('x')
+    expr = tok * 2.0 + 150.0
+    r = repr(expr)
+    assert '*' in r or '+' in r
+    assert '2.0' in r
+    assert '150.0' in r
+
+
+def test_binop_invalid_op_raises():
+    tok = _make_tok('x')
+    leaf = _ParamLeaf(tok)
+    with pytest.raises(ValueError, match='Unknown operator'):
+        _BinOpExpr('%', leaf, _LiteralLeaf(1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -197,17 +414,15 @@ def test_uniform_dependencies_empty():
     assert p.dependencies() == set()
 
 
-def test_uniform_dependencies_with_ref():
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    p = Uniform(low=ref, high=1000)
-    assert p.dependencies() == {tok}
+def test_uniform_dependencies_with_expr():
+    tok = _make_tok('x')
+    p = Uniform(low=tok, high=1000)
+    assert tok in p.dependencies()
 
 
-def test_uniform_to_dist_resolves_ref():
-    tok = _Tok('x')
-    ref = ParameterRef(tok, scale=2.0, offset=100.0)
-    p = Uniform(low=ref, high=1000)
+def test_uniform_to_dist_resolves_expr():
+    tok = _make_tok('x')
+    p = Uniform(low=tok * 2.0 + 100.0, high=1000)
     d = p.to_dist({tok: 50.0})
     assert float(d.low) == pytest.approx(200.0)
 
@@ -251,10 +466,9 @@ def test_truncated_normal_dependencies_empty():
     assert p.dependencies() == set()
 
 
-def test_truncated_normal_dependencies_with_ref():
-    tok = _Tok('x')
-    ref = ParameterRef(tok)
-    p = TruncatedNormal(loc=ref, scale=0.1, low=0.0, high=10.0)
+def test_truncated_normal_dependencies_with_expr():
+    tok = _make_tok('x')
+    p = TruncatedNormal(loc=tok, scale=0.1, low=0.0, high=10.0)
     assert tok in p.dependencies()
 
 
@@ -290,7 +504,7 @@ def test_fixed_int_coerced_to_float():
 
 
 def test_fixed_type_error():
-    with pytest.raises(TypeError, match='int, float, ParameterRef, or Parameter'):
+    with pytest.raises(TypeError, match='int, float, or a parameter expression'):
         Fixed('bad')  # type: ignore[arg-type]
 
 
@@ -314,6 +528,70 @@ def test_fixed_roundtrip():
 def test_fixed_repr():
     p = Fixed(2.718)
     assert repr(p) == 'Fixed(2.718)'
+
+
+def test_fixed_param_ref():
+    """Fixed(param) ties a parameter deterministically to another."""
+    from unite.line.config import FWHM
+
+    narrow = FWHM('narrow', prior=Uniform(50, 300))
+    broad = FWHM('broad', prior=Fixed(narrow))
+    assert narrow in broad.prior.dependencies()
+    assert broad.prior.resolved_value({narrow: 200.0}) == pytest.approx(200.0)
+
+
+def test_fixed_two_param_ratio():
+    """Fixed(flux_a * flux_b / flux_c) — three-parameter ratio constraint."""
+    from unite.line.config import Flux
+
+    flux_a = Flux('a', prior=Uniform(0, 10))
+    flux_b = Flux('b', prior=Uniform(0, 10))
+    flux_c = Flux('c', prior=Uniform(0.1, 10))
+    flux_d = Flux('d', prior=Fixed(flux_a * flux_b / flux_c))
+
+    assert flux_a in flux_d.prior.dependencies()
+    assert flux_b in flux_d.prior.dependencies()
+    assert flux_c in flux_d.prior.dependencies()
+    assert flux_d.prior.resolved_value(
+        {flux_a: 2.0, flux_b: 3.0, flux_c: 6.0}
+    ) == pytest.approx(1.0)
+
+
+def test_fixed_expr_roundtrip():
+    """Fixed(flux_a * flux_b / flux_c) survives serialization round-trip."""
+    from unite.line.config import Flux, LineConfiguration
+
+    flux_5007_narrow = Flux('5007_narrow', prior=Uniform(0, 10))
+    flux_5007_broad = Flux('5007_broad', prior=Uniform(0, 10))
+    flux_4363_narrow = Flux('4363_narrow', prior=Uniform(0, 10))
+    flux_4363_broad = Flux(
+        '4363_broad', prior=Fixed(flux_4363_narrow * flux_5007_broad / flux_5007_narrow)
+    )
+
+    import astropy.units as u
+
+    lc = LineConfiguration()
+    lc.add_line('OIII_5007_n', 5007.0 * u.AA, flux=flux_5007_narrow)
+    lc.add_line('OIII_5007_b', 5007.0 * u.AA, flux=flux_5007_broad)
+    lc.add_line('OIII_4363_n', 4363.0 * u.AA, flux=flux_4363_narrow)
+    lc.add_line('OIII_4363_b', 4363.0 * u.AA, flux=flux_4363_broad)
+
+    d = lc.to_dict()
+    lc2 = LineConfiguration.from_dict(d)
+
+    f5007n = lc2._entries[0].flux
+    f5007b = lc2._entries[1].flux
+    f4363n = lc2._entries[2].flux
+    f4363b = lc2._entries[3].flux
+
+    # All three dependencies must survive
+    assert f5007n in f4363b.prior.dependencies()
+    assert f5007b in f4363b.prior.dependencies()
+    assert f4363n in f4363b.prior.dependencies()
+
+    # Resolution must be correct: 2 * 3 / 6 = 1
+    val = f4363b.prior.resolved_value({f4363n: 2.0, f5007b: 3.0, f5007n: 6.0})
+    assert val == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +628,6 @@ def test_prior_from_dict_unknown_raises():
 # ---------------------------------------------------------------------------
 
 
-def _make_tok(name):
-    from unite.line.config import FWHM
-
-    return FWHM(name=name)
-
-
 def test_topological_sort_independent():
     a = _make_tok('a')
     b = _make_tok('b')
@@ -376,15 +648,11 @@ def test_topological_sort_chain():
 
 
 def test_topological_sort_diamond():
-    # a and b are independent; c depends on both a and b.
-    from unite.prior import ParameterRef
-
+    """a and b are independent; c depends on both."""
     a = _make_tok('a')
     b = _make_tok('b')
     c = _make_tok('c')
-    c.prior = Uniform(
-        low=ParameterRef(a, scale=1.0) + 0, high=ParameterRef(b, scale=1.0) + 1000
-    )
+    c.prior = Uniform(low=a + 0, high=b + 1000)
     named_priors = {'a': a.prior, 'b': b.prior, 'c': c.prior}
     param_to_name = {a: 'a', b: 'b', c: 'c'}
     order = topological_sort(named_priors, param_to_name)
@@ -393,12 +661,10 @@ def test_topological_sort_diamond():
 
 
 def test_topological_sort_circular_raises():
-    from unite.prior import ParameterRef
-
     a = _make_tok('a')
     b = _make_tok('b')
-    a.prior = Uniform(low=ParameterRef(b), high=1000)
-    b.prior = Uniform(low=ParameterRef(a), high=1000)
+    a.prior = Uniform(low=b, high=1000)
+    b.prior = Uniform(low=a, high=1000)
     named_priors = {'a': a.prior, 'b': b.prior}
     param_to_name = {a: 'a', b: 'b'}
     with pytest.raises(ValueError, match='Circular'):
@@ -406,21 +672,32 @@ def test_topological_sort_circular_raises():
 
 
 def test_topological_sort_external_dependency_ignored():
-    """dep_obj not in param_to_name → dep_name is None → silently ignored (line 577)."""
-    from unite.prior import ParameterRef
-
+    """dep_obj not in param_to_name is silently ignored."""
     a = _make_tok('a')
-    external = _make_tok('external')  # Not in named_priors or param_to_name
-    a.prior = Uniform(low=ParameterRef(external), high=1000)
+    external = _make_tok('external')
+    a.prior = Uniform(low=external, high=1000)
     named_priors = {'a': a.prior}
-    param_to_name = {a: 'a'}  # external not registered
-    # Should not raise; external dep is silently ignored
+    param_to_name = {a: 'a'}
     order = topological_sort(named_priors, param_to_name)
     assert 'a' in order
 
 
+def test_topological_sort_three_param_ratio():
+    """Ratio constraint: c depends on both a and b."""
+    from unite.line.config import Flux
+
+    a = Flux('a', prior=Uniform(0, 10))
+    b = Flux('b', prior=Uniform(0, 10))
+    c = Flux('c', prior=Fixed(a * b / (b + 1)))  # depends on a and b
+    named_priors = {'flux_a': a.prior, 'flux_b': b.prior, 'flux_c': c.prior}
+    param_to_name = {a: 'flux_a', b: 'flux_b', c: 'flux_c'}
+    order = topological_sort(named_priors, param_to_name)
+    assert order.index('flux_a') < order.index('flux_c')
+    assert order.index('flux_b') < order.index('flux_c')
+
+
 # ---------------------------------------------------------------------------
-# Parameter arithmetic and repr (prior.py lines 499-539)
+# Parameter arithmetic and repr
 # ---------------------------------------------------------------------------
 
 
@@ -431,61 +708,84 @@ def test_parameter_repr_with_name():
 
 
 def test_parameter_repr_without_name():
-    """Parameter.__repr__ skips name when name is None (line 499 branch)."""
+    """Parameter.__repr__ skips name when name is None."""
     p = Parameter(None, prior=Uniform(0, 1))
     r = repr(p)
     assert 'prior=' in r
     assert 'None' not in r
 
 
-def test_parameter_mul_not_implemented():
-    """Parameter.__mul__ returns NotImplemented for non-numeric (line 507)."""
+def test_parameter_mul_returns_expr():
+    p = _make_tok('x')
+    expr = p * 3
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({p: 2.0}) == pytest.approx(6.0)
+
+
+def test_parameter_rmul_returns_expr():
+    p = _make_tok('x')
+    expr = p.__rmul__(3)
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({p: 1.0}) == pytest.approx(3.0)
+
+
+def test_parameter_truediv_returns_expr():
+    p = _make_tok('x')
+    expr = p / 4
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({p: 8.0}) == pytest.approx(2.0)
+
+
+def test_parameter_add_returns_expr():
+    p = _make_tok('x')
+    expr = p + 5
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({p: 10.0}) == pytest.approx(15.0)
+
+
+def test_parameter_radd_returns_expr():
+    p = _make_tok('x')
+    expr = p.__radd__(5)
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({p: 0.0}) == pytest.approx(5.0)
+
+
+def test_parameter_sub_returns_expr():
+    p = _make_tok('x')
+    expr = p - 3
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({p: 10.0}) == pytest.approx(7.0)
+
+
+def test_parameter_rsub_returns_expr():
+    p = _make_tok('x')
+    expr = p.__rsub__(10)
+    assert isinstance(expr, _Expr)
+    assert expr.resolve({p: 3.0}) == pytest.approx(7.0)
+
+
+def test_parameter_mul_unsupported():
     p = Parameter('x', prior=Uniform(0, 1))
     assert p.__mul__('bad') is NotImplemented
 
 
-def test_parameter_rmul():
-    """Parameter.__rmul__ delegates to __mul__ (line 512)."""
-    p = Parameter('x', prior=Uniform(0, 1))
-    ref = p.__rmul__(3)
-    assert isinstance(ref, ParameterRef)
-    assert ref.scale == pytest.approx(3.0)
-
-
-def test_parameter_truediv_not_implemented():
-    """Parameter.__truediv__ returns NotImplemented for non-numeric (line 517)."""
-    p = Parameter('x', prior=Uniform(0, 1))
-    assert p.__truediv__('bad') is NotImplemented
-
-
-def test_parameter_add_not_implemented():
-    """Parameter.__add__ returns NotImplemented for non-numeric (line 523)."""
+def test_parameter_add_unsupported():
     p = Parameter('x', prior=Uniform(0, 1))
     assert p.__add__('bad') is NotImplemented
 
 
-def test_parameter_radd():
-    """Parameter.__radd__ delegates to __add__ (line 528)."""
-    p = Parameter('x', prior=Uniform(0, 1))
-    ref = p.__radd__(5)
-    assert isinstance(ref, ParameterRef)
-    assert ref.offset == pytest.approx(5.0)
-
-
-def test_parameter_sub_not_implemented():
-    """Parameter.__sub__ returns NotImplemented for non-numeric (line 533)."""
+def test_parameter_sub_unsupported():
     p = Parameter('x', prior=Uniform(0, 1))
     assert p.__sub__('bad') is NotImplemented
 
 
-def test_parameter_rsub_not_implemented():
-    """Parameter.__rsub__ returns NotImplemented for non-numeric (line 539)."""
+def test_parameter_rsub_unsupported():
     p = Parameter('x', prior=Uniform(0, 1))
     assert p.__rsub__('bad') is NotImplemented
 
 
 # ---------------------------------------------------------------------------
-# _serialize_bound / _deserialize_bound with ParameterRef (lines 206-214, 229-236)
+# _serialize_bound / _deserialize_bound
 # ---------------------------------------------------------------------------
 
 
@@ -494,24 +794,33 @@ def test_serialize_bound_float():
     assert _serialize_bound(3.14, None) == pytest.approx(3.14)
 
 
-def test_serialize_bound_parameter_ref():
-    """_serialize_bound on ParameterRef returns a dict with 'ref' key."""
+def test_serialize_bound_param_leaf():
+    """_serialize_bound on _ParamLeaf returns a dict with 'ref' key."""
     tok = _make_tok('alpha')
-    ref = ParameterRef(tok, scale=2.0, offset=0.5)
+    leaf = _ParamLeaf(tok)
     namer = {tok: 'alpha'}
-    d = _serialize_bound(ref, namer)
+    d = _serialize_bound(leaf, namer)
     assert isinstance(d, dict)
-    assert d['ref'] == 'alpha'
-    assert d['scale'] == pytest.approx(2.0)
-    assert d['offset'] == pytest.approx(0.5)
+    assert d == {'ref': 'alpha'}
 
 
-def test_serialize_bound_parameter_ref_no_namer_raises():
-    """_serialize_bound with ParameterRef and no namer raises ValueError."""
+def test_serialize_bound_binop():
+    """_serialize_bound on a _BinOpExpr returns nested op dict."""
     tok = _make_tok('alpha')
-    ref = ParameterRef(tok)
+    expr = tok * 2.0
+    namer = {tok: 'alpha'}
+    d = _serialize_bound(expr, namer)
+    assert d['op'] == '*'
+    assert d['left'] == {'ref': 'alpha'}
+    assert d['right'] == pytest.approx(2.0)
+
+
+def test_serialize_bound_expr_no_namer_raises():
+    """_serialize_bound with _Expr and no namer raises ValueError."""
+    tok = _make_tok('alpha')
+    expr = tok + 1
     with pytest.raises(ValueError, match='param_namer'):
-        _serialize_bound(ref, None)
+        _serialize_bound(expr, None)
 
 
 def test_deserialize_bound_float():
@@ -519,18 +828,43 @@ def test_deserialize_bound_float():
     assert _deserialize_bound(3.14, None) == pytest.approx(3.14)
 
 
-def test_deserialize_bound_dict():
-    """_deserialize_bound on a dict returns a ParameterRef (line 229)."""
+def test_deserialize_bound_ref_dict():
+    """_deserialize_bound on a {'ref': ...} dict returns _ParamLeaf."""
     tok = _make_tok('alpha')
     registry = {'alpha': tok}
-    ref = _deserialize_bound({'ref': 'alpha', 'scale': 2.0, 'offset': 0.5}, registry)
-    assert isinstance(ref, ParameterRef)
-    assert ref.param is tok
-    assert ref.scale == pytest.approx(2.0)
-    assert ref.offset == pytest.approx(0.5)
+    result = _deserialize_bound({'ref': 'alpha'}, registry)
+    assert isinstance(result, _ParamLeaf)
+    assert result.param is tok
+
+
+def test_deserialize_bound_binop_dict():
+    """_deserialize_bound on a nested op dict returns _BinOpExpr."""
+    tok = _make_tok('alpha')
+    registry = {'alpha': tok}
+    d = {'op': '*', 'left': {'ref': 'alpha'}, 'right': 2.0}
+    result = _deserialize_bound(d, registry)
+    assert isinstance(result, _BinOpExpr)
+    assert result.resolve({tok: 3.0}) == pytest.approx(6.0)
 
 
 def test_deserialize_bound_dict_no_registry_raises():
     """_deserialize_bound with dict and no registry raises ValueError."""
     with pytest.raises(ValueError, match='token_registry'):
         _deserialize_bound({'ref': 'alpha'}, None)
+
+
+def test_serialize_deserialize_three_param_ratio():
+    """Three-parameter ratio expression round-trips through serialize/deserialize."""
+    from unite.line.config import Flux
+
+    a = Flux('a', prior=Uniform(0, 10))
+    b = Flux('b', prior=Uniform(0, 10))
+    c = Flux('c', prior=Uniform(0.1, 10))
+    expr = a * b / c
+    namer = {a: 'a', b: 'b', c: 'c'}
+    d = _serialize_bound(expr, namer)
+
+    registry = {'a': a, 'b': b, 'c': c}
+    expr2 = _deserialize_bound(d, registry)
+    assert isinstance(expr2, _Expr)
+    assert expr2.resolve({a: 2.0, b: 3.0, c: 6.0}) == pytest.approx(1.0)

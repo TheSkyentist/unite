@@ -18,11 +18,10 @@ from numpyro import distributions as dist
 
 from unite._utils import C_KMS, _get_conversion_factor
 from unite.continuum.config import ContinuumConfiguration
-from unite.instrument import Spectra
-from unite.instrument.generic import GenericSpectrum
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.line.profiles import integrate_lines
-from unite.prior import Fixed, Parameter, ParameterRef, Prior, topological_sort
+from unite.prior import Fixed, Parameter, Prior, topological_sort
+from unite.spectrum import Spectra, Spectrum
 
 # ------------------------------------------------------------------
 # ModelArgs — data bundle for the numpyro model function
@@ -40,7 +39,7 @@ class ModelArgs:
     #: Precomputed parameter matrices and line metadata.
     matrices: ConfigMatrices
     #: Individual spectra.
-    spectra: list[GenericSpectrum]
+    spectra: list[Spectrum]
     #: Systemic redshift.
     redshift: float
     #: Continuum configuration, or ``None`` if not used.
@@ -121,17 +120,14 @@ def unite_model(args: ModelArgs) -> None:
     # Two parallel dicts are maintained:
     #   context    — str → value, used for all downstream name-based lookups.
     #   obj_ctx    — token_object → value, passed to prior.to_dist() so that
-    #                ParameterRef.resolve() can look up dependency values by
-    #                token identity (the API ParameterRef expects).
+    #                parameter expressions can look up dependency values by
+    #                token identity.
     context: dict[str, jnp.ndarray] = {}
     obj_ctx: dict[object, jnp.ndarray] = {}
     for pname in args.dependency_order:
         prior = args.all_priors[pname]
         if isinstance(prior, Fixed):
-            value = prior.value
-            if isinstance(value, ParameterRef):
-                value = value.resolve(obj_ctx)
-            val = jnp.asarray(value)
+            val = jnp.asarray(prior.resolved_value(obj_ctx))
         else:
             val = numpyro.sample(pname, prior.to_dist(obj_ctx))
         context[pname] = val
@@ -411,7 +407,7 @@ class ModelBuilder:
         # array sizes passed to JAX.
         z = self._spectra.redshift
         if self._cont_config is not None:
-            trimmed_spectra: list[GenericSpectrum] = []
+            trimmed_spectra: list[Spectrum] = []
             for s in self._spectra:
                 mask = jnp.zeros(s.npix, dtype=bool)
                 for region in self._cont_config:
@@ -626,14 +622,14 @@ def _make_continuum_labels(cont_config: ContinuumConfiguration) -> list[str]:
     return labels
 
 
-def _compute_norm_factor(s: GenericSpectrum) -> float:
+def _compute_norm_factor(s: Spectrum) -> float:
     """Robust scale factor to bring a spectrum's flux to ~O(1).
 
     Uses the median of the absolute non-zero flux values.
 
     Parameters
     ----------
-    s : GenericSpectrum
+    s : Spectrum
 
     Returns
     -------

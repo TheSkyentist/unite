@@ -68,11 +68,7 @@ class TestMultiplet:
         flux = _flux('flux_nii')
         lc = _lc()
         lc.add_lines(
-            '[NII]',
-            [6585.0 * u.AA, 6550.0 * u.AA],
-            redshift=z,
-            fwhm_gauss=fwhm,
-            flux=flux,
+            '[NII]', [6585.0, 6550.0] * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux
         )
         assert _make_line_labels(lc) == ['[NII]_6585', '[NII]_6550']
 
@@ -83,7 +79,7 @@ class TestMultiplet:
         lc = _lc()
         lc.add_lines(
             '[OIII]',
-            [5007.0 * u.AA, 4959.0 * u.AA, 4363.0 * u.AA],
+            [5007.0, 4959.0, 4363.0] * u.AA,
             redshift=z,
             fwhm_gauss=fwhm,
             flux=flux,
@@ -96,11 +92,7 @@ class TestMultiplet:
         flux = _flux('f')
         lc = _lc()
         lc.add_lines(
-            'X',
-            [1234.56 * u.AA, 1300.49 * u.AA],
-            redshift=z,
-            fwhm_gauss=fwhm,
-            flux=flux,
+            'X', [1234.56, 1300.49] * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux
         )
         assert _make_line_labels(lc) == ['X_1234.56', 'X_1300.49']
 
@@ -111,11 +103,7 @@ class TestMultiplet:
         lc = _lc()
         lc.add_line('Ha', 6563.0 * u.AA)
         lc.add_lines(
-            '[NII]',
-            [6585.0 * u.AA, 6550.0 * u.AA],
-            redshift=z,
-            fwhm_gauss=fwhm,
-            flux=flux,
+            '[NII]', [6585.0, 6550.0] * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux
         )
         assert _make_line_labels(lc) == ['Ha', '[NII]_6585', '[NII]_6550']
 
@@ -202,14 +190,14 @@ class TestMultipletPlusComponents:
         lc = _lc()
         lc.add_lines(
             '[NII]_narrow',
-            [6585.0 * u.AA, 6550.0 * u.AA],
+            [6585.0, 6550.0] * u.AA,
             redshift=z,
             fwhm_gauss=fwhm_n,
             flux=flux1,
         )
         lc.add_lines(
             '[NII]_broad',
-            [6585.0 * u.AA, 6550.0 * u.AA],
+            [6585.0, 6550.0] * u.AA,
             redshift=z,
             fwhm_gauss=fwhm_b,
             flux=flux2,
@@ -230,14 +218,14 @@ class TestMultipletPlusComponents:
         lc = _lc()
         lc.add_lines(
             '[OIII]_narrow',
-            [5007.0 * u.AA, 4959.0 * u.AA],
+            [5007.0, 4959.0] * u.AA,
             redshift=z,
             fwhm_gauss=fwhm1,
             flux=flux,
         )
         lc.add_lines(
             '[OIII]_broad',
-            [5007.0 * u.AA, 4959.0 * u.AA],
+            [5007.0, 4959.0] * u.AA,
             redshift=z,
             fwhm_gauss=fwhm2,
             flux=flux,
@@ -304,7 +292,7 @@ class TestEdgeCases:
         lc = _lc()
         lc.add_lines(
             'line',
-            [5007.0 * u.AA, 4959.0 * u.AA, 4363.0 * u.AA, 6563.0 * u.AA],
+            [5007.0, 4959.0, 4363.0, 6563.0] * u.AA,
             redshift=z,
             fwhm_gauss=fwhm,
             flux=flux,
@@ -317,11 +305,7 @@ class TestEdgeCases:
         flux = _flux('flux_nii')
         lc = _lc()
         lc.add_lines(
-            '[NII]',
-            [6585.0 * u.AA, 6550.0 * u.AA],
-            redshift=z,
-            fwhm_gauss=fwhm,
-            flux=flux,
+            '[NII]', [6585.0, 6550.0] * u.AA, redshift=z, fwhm_gauss=fwhm, flux=flux
         )
         for lb in _make_line_labels(lc):
             assert not lb.startswith('_')

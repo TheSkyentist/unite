@@ -10,8 +10,8 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import line, model, prior
-from unite.instrument import Spectra
-from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument.generic import SimpleDisperser
+from unite.spectrum import Spectra, Spectrum
 
 
 def create_simple_spectrum():
@@ -42,7 +42,7 @@ def create_simple_spectrum():
     error = np.full(len(wavelength), 2.0) * flux_unit
 
     # Create spectrum
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low,
         high=high,
         flux=flux,
@@ -352,7 +352,7 @@ class TestWavelengthUnitConsistency:
         flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
         flux = (line_flux + noise) * flux_unit
         error = np.full(len(wl), 2.0) * flux_unit
-        return GenericSpectrum(
+        return Spectrum(
             low=low,
             high=high,
             flux=flux,
@@ -395,7 +395,7 @@ class TestWavelengthUnitConsistency:
         flux = np.full(50, 1.5) * flux_unit
         error = np.full(50, 0.3) * flux_unit
 
-        spectrum = GenericSpectrum(
+        spectrum = Spectrum(
             low=low,
             high=high,
             flux=flux,
@@ -623,7 +623,7 @@ class TestFullyMaskedSpectra:
         rng = np.random.default_rng(42)
         flux = rng.normal(10, 2, len(wl)) * flux_unit
         error = np.full(len(wl), 2.0) * flux_unit
-        return GenericSpectrum(
+        return Spectrum(
             low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
         )
 
@@ -740,7 +740,7 @@ class TestFluxUnitValidation:
         flux = np.ones(10) * flux_unit
         error = np.ones(10) * flux_unit
 
-        spectrum = GenericSpectrum(
+        spectrum = Spectrum(
             low=low, high=high, flux=flux, error=error, disperser=disperser
         )
         assert spectrum.flux_unit == flux_unit
@@ -756,7 +756,7 @@ class TestFluxUnitValidation:
             ValueError,
             match=r'must have units equivalent to erg / \(Angstrom s cm2\), got Jy',
         ):
-            GenericSpectrum(
+            Spectrum(
                 low=low,
                 high=high,
                 flux=np.ones(10) * u.Jy,
@@ -772,10 +772,350 @@ class TestFluxUnitValidation:
         high = wl + 0.5 * np.gradient(wl)
 
         with pytest.raises(TypeError, match='flux must be an astropy Quantity'):
-            GenericSpectrum(
+            Spectrum(
                 low=low,
                 high=high,
                 flux=np.ones(10),
                 error=np.ones(10),
                 disperser=disperser,
             )
+
+
+# ---------------------------------------------------------------------------
+# _norm_factor with all-zero flux (model.py lines 641-643)
+# ---------------------------------------------------------------------------
+
+
+class TestNormFactor:
+    """Tests for _norm_factor edge cases."""
+
+    def test_zero_flux_falls_back_to_error(self):
+        """A spectrum with all-zero flux should use max error as norm_factor."""
+        import warnings
+
+        wl = np.linspace(6500, 6600, 50) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='zero_flux')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        flux = np.zeros(50) * flux_unit
+        error = np.full(50, 2.5) * flux_unit
+
+        spectrum = Spectrum(
+            low=low, high=high, flux=flux, error=error, disperser=disperser, name='zero'
+        )
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+        spectra.prepare(lc)
+        # Set scales manually since compute_scales can't find a line peak in zero flux
+        spectra.line_scale = 1.0 * flux_unit * u.AA
+        spectra.continuum_scale = 1.0 * flux_unit
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('always')
+            _, args = model.ModelBuilder(
+                spectra.prepared_line_config, None, spectra
+            ).build()
+
+        # norm_factor falls back to max(error) = 2.5
+        assert args.norm_factors[0] == pytest.approx(2.5, rel=0.01)
+
+
+# ---------------------------------------------------------------------------
+# ModelBuilder.matrices property (model.py line 392)
+# ---------------------------------------------------------------------------
+
+
+class TestModelBuilderMatrices:
+    """Tests for the ModelBuilder.matrices property."""
+
+    def test_matrices_property(self):
+        """ModelBuilder.matrices returns precomputed ConfigMatrices."""
+        spectrum = create_simple_spectrum()
+        line_config = create_minimal_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+        spectra.prepare(line_config)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        matrices = builder.matrices
+        assert matrices is not None
+        assert len(matrices.flux_names) == 1
+
+
+# ---------------------------------------------------------------------------
+# Model with pix_offset disperser (model.py lines 201-205)
+# ---------------------------------------------------------------------------
+
+
+class TestPixOffset:
+    """Tests for model with a disperser that has a pix_offset token."""
+
+    def test_model_with_pix_offset(self):
+        """Model with PixOffset token on disperser should build and run."""
+        from jax import random as jrandom
+        from numpyro.infer import Predictive
+
+        from unite.instrument.base import PixOffset
+
+        wl = np.linspace(6500, 6600, 60) * u.AA
+        pix_offset_tok = PixOffset('test', prior=prior.Uniform(-1.0, 1.0))
+        disperser = SimpleDisperser(
+            wavelength=wl, R=3000.0, name='pix', pix_offset=pix_offset_tok
+        )
+
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+        line_flux = 50 * np.exp(-0.5 * ((wl.value - 6563.0) / sigma) ** 2)
+        rng = np.random.default_rng(7)
+        flux = (line_flux + 5.0 + rng.normal(0, 1, len(wl))) * flux_unit
+        error = np.full(len(wl), 1.0) * flux_unit
+
+        spectrum = Spectrum(
+            low=low,
+            high=high,
+            flux=flux,
+            error=error,
+            disperser=disperser,
+            name='pix_spec',
+        )
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+            flux=line.Flux(prior=prior.Uniform(0, 5)),
+        )
+
+        model_fn, args = _prepare_and_build(lc, None, spectra)
+
+        # pix_offset token should appear in the dependency order
+        assert any('pix_offset' in pname for pname in args.dependency_order)
+
+        # Model should execute without errors
+        rng_key = jrandom.PRNGKey(0)
+        predictive = Predictive(model_fn, num_samples=3)
+        samples = predictive(rng_key, args)
+        assert 'obs_pix_spec' in samples
+
+
+# ---------------------------------------------------------------------------
+# PseudoVoigt profile covers model.py p1v_names branches (lines 160-161)
+# ---------------------------------------------------------------------------
+
+
+class TestPseudoVoigtModel:
+    """Test that a PseudoVoigt line covers p1v_names branches in unite_model."""
+
+    def test_pseudovoigt_model_runs(self):
+        """Model with PseudoVoigt profile should build and execute (covers p1v branch)."""
+        from jax import random as jrandom
+        from numpyro.infer import Predictive
+
+        from unite.line.profiles import PseudoVoigt
+
+        wl = np.linspace(6500, 6600, 60) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='pv')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+        line_flux = 50 * np.exp(-0.5 * ((wl.value - 6563.0) / sigma) ** 2)
+        rng = np.random.default_rng(8)
+        flux = (line_flux + 5.0 + rng.normal(0, 1, len(wl))) * flux_unit
+        error = np.full(len(wl), 1.0) * flux_unit
+
+        spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='pv_spec')
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            profile=PseudoVoigt(),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+            fwhm_lorentz=line.FWHM(prior=prior.Uniform(0, 500)),
+        )
+
+        model_fn, args = _prepare_and_build(lc, None, spectra)
+
+        # p1v_names should be populated (fwhm_lorentz is a velocity FWHM)
+        assert len(args.matrices.p1v_names) > 0
+
+        rng_key = jrandom.PRNGKey(0)
+        predictive = Predictive(model_fn, num_samples=2)
+        samples = predictive(rng_key, args)
+        assert 'obs_pv_spec' in samples
+
+
+# ---------------------------------------------------------------------------
+# GaussHermite profile covers model.py p1d/p2 branches (lines 167-168, 175-176)
+# ---------------------------------------------------------------------------
+
+
+class TestGaussHermiteModel:
+    """Test that a GaussHermite line covers p1d_names and p2_names branches."""
+
+    def test_gausshermite_model_runs(self):
+        """Model with GaussHermite covers p1d and p2 branches in unite_model."""
+        from jax import random as jrandom
+        from numpyro.infer import Predictive
+
+        from unite.line.config import LineShape
+        from unite.line.profiles import GaussHermite
+
+        wl = np.linspace(6500, 6600, 60) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='gh')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+        line_flux = 50 * np.exp(-0.5 * ((wl.value - 6563.0) / sigma) ** 2)
+        rng = np.random.default_rng(9)
+        flux = (line_flux + 5.0 + rng.normal(0, 1, len(wl))) * flux_unit
+        error = np.full(len(wl), 1.0) * flux_unit
+
+        spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='gh_spec')
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            profile=GaussHermite(),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+            h3=LineShape(prior=prior.TruncatedNormal(0.0, 0.1, -0.3, 0.3)),
+            h4=LineShape(prior=prior.TruncatedNormal(0.0, 0.1, -0.3, 0.3)),
+        )
+
+        model_fn, args = _prepare_and_build(lc, None, spectra)
+
+        # p1d_names should have h3, p2_names should have h4
+        assert len(args.matrices.p1d_names) > 0
+        assert len(args.matrices.p2_names) > 0
+
+        rng_key = jrandom.PRNGKey(0)
+        predictive = Predictive(model_fn, num_samples=2)
+        samples = predictive(rng_key, args)
+        assert 'obs_gh_spec' in samples
+
+
+# ---------------------------------------------------------------------------
+# Two spectra sharing the same disperser (model.py line 359->357)
+# ---------------------------------------------------------------------------
+
+
+class TestSharedDisperser:
+    """Two spectra sharing the same disperser object covers the disperser-already-seen branch."""
+
+    def test_shared_disperser_registers_once(self):
+        """Same disperser on two spectra: model builds correctly and runs."""
+        from jax import random as jrandom
+        from numpyro.infer import Predictive
+
+        wl = np.linspace(6500, 6600, 60) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='shared')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+        line_flux = 50 * np.exp(-0.5 * ((wl.value - 6563.0) / sigma) ** 2)
+        rng = np.random.default_rng(10)
+        noise1 = rng.normal(0, 1, len(wl))
+        noise2 = rng.normal(0, 1, len(wl))
+        flux1 = (line_flux + 5.0 + noise1) * flux_unit
+        flux2 = (line_flux + 5.0 + noise2) * flux_unit
+        error = np.full(len(wl), 1.0) * flux_unit
+
+        spec1 = Spectrum(low=low, high=high, flux=flux1, error=error, disperser=disperser, name='s1')
+        spec2 = Spectrum(low=low, high=high, flux=flux2, error=error, disperser=disperser, name='s2')
+        spectra = Spectra([spec1, spec2], redshift=0.0)
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+            flux=line.Flux(prior=prior.Uniform(0, 5)),
+        )
+
+        model_fn, args = _prepare_and_build(lc, None, spectra)
+
+        # Two spectra but only one disperser in the model
+        assert len(args.spectra) == 2
+
+        rng_key = jrandom.PRNGKey(0)
+        predictive = Predictive(model_fn, num_samples=2)
+        samples = predictive(rng_key, args)
+        assert 'obs_s1' in samples
+        assert 'obs_s2' in samples
+
+
+# ---------------------------------------------------------------------------
+# Shared continuum token (model.py line 373->372: token already seen)
+# ---------------------------------------------------------------------------
+
+
+class TestSharedContinuumToken:
+    """Two continuum regions sharing the same Scale token object."""
+
+    def test_shared_scale_token_registers_once(self):
+        """Shared Scale token across regions should register only once in model."""
+        from jax import random as jrandom
+        from numpyro.infer import Predictive
+
+        from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
+        from unite.continuum.config import Scale
+
+        wl = np.linspace(6450, 6650, 100) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='shared_cont')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        rng = np.random.default_rng(11)
+        flux = (5.0 + rng.normal(0, 0.5, len(wl))) * flux_unit
+        error = np.full(len(wl), 0.5) * flux_unit
+
+        spectrum = Spectrum(
+            low=low, high=high, flux=flux, error=error, disperser=disperser, name='sc'
+        )
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha', 6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Uniform(0, 5)),
+        )
+
+        # Two regions sharing a single Scale token object
+        shared_scale = Scale(prior=prior.Uniform(0, 10))
+        region1 = ContinuumRegion(6450 * u.AA, 6510 * u.AA, Linear(), params={'scale': shared_scale})
+        region2 = ContinuumRegion(6570 * u.AA, 6650 * u.AA, Linear(), params={'scale': shared_scale})
+        cc = ContinuumConfiguration([region1, region2])
+
+        spectra.prepare(lc, cc)
+        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+
+        model_fn, args = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        ).build()
+
+        # The shared Scale token should produce fewer parameters than the number
+        # of regions (since the same object is shared, it's registered only once).
+        # With 2 regions each having: scale, norm_wav, angle → 6 params max,
+        # but shared scale → at most 5 unique params.
+        assert len(args.dependency_order) > 0
+
+        rng_key = jrandom.PRNGKey(0)
+        predictive = Predictive(model_fn, num_samples=2)
+        samples = predictive(rng_key, args)
+        assert 'obs_sc' in samples

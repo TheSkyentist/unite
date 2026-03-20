@@ -9,9 +9,9 @@ from unite import line, model, prior
 from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
 from unite.continuum.library import Linear
 from unite.evaluate import SpectrumPrediction, evaluate_model
-from unite.instrument import Spectra
 from unite.instrument.base import PixOffset
-from unite.instrument.generic import GenericDisperser, GenericSpectrum, SimpleDisperser
+from unite.instrument.generic import GenericDisperser, SimpleDisperser
+from unite.spectrum import Spectra, Spectrum
 
 
 def _setup():
@@ -28,7 +28,7 @@ def _setup():
     flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
     error = np.full(len(wavelength), 1.0) * flux_unit
 
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low,
         high=high,
         flux=flux,
@@ -128,7 +128,7 @@ def _setup_fixed():
     flux = np.ones(len(wavelength)) * flux_unit
     error = np.ones(len(wavelength)) * flux_unit
 
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low,
         high=high,
         flux=flux,
@@ -201,7 +201,7 @@ def _setup_pix_offset():
     flux = np.ones(len(wavelength)) * flux_unit
     error = np.ones(len(wavelength)) * flux_unit
 
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name='pix_spec'
     )
 
@@ -253,7 +253,7 @@ def _setup_continuum():
     flux = np.ones(len(wavelength)) * 5.0 * flux_unit
     error = np.ones(len(wavelength)) * flux_unit
 
-    spectrum = GenericSpectrum(
+    spectrum = Spectrum(
         low=low,
         high=high,
         flux=flux,

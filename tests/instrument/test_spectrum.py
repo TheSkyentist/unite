@@ -7,8 +7,8 @@ import pytest
 
 from unite import line, prior
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.instrument import Spectra
-from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument.generic import SimpleDisperser
+from unite.spectrum import Spectra, Spectrum
 
 
 def _make_spectrum(
@@ -38,7 +38,7 @@ def _make_spectrum(
     flux = (line_flux + continuum + rng.normal(0, noise_std, npix)) * flux_unit
     error = np.full(npix, noise_std) * flux_unit
 
-    return GenericSpectrum(
+    return Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
     )
 
@@ -320,7 +320,7 @@ class TestScaleDiagnosticList:
 
     def test_slice_returns_scale_diagnostic_list(self):
         """ScaleDiagnosticList[:] returns a ScaleDiagnosticList instance (line 77-78)."""
-        from unite.instrument.spectrum import ScaleDiagnosticList
+        from unite.spectrum import ScaleDiagnosticList
 
         diags = self._get_diagnostics()
         sliced = diags[:]
@@ -363,7 +363,7 @@ class TestSpectraConstruction:
 
     def test_non_generic_spectrum_raises_type_error(self):
         """Spectra([object()]) raises TypeError (line 165-166)."""
-        with pytest.raises(TypeError, match='GenericSpectrum'):
+        with pytest.raises(TypeError, match='Spectrum'):
             Spectra([object()])
 
     def test_getitem_string_lookup(self):
@@ -494,7 +494,7 @@ class TestComputeScalesEdgeCases:
         flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
         flux = np.zeros(100) * flux_unit
         error = np.ones(100) * flux_unit
-        spectrum = GenericSpectrum(
+        spectrum = Spectrum(
             low=low, high=high, flux=flux, error=error, disperser=disperser, name='flat'
         )
         lc = _make_line_config()
@@ -534,7 +534,7 @@ class TestComputeScalesEdgeCases:
         line_flux = 100 * np.exp(-0.5 * ((wl.value - 6563) / sigma) ** 2)
         flux = line_flux * flux_unit
         error = np.ones(npix) * flux_unit
-        spectrum = GenericSpectrum(
+        spectrum = Spectrum(
             low=low,
             high=high,
             flux=flux,
@@ -567,12 +567,12 @@ class TestComputeScalesEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# GenericSpectrum construction validation
+# Spectrum construction validation
 # ---------------------------------------------------------------------------
 
 
-class TestGenericSpectrumConstruction:
-    """Tests for GenericSpectrum construction validation."""
+class TestSpectrumConstruction:
+    """Tests for Spectrum construction validation."""
 
     def test_flux_error_units_incompatible_raises(self):
         """flux and error units must be compatible (generic.py line 299-301)."""
@@ -586,9 +586,7 @@ class TestGenericSpectrumConstruction:
         error = np.ones(100) * u.km / u.s
 
         with pytest.raises(ValueError, match='must have units equivalent'):
-            GenericSpectrum(
-                low=low, high=high, flux=flux, error=error, disperser=disperser
-            )
+            Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
 
     def test_disperser_must_be_disperser_instance(self):
         """disperser parameter must be a Disperser instance (generic.py line 305-307)."""
@@ -600,7 +598,7 @@ class TestGenericSpectrumConstruction:
         error = np.ones(100) * flux_unit
 
         with pytest.raises(TypeError, match='Disperser instance'):
-            GenericSpectrum(
+            Spectrum(
                 low=low, high=high, flux=flux, error=error, disperser='not_a_disperser'
             )
 
@@ -615,9 +613,7 @@ class TestGenericSpectrumConstruction:
         error = np.ones(100) * flux_unit
 
         with pytest.raises(ValueError, match='same shape'):
-            GenericSpectrum(
-                low=low, high=high, flux=flux, error=error, disperser=disperser
-            )
+            Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
 
     def test_flux_length_must_match_pixels(self):
         """flux length must match number of pixels (generic.py line 330-332)."""
@@ -630,9 +626,7 @@ class TestGenericSpectrumConstruction:
         error = np.ones(100) * flux_unit
 
         with pytest.raises(ValueError, match='does not match'):
-            GenericSpectrum(
-                low=low, high=high, flux=flux, error=error, disperser=disperser
-            )
+            Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
 
     def test_error_length_must_match_pixels(self):
         """error length must match number of pixels (generic.py line 330-332)."""
@@ -645,18 +639,16 @@ class TestGenericSpectrumConstruction:
         error = np.ones(75) * flux_unit  # Wrong length
 
         with pytest.raises(ValueError, match='does not match'):
-            GenericSpectrum(
-                low=low, high=high, flux=flux, error=error, disperser=disperser
-            )
+            Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
 
 
 # ---------------------------------------------------------------------------
-# GenericSpectrum._sliced with array error_scale
+# Spectrum._sliced with array error_scale
 # ---------------------------------------------------------------------------
 
 
-class TestGenericSpectrumSliced:
-    """Tests for GenericSpectrum._sliced method."""
+class TestSpectrumSliced:
+    """Tests for Spectrum._sliced method."""
 
     def test_sliced_preserves_array_error_scale(self):
         """_sliced method correctly masks array error_scale (generic.py line 482)."""
@@ -678,12 +670,12 @@ class TestGenericSpectrumSliced:
 
 
 # ---------------------------------------------------------------------------
-# GenericSpectrum.__repr__ with calibration params
+# Spectrum.__repr__ with calibration params
 # ---------------------------------------------------------------------------
 
 
-class TestGenericSpectrumRepr:
-    """Tests for GenericSpectrum __repr__ method."""
+class TestSpectrumRepr:
+    """Tests for Spectrum __repr__ method."""
 
     def test_repr_with_calibration_params(self):
         """repr shows [calibrated] when disperser has calibration params (generic.py line 488-493)."""
@@ -713,14 +705,14 @@ class TestGenericSpectrumRepr:
         spectrum = _make_spectrum(name='MySpectrum')
         repr_str = repr(spectrum)
         assert 'MySpectrum' in repr_str
-        assert 'GenericSpectrum' in repr_str
+        assert 'Spectrum' in repr_str
 
     def test_repr_with_empty_name(self):
         """repr shows just class name when spectrum.name is empty (generic.py line 488-493)."""
         spectrum = _make_spectrum()
         spectrum.name = ''
         repr_str = repr(spectrum)
-        assert 'GenericSpectrum' in repr_str
+        assert 'Spectrum' in repr_str
 
 
 # ---------------------------------------------------------------------------

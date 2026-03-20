@@ -16,8 +16,8 @@ from unite.instrument.nirspec import (
     G395M,
     PRISM,
     NIRSpecDisperser,
-    NIRSpecSpectrum,
 )
+from unite.spectrum import from_arrays, from_DJA
 
 # ---------------------------------------------------------------------------
 # NIRSpecDisperser — construction and validation
@@ -221,38 +221,35 @@ class TestNIRSpecCalibration:
 
 
 # ---------------------------------------------------------------------------
-# NIRSpecSpectrum loader
+# from_arrays loader
 # ---------------------------------------------------------------------------
 
 
-class TestNIRSpecSpectrum:
-    """Tests for NIRSpecSpectrum loader class."""
+class TestFromArrays:
+    """Tests for the from_arrays loader with a NIRSpec disperser."""
 
-    def test_is_generic_spectrum_subclass(self):
-        from unite.instrument.generic import GenericSpectrum
-
-        assert issubclass(NIRSpecSpectrum, GenericSpectrum)
-
-    def test_from_arrays(self):
+    def test_basic(self):
         npix = 200
         wl = np.linspace(1.66, 3.17, npix + 1) * u.um
-        low = wl[:-1]
-        high = wl[1:]
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
-        flux = np.ones(npix) * flux_unit
-        error = np.full(npix, 0.1) * flux_unit
         d = G235H()
-        spec = NIRSpecSpectrum.from_arrays(low, high, flux, error, d)
+        spec = from_arrays(
+            wl[:-1],
+            wl[1:],
+            np.ones(npix) * flux_unit,
+            np.full(npix, 0.1) * flux_unit,
+            d,
+        )
         assert spec.npix == npix
         assert spec.name == 'G235H'
         assert spec.unit == u.um
 
-    def test_from_arrays_custom_name(self):
+    def test_custom_name(self):
         npix = 50
         wl = np.linspace(1.66, 3.17, npix + 1) * u.um
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
         d = G235H()
-        spec = NIRSpecSpectrum.from_arrays(
+        spec = from_arrays(
             wl[:-1],
             wl[1:],
             np.ones(npix) * flux_unit,
@@ -262,13 +259,13 @@ class TestNIRSpecSpectrum:
         )
         assert spec.name == 'custom'
 
-    def test_from_arrays_angstrom_input(self):
-        """Wavelengths in Angstroms should be accepted and converted."""
+    def test_angstrom_input(self):
+        """Wavelengths in Angstroms should be accepted and stored in the disperser unit."""
         npix = 50
         wl = np.linspace(16600, 31700, npix + 1) * u.AA
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
         d = G235H()
-        spec = NIRSpecSpectrum.from_arrays(
+        spec = from_arrays(
             wl[:-1],
             wl[1:],
             np.ones(npix) * flux_unit,
@@ -276,12 +273,11 @@ class TestNIRSpecSpectrum:
             d,
         )
         assert spec.npix == npix
-        # Internal storage should be in um (disperser unit)
         assert spec.unit == u.um
 
 
 # ---------------------------------------------------------------------------
-# NIRSpecSpectrum.from_DJA — mocked FITS loading
+# from_DJA — mocked FITS loading
 # ---------------------------------------------------------------------------
 
 
@@ -321,43 +317,40 @@ def _make_nirspec_dja_table(n=50, n_masked=0):
     return FakeDJATable()
 
 
-class TestNIRSpecFromDJA:
-    """Tests for NIRSpecSpectrum.from_DJA using mocked Table.read."""
+class TestFromDJA:
+    """Tests for from_DJA using mocked Table.read."""
 
-    def test_from_dja_basic(self):
+    def test_basic(self):
         """from_DJA constructs a valid spectrum from mocked DJA FITS."""
         fake_table = _make_nirspec_dja_table(n=50)
         with patch('astropy.table.Table.read', return_value=fake_table):
             disperser = G235H()
-            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser)
+            spec = from_DJA('fake.fits', disperser)
 
         assert spec.npix == 50
-        assert spec.unit == u.um  # NIRSpec uses microns
+        assert spec.unit == u.um
 
-    def test_from_dja_mask_applied(self):
+    def test_mask_applied(self):
         """from_DJA removes masked pixels from the output."""
         fake_table = _make_nirspec_dja_table(n=50, n_masked=5)
         with patch('astropy.table.Table.read', return_value=fake_table):
-            disperser = G235H()
-            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser)
+            spec = from_DJA('fake.fits', G235H())
 
-        # 5 pixels masked → 45 remaining
         assert spec.npix == 45
 
-    def test_from_dja_custom_name(self):
+    def test_custom_name(self):
         """from_DJA uses the provided name."""
         fake_table = _make_nirspec_dja_table(n=50)
         with patch('astropy.table.Table.read', return_value=fake_table):
-            disperser = G235H()
-            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser, name='MyGalaxy')
+            spec = from_DJA('fake.fits', G235H(), name='MyGalaxy')
 
         assert spec.name == 'MyGalaxy'
 
-    def test_from_dja_default_name_is_disperser(self):
+    def test_default_name_is_disperser(self):
         """from_DJA defaults name to disperser.name when not provided."""
         fake_table = _make_nirspec_dja_table(n=50)
+        disperser = G235H()
         with patch('astropy.table.Table.read', return_value=fake_table):
-            disperser = G235H()
-            spec = NIRSpecSpectrum.from_DJA('fake.fits', disperser)
+            spec = from_DJA('fake.fits', disperser)
 
         assert spec.name == disperser.name

@@ -16,7 +16,7 @@ from unite._utils import (
     _ensure_velocity,
     _get_conversion_factor,
 )
-from unite.instrument.generic import GenericSpectrum
+from unite.spectrum.spectrum import Spectrum
 
 if TYPE_CHECKING:
     from unite.continuum.config import ContinuumConfiguration
@@ -89,16 +89,15 @@ class ScaleDiagnosticList(list):
 class SpectrumScaleDiagnostic:
     """Diagnostics for one spectrum produced by :meth:`Spectra.compute_scales`.
 
+    Stored directly on the spectrum via
+    :attr:`~unite.spectrum.Spectrum.scale_diagnostic` so
+    callers always have the spectrum's own ``wavelength``, ``flux``, and
+    ``error`` to hand — those fields are not duplicated here.
+
     Attributes
     ----------
     name : str
-        Spectrum name (from :attr:`GenericSpectrum.name`).
-    wavelength : jnp.ndarray
-        Pixel-center wavelengths (disperser's unit), shape ``(npix,)``.
-    flux : jnp.ndarray
-        Observed flux values, shape ``(npix,)``.
-    error : jnp.ndarray
-        Flux uncertainty values, shape ``(npix,)``.
+        Spectrum name (from :attr:`~unite.spectrum.Spectrum.name`).
     line_mask : jnp.ndarray
         Boolean mask of shape ``(npix,)``; ``True`` where a pixel was
         excluded because it lies near an emission line.
@@ -108,21 +107,12 @@ class SpectrumScaleDiagnostic:
     regions : list of RegionDiagnostic
         Per-region fit diagnostics (one entry per region that overlaps
         this spectrum).
-    flux_unit : astropy.units.UnitBase
-        Flux density unit of *flux* and *error*.
-    wavelength_unit : astropy.units.UnitBase
-        Wavelength unit of *wavelength*.
     """
 
     name: str
-    wavelength: jnp.ndarray
-    flux: jnp.ndarray
-    error: jnp.ndarray
     line_mask: jnp.ndarray
     continuum_model: jnp.ndarray
     regions: list
-    flux_unit: object
-    wavelength_unit: object
 
 
 # ---------------------------------------------------------------------------
@@ -133,14 +123,14 @@ class SpectrumScaleDiagnostic:
 class Spectra:
     """Collection of spectra with coverage filtering.
 
-    Wraps one or more :class:`~unite.instrument.generic.GenericSpectrum` objects
+    Wraps one or more :class:`~unite.spectrum.Spectrum` objects
     together with a systemic redshift estimate.  The main role of this class is
     :meth:`filter_config`, which drops lines and continuum regions not covered
     by any spectrum.
 
     Parameters
     ----------
-    spectra : sequence of GenericSpectrum
+    spectra : sequence of Spectrum
         Individual spectrum objects.  Must not be empty.
     redshift : float
         Systemic redshift estimate used for rest-frame → observed-frame
@@ -154,12 +144,12 @@ class Spectra:
     Raises
     ------
     ValueError
-        If *spectra* is empty or contains non-GenericSpectrum objects.
+        If *spectra* is empty or contains non-Spectrum objects.
     """
 
     def __init__(
         self,
-        spectra: Sequence[GenericSpectrum],
+        spectra: Sequence[Spectrum],
         redshift: float = 0.0,
         canonical_unit: u.UnitBase | None = None,
     ) -> None:
@@ -167,10 +157,10 @@ class Spectra:
             msg = 'Spectra collection must contain at least one spectrum.'
             raise ValueError(msg)
         for i, s in enumerate(spectra):
-            if not isinstance(s, GenericSpectrum):
-                msg = f'All elements must be GenericSpectrum instances; element {i} is {type(s).__name__}.'
+            if not isinstance(s, Spectrum):
+                msg = f'All elements must be Spectrum instances; element {i} is {type(s).__name__}.'
                 raise TypeError(msg)
-        self._spectra: list[GenericSpectrum] = list(spectra)
+        self._spectra: list[Spectrum] = list(spectra)
         self._redshift: float = float(redshift)
         self._line_scale: u.Quantity | None = None
         self._continuum_scale: u.Quantity | None = None
@@ -246,11 +236,18 @@ class Spectra:
         """Per-spectrum diagnostics from the most recent :meth:`compute_scales` call.
 
         Returns a :class:`ScaleDiagnosticList` of
-        :class:`SpectrumScaleDiagnostic` objects (one per spectrum), each
-        holding the line mask, the fitted continuum model array, and
-        per-region fit details.  Supports both integer indexing and
-        lookup by spectrum name (e.g. ``diags["my_spectrum"]``).
-        ``None`` if :meth:`compute_scales` has not been called yet.
+        :class:`SpectrumScaleDiagnostic` objects (one per spectrum).
+        Supports both integer indexing and lookup by spectrum name
+        (e.g. ``diags["my_spectrum"]``).  ``None`` if
+        :meth:`compute_scales` has not been called yet.
+
+        The diagnostic for an individual spectrum is also available via
+        :attr:`~unite.spectrum.Spectrum.scale_diagnostic`,
+        which is the preferred access pattern when iterating over spectra::
+
+            for s in spectra:
+                diag = s.scale_diagnostic
+                # s.wavelength / s.flux / s.error available directly
         """
         return self._scale_diagnostics
 
@@ -277,7 +274,7 @@ class Spectra:
            across continuum regions (after masking lines).
         5. Optionally compute per-region **error scale** factors
            (``sqrt(chi2_red)``) and store them as per-pixel
-           arrays on each :class:`~unite.instrument.generic.GenericSpectrum`.
+           arrays on each :class:`~unite.spectrum.Spectrum`.
 
         Both flux scales are stored as :class:`~astropy.units.Quantity`
         objects: integrated flux for ``line_scale`` and flux density for
@@ -300,7 +297,7 @@ class Spectra:
             If ``True``, compute per-region error scale factors from the
             reduced chi-squared of the continuum fit residuals and store
             them as per-pixel arrays on each spectrum via
-            :attr:`~unite.instrument.generic.GenericSpectrum.error_scale`.
+            :attr:`~unite.spectrum.Spectrum.error_scale`.
             Default ``False``.
         """
         box_width = _ensure_velocity(box_width, 'max_fwhm', ndim=0)
@@ -313,14 +310,15 @@ class Spectra:
         ref_wl_unit = self._canonical_unit
 
         # --- Helper: build a per-pixel line exclusion mask for a spectrum ---
-        def _build_line_mask(spectrum, fwhm_kms):
+        def _build_line_mask(spectrum, width_kms):
             wl = spectrum.wavelength
             mask = jnp.zeros(spectrum.npix, dtype=bool)
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
                 lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
-                user_hw = lam_obs * fwhm_kms / C_KMS / 2.0  # half of FWHM
-                half_width = float(jnp.sqrt(user_hw**2 + (lsf_fwhm / 2.0) ** 2))
+                user_width = lam_obs * width_kms / C_KMS
+                # half_width = float(jnp.sqrt(user_width**2 + lsf_fwhm**2)) / 2
+                half_width = (user_width + lsf_fwhm) / 2
                 mask = mask | (
                     (wl > lam_obs - half_width) & (wl < lam_obs + half_width)
                 )
@@ -449,19 +447,14 @@ class Spectra:
                 flux_est = peak_above * flux_conv * box_width_lam * wl_conv
                 max_line_scale = max(max_line_scale, flux_est)
 
-            diag_list.append(
-                SpectrumScaleDiagnostic(
-                    name=spectrum.name,
-                    wavelength=wl,
-                    flux=spectrum.flux,
-                    error=spectrum.error,
-                    line_mask=line_mask,
-                    continuum_model=continuum_model,
-                    regions=region_diags,
-                    flux_unit=spectrum.flux_unit,
-                    wavelength_unit=spectrum.unit,
-                )
+            diag = SpectrumScaleDiagnostic(
+                name=spectrum.name,
+                line_mask=line_mask,
+                continuum_model=continuum_model,
+                regions=region_diags,
             )
+            spectrum._scale_diagnostic = diag
+            diag_list.append(diag)
 
         if max_line_scale <= 0:
             msg = (
@@ -660,17 +653,17 @@ class Spectra:
     def __len__(self) -> int:
         return len(self._spectra)
 
-    def __iter__(self) -> Iterator[GenericSpectrum]:
+    def __iter__(self) -> Iterator[Spectrum]:
         return iter(self._spectra)
 
-    def __getitem__(self, idx: int | str) -> GenericSpectrum:
+    def __getitem__(self, idx: int | str) -> Spectrum:
         """Return a spectrum by integer index or by name.
 
         Parameters
         ----------
         idx : int or str
             Integer index into the internal spectrum list, or a string
-            matching :attr:`~unite.instrument.generic.GenericSpectrum.name`
+            matching :attr:`~unite.spectrum.Spectrum.name`
             of the desired spectrum.
 
         Raises

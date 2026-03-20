@@ -36,27 +36,25 @@ class TestRedshift:
         z = Redshift('nlr', prior=p)
         assert z.prior is p
 
-    def test_arithmetic_returns_ref(self):
-        from unite.prior import ParameterRef
+    def test_arithmetic_returns_expr(self):
+        from unite.prior import _Expr
 
         z = Redshift()
         ref = z * 2
-        assert isinstance(ref, ParameterRef)
-        assert ref.scale == pytest.approx(2.0)
+        assert isinstance(ref, _Expr)
+        assert ref.resolve({z: 3.0}) == pytest.approx(6.0)
 
-    def test_add_returns_ref(self):
-        from unite.prior import ParameterRef
+    def test_add_returns_expr(self):
+        from unite.prior import _Expr
 
         z = Redshift()
         ref = z + 0.01
-        assert isinstance(ref, ParameterRef)
-        assert ref.offset == pytest.approx(0.01)
+        assert isinstance(ref, _Expr)
+        assert ref.resolve({z: 0.0}) == pytest.approx(0.01)
 
     def test_cross_kind_ref_raises(self):
         fwhm = FWHM()
-        with pytest.raises(
-            TypeError, match='ParameterRefs must reference the same kind'
-        ):
+        with pytest.raises(TypeError, match='same kind of parameter'):
             Redshift(prior=Uniform(low=fwhm * 2, high=1000))
 
 
@@ -395,41 +393,39 @@ class TestAddLines:
     def test_broadcast_single_redshift(self):
         z = Redshift('z')
         config = LineConfiguration()
-        config.add_lines('[NII]', [6585.27 * u.AA, 6549.86 * u.AA], redshift=z)
+        config.add_lines('[NII]', [6585.27, 6549.86] * u.AA, redshift=z)
         assert len(config) == 2
         assert config._entries[0].redshift is config._entries[1].redshift
 
     def test_auto_names_use_center_value(self):
         config = LineConfiguration()
-        config.add_lines('[NII]', [6585.27 * u.AA, 6549.86 * u.AA])
+        config.add_lines('[NII]', [6585.27, 6549.86] * u.AA)
         assert config._entries[0].name == '[NII]_6585.27'
         assert config._entries[1].name == '[NII]_6549.86'
 
     def test_explicit_names_array(self):
         config = LineConfiguration()
-        config.add_lines(
-            'NII', [6585.27 * u.AA, 6549.86 * u.AA], names=['NII_6585', 'NII_6550']
-        )
+        config.add_lines(['NII_6585', 'NII_6550'], [6585.27, 6549.86] * u.AA)
         assert config._entries[0].name == 'NII_6585'
         assert config._entries[1].name == 'NII_6550'
 
     def test_names_wrong_length_raises(self):
         config = LineConfiguration()
-        with pytest.raises(ValueError, match="'names' has"):
-            config.add_lines('X', [5000.0 * u.AA, 5100.0 * u.AA], names=['only_one'])
+        with pytest.raises(ValueError, match="'name' sequence has length"):
+            config.add_lines(['only_one'], [5000.0, 5100.0] * u.AA)
 
     def test_per_line_flux(self):
         config = LineConfiguration()
         f1 = Flux('f1')
         f2 = Flux('f2')
-        config.add_lines('X', [5000.0 * u.AA, 5100.0 * u.AA], flux=[f1, f2])
+        config.add_lines('X', [5000.0, 5100.0] * u.AA, flux=[f1, f2])
         assert config._entries[0].flux is f1
         assert config._entries[1].flux is f2
 
     def test_empty_centers_raises(self):
         config = LineConfiguration()
         with pytest.raises(ValueError, match="'centers' must be non-empty"):
-            config.add_lines('X', [])
+            config.add_lines('X', [] * u.AA)
 
     def test_wrong_length_raises(self):
         config = LineConfiguration()
@@ -437,7 +433,7 @@ class TestAddLines:
         with pytest.raises(ValueError, match="'redshift' has"):
             config.add_lines(
                 'X',
-                [5000.0 * u.AA, 5100.0 * u.AA],
+                [5000.0, 5100.0] * u.AA,
                 redshift=[z, z, z],  # 3 values for 2 centers
             )
 
@@ -450,9 +446,9 @@ class TestAddLines:
 class TestMerge:
     def test_merge_strict_no_collision(self):
         a = LineConfiguration()
-        a.add_line('Ha', 6563.0 * u.AA, redshift=Redshift('z_a'))
+        a.add_line('Ha', 6563.0 * u.AA, redshift=Redshift('a'))
         b = LineConfiguration()
-        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('z_b'))
+        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('b'))
         merged = a.merge(b, strict=True)
         assert len(merged) == 2
 
@@ -479,11 +475,45 @@ class TestMerge:
 
     def test_add_operator(self):
         a = LineConfiguration()
-        a.add_line('Ha', 6563.0 * u.AA, redshift=Redshift('z_a'))
+        a.add_line('Ha', 6563.0 * u.AA, redshift=Redshift('a'))
         b = LineConfiguration()
-        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('z_b'))
+        b.add_line('Hb', 4861.0 * u.AA, redshift=Redshift('b'))
         merged = a + b
         assert len(merged) == 2
+
+    def test_merge_type_mismatch_raises(self):
+        """Merging tokens with the same name but different types raises TypeError."""
+        # Build lc1 with a FWHM token that gets name 'fwhm_gauss_foo'
+        lc1 = LineConfiguration()
+        lc1.add_line('Ha', 6563.0 * u.AA, fwhm_gauss=FWHM('foo'))
+
+        # Build lc2 with a Flux token that we manually give the same site name
+        lc2 = LineConfiguration()
+        flux_tok = Flux()
+        flux_tok.name = 'fwhm_gauss_foo'  # same site name, wrong type
+        lc2.add_line('Hb', 4861.0 * u.AA, flux=flux_tok)
+
+        with pytest.raises(TypeError, match='type'):
+            lc1.merge(lc2, strict=False)
+
+
+# ---------------------------------------------------------------------------
+# LineShape via GaussHermite roundtrip (covers from_dict LineShape branch)
+# ---------------------------------------------------------------------------
+
+
+class TestGaussHermiteRoundtrip:
+    def test_gausshermite_roundtrip(self):
+        """GaussHermite config survives to_dict/from_dict (tests LineShape section)."""
+        lc = LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA, profile=GaussHermite())
+        d = lc.to_dict()
+        lc2 = LineConfiguration.from_dict(d)
+        assert len(lc2) == 1
+        assert isinstance(lc2._entries[0].profile, GaussHermite)
+        # h3 and h4 should be LineShape tokens
+        assert isinstance(lc2._entries[0].fwhms.get('h3'), LineShape)
+        assert isinstance(lc2._entries[0].fwhms.get('h4'), LineShape)
 
 
 # ---------------------------------------------------------------------------

@@ -25,13 +25,6 @@ Generic Implementations
    :undoc-members:
    :show-inheritance:
 
-Spectrum Collection
--------------------
-
-.. automodule:: unite.instrument.spectrum
-   :members:
-   :show-inheritance:
-
 NIRSpec Dispersers
 ------------------
 
@@ -40,26 +33,10 @@ NIRSpec Dispersers
    :undoc-members:
    :show-inheritance:
 
-NIRSpec Spectrum
-----------------
-
-.. automodule:: unite.instrument.nirspec.spectrum
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 SDSS Disperser
 --------------
 
 .. automodule:: unite.instrument.sdss.disperser
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-SDSS Spectrum
--------------
-
-.. automodule:: unite.instrument.sdss.spectrum
    :members:
    :undoc-members:
    :show-inheritance:

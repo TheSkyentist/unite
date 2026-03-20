@@ -4,10 +4,12 @@ from unittest.mock import patch
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from astropy import units as u
 from astropy.table import Table
 
-from unite.instrument.sdss import SDSSDisperser, SDSSSpectrum
+from unite.instrument.sdss import SDSSDisperser
+from unite.spectrum import from_arrays, from_sdss_fits
 
 
 def _make_sdss_table(n=50, include_and_mask=True, has_bad_ivar=False):
@@ -82,84 +84,85 @@ class TestSDSSDisperser:
         assert 'SDSS-test' in repr(d2)
 
 
-class TestSDSSSpectrum:
-    """Tests for SDSSSpectrum loader."""
+class TestFromArraysSDSS:
+    """Tests for the from_arrays loader with an SDSS disperser."""
 
-    def test_is_generic_spectrum_subclass(self):
-        from unite.instrument.generic import GenericSpectrum
-
-        assert issubclass(SDSSSpectrum, GenericSpectrum)
-
-    def test_from_arrays(self):
+    def test_basic(self):
         npix = 50
         wl = np.linspace(4000, 8000, npix + 1) * u.AA
-        low = wl[:-1]
-        high = wl[1:]
         flux_unit = 1e-17 * u.erg / (u.s * u.cm**2 * u.AA)
-        flux = np.ones(npix) * flux_unit
-        error = np.full(npix, 0.1) * flux_unit
         d = SDSSDisperser()
-        # Set wavelength grid to allow proper construction
         d._wavelength_grid = jnp.asarray(np.linspace(4000, 8000, npix), dtype=float)
         d._R_grid = jnp.full_like(d._wavelength_grid, 2000.0)
         d._dlam_dpix_grid = jnp.gradient(d._wavelength_grid)
-        # Use constructor directly (not from_arrays)
-        spec = SDSSSpectrum(low=low, high=high, flux=flux, error=error, disperser=d)
+        spec = from_arrays(
+            wl[:-1],
+            wl[1:],
+            np.ones(npix) * flux_unit,
+            np.full(npix, 0.1) * flux_unit,
+            d,
+        )
         assert spec.npix == npix
         assert spec.name == 'SDSS'
 
 
-class TestSDSSFromFits:
-    """Tests for SDSSSpectrum.from_fits using mocked Table.read."""
+class TestFromSdssFits:
+    """Tests for from_sdss_fits using mocked Table.read."""
 
-    def test_from_fits_basic(self):
-        """from_fits loads a standard SDSS spec file with and_mask."""
+    def test_basic(self):
+        """from_sdss_fits loads a standard SDSS spec file with and_mask."""
         fake_table = _make_sdss_table(n=50, include_and_mask=True)
         with patch('astropy.table.Table.read', return_value=fake_table):
             disperser = SDSSDisperser()
-            spec = SDSSSpectrum.from_fits('fake.fits', disperser)
+            spec = from_sdss_fits('fake.fits', disperser)
 
         # and_mask pixel 20 is masked, so npix < 50
         assert spec.npix < 50
         assert spec.npix > 0
 
-    def test_from_fits_without_and_mask(self):
-        """from_fits works when and_mask column is absent (line 156-157)."""
+    def test_without_and_mask(self):
+        """from_sdss_fits works when and_mask column is absent."""
         fake_table = _make_sdss_table(n=50, include_and_mask=False)
         with patch('astropy.table.Table.read', return_value=fake_table):
-            disperser = SDSSDisperser()
-            spec = SDSSSpectrum.from_fits('fake.fits', disperser)
+            spec = from_sdss_fits('fake.fits', SDSSDisperser())
 
-        # All pixels have ivar > 0, so all should be kept
         assert spec.npix == 50
 
-    def test_from_fits_bad_ivar(self):
-        """from_fits masks pixels with ivar=0 and sets large error."""
+    def test_bad_ivar(self):
+        """from_sdss_fits masks pixels with ivar=0 and sets large error."""
         fake_table = _make_sdss_table(n=50, include_and_mask=False, has_bad_ivar=True)
         with patch('astropy.table.Table.read', return_value=fake_table):
-            disperser = SDSSDisperser()
-            spec = SDSSSpectrum.from_fits('fake.fits', disperser)
+            spec = from_sdss_fits('fake.fits', SDSSDisperser())
 
-        # Pixel 10 has ivar=0 and is masked by and_mask=False path (ivar > 0 filter)
         assert spec.npix == 49  # one bad pixel excluded
 
-    def test_from_fits_updates_disperser(self):
-        """from_fits updates the disperser's wavelength grid."""
+    def test_updates_disperser(self):
+        """from_sdss_fits updates the disperser's wavelength grid."""
         fake_table = _make_sdss_table(n=50, include_and_mask=False)
+        disperser = SDSSDisperser()
         with patch('astropy.table.Table.read', return_value=fake_table):
-            disperser = SDSSDisperser()
-            SDSSSpectrum.from_fits('fake.fits', disperser)
+            from_sdss_fits('fake.fits', disperser)
 
-        # Verify that from_fits updated the disperser's grids
         assert hasattr(disperser, '_wavelength_grid')
         assert disperser._wavelength_grid is not None
         assert len(disperser._wavelength_grid) == 50
 
-    def test_from_fits_custom_name(self):
-        """from_fits uses the provided name."""
+    def test_custom_name(self):
+        """from_sdss_fits uses the provided name."""
         fake_table = _make_sdss_table(n=50, include_and_mask=False)
         with patch('astropy.table.Table.read', return_value=fake_table):
-            disperser = SDSSDisperser()
-            spec = SDSSSpectrum.from_fits('fake.fits', disperser, name='MySpec')
+            spec = from_sdss_fits('fake.fits', SDSSDisperser(), name='MySpec')
 
         assert spec.name == 'MySpec'
+
+    def test_wrong_disperser_type_raises(self):
+        """from_sdss_fits raises TypeError for non-SDSSDisperser."""
+        from astropy import units as u
+
+        from unite.instrument.generic import GenericDisperser
+
+        bad_disperser = GenericDisperser(
+            R_func=lambda w: w * 0 + 2000, dlam_dpix_func=lambda w: w / 2000, unit=u.AA
+        )
+        with pytest.raises(TypeError, match='SDSSDisperser'):
+            from_sdss_fits('fake.fits', bad_disperser)

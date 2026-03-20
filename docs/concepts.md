@@ -89,11 +89,11 @@ lines, it generates a single shared latent variable in the NumPyro model.
 **Separate tokens → separate parameters:**
 
 ```python
-z_narrow = line.Redshift('narrow_z', prior=prior.Uniform(-0.01, 0.01))
-z_broad  = line.Redshift('broad_z',  prior=prior.Uniform(-0.01, 0.01))
+z_narrow = line.Redshift('narrow', prior=prior.Uniform(-0.01, 0.01))
+z_broad  = line.Redshift('broad',  prior=prior.Uniform(-0.01, 0.01))
 
-lc.add_line('H_alpha_narrow', 6563.0 * u.AA, redshift=z_narrow, ...)
-lc.add_line('H_alpha_broad',  6563.0 * u.AA, redshift=z_broad,  ...)
+lc.add_line('Ha_narrow', 6563.0 * u.AA, redshift=z_narrow, ...)
+lc.add_line('Ha_broad',  6563.0 * u.AA, redshift=z_broad,  ...)
 ```
 
 ---
@@ -114,8 +114,8 @@ Priors can be *dependent* on other tokens — for example, constraining a broad 
 exceed a narrow FWHM by at least 150 km/s:
 
 ```python
-fwhm_narrow = line.FWHM('fwhm_narrow', prior=prior.Uniform(100, 1000))
-fwhm_broad  = line.FWHM('fwhm_broad',  prior=prior.Uniform(fwhm_narrow + 150, 5000))
+fwhm_narrow = line.FWHM('narrow', prior=prior.Uniform(100, 1000))
+fwhm_broad  = line.FWHM('broad',  prior=prior.Uniform(fwhm_narrow + 150, 5000))
 ```
 
 See {doc}`usage/priors` for the full reference on supported priors, dependent priors, and

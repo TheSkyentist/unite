@@ -103,10 +103,10 @@ an explicit `names` array of the same length as `centers`.
 
 ```python
 # Auto-generated names: 'OIII_4960' and 'OIII_5008'
-lc.add_lines('OIII', np.array([4960, 5008]) * u.AA, redshift=z, fwhm_gauss=fwhm)
+lc.add_lines('OIII', [4960, 5008] * u.AA, redshift=z, fwhm_gauss=fwhm)
 
 # Explicit names
-lc.add_lines('OIII', np.array([4960, 5008]) * u.AA,
+lc.add_lines('OIII', [4960, 5008] * u.AA,
              names=['OIII_blue', 'OIII_red'], redshift=z)
 ```
 
@@ -115,7 +115,7 @@ Note how we fix the line ratio here.
 ```python
 flux = line.Flux('OIII')
 lc.add_lines(
-    'OIII', np.array([4960, 5008]) * u.AA,
+    'OIII', [4960, 5008] * u.AA,
     redshift = z, # Same redshift
     fwhm = [fwhm, fwhm], # Different FWHMs (just as an example)
     flux = [line.Flux(prior = prior.Fixed(flux / 3)), flux], # Fixed ratio
@@ -127,7 +127,7 @@ However, it is likely easier to specify multiples through the `strength` paramet
 ```python
 flux = line.Flux('OIII')
 lc.add_lines(
-    'OIII', np.array([4960, 5008]) * u.AA,
+    'OIII', [4960, 5008] * u.AA,
     flux = line.Flux(), # Default behaviour, this would mean all lines have the same flux
     strength = [1/3, 1] # But we pass a strength per line which is multiplied by the flux token when building the model
 )
@@ -173,8 +173,8 @@ Result: one `z` parameter and one `fwhm` parameter in the model, shared by all t
 ### Independent Parameters
 
 ```python
-z_narrow = line.Redshift('z_narrow', prior=prior.Uniform(-0.01, 0.01))
-z_broad  = line.Redshift('z_broad',  prior=prior.Uniform(-0.01, 0.01))
+z_narrow = line.Redshift('narrow', prior=prior.Uniform(-0.01, 0.01))
+z_broad  = line.Redshift('broad',  prior=prior.Uniform(-0.01, 0.01))
 
 lc.add_line('Ha_narrow', 6563.0 * u.AA, redshift=z_narrow, ...)
 lc.add_line('Ha_broad',  6563.0 * u.AA, redshift=z_broad,  ...)
@@ -237,8 +237,8 @@ that are automatically resolved at model-build time. See {doc}`priors` for the f
 reference.
 
 ```python
-fwhm_narrow = line.FWHM('fwhm_n', prior=prior.Uniform(50, 500))
-fwhm_broad  = line.FWHM('fwhm_b', prior=prior.Uniform(fwhm_narrow + 150, 5000))
+fwhm_narrow = line.FWHM('n', prior=prior.Uniform(50, 500))
+fwhm_broad  = line.FWHM('b', prior=prior.Uniform(fwhm_narrow + 150, 5000))
 ```
 
 This ensures the broad component is always at least 150 km/s wider than the narrow component.
@@ -254,13 +254,13 @@ Profiles are set via the `profile` argument (case-insensitive strings or class i
 
 | String | Profile | FWHM Parameter(s) | Shape Parameter(s) |
 |--------|---------|-------------------|--------------------|
-| `'Gaussian'`, `'gaussian'`, `'normal'` | `Gaussian` | `fwhm_gauss` |
-| `'Cauchy'`, `'cauchy'`, `'Lorentzian'`, `'lorentzian'` | `Cauchy` | `fwhm_lorentz` |
-| `'PseudoVoigt'`, `'pseudovoigt'`, `'voigt'` | `PseudoVoigt` | `fwhm_gauss`, `fwhm_lorentz` |
-| `'Laplace'`, `'laplace'`, `'exponential'` | `Laplace` | `fwhm_exp` |
-| `'SEMG'`, `'semg'`, `'exp-gaussian'` | `SEMG` | `fwhm_gauss`, `fwhm_exp |
-| `'GaussHermite'`, `'hermite'`, `'gauss-hermite'` | `GaussHermite` | `fwhm_gauss`, `h3`, `h4` |
-| `'SplitNormal'`, `'split-normal'`, `'two-sided'` | `SplitNormal` | `fwhm_blue`, `fwhm_red` |
+| `'gaussian'`, `'normal'` | `Gaussian` | `fwhm_gauss` |
+| `'cauchy'`, `'lorentzian'` | `Cauchy` | `fwhm_lorentz` |
+| `'pseudovoigt'`, `'voigt'` | `PseudoVoigt` | `fwhm_gauss`, `fwhm_lorentz` |
+| `'laplace'`, `'exponential'` | `Laplace` | `fwhm_exp` |
+| `'semg'`, `'exp-gaussian'` | `SEMG` | `fwhm_gauss`, `fwhm_exp |
+| `'hermite'`, `'gauss-hermite'` | `GaussHermite` | `fwhm_gauss`, `h3`, `h4` |
+| `'split-normal'`, `'two-sided'` | `SplitNormal` | `fwhm_blue`, `fwhm_red` |
 
 ### Gaussian (default)
 
@@ -284,12 +284,12 @@ An accurate numerical approximation to the Voigt profile, which is the convoluti
 ```python
 lc.add_line('H_alpha', 6563.0 * u.AA, profile='PseudoVoigt',
             redshift=z,
-            fwhm_gauss=line.FWHM('fwhm_g', prior=prior.Uniform(50, 500)),
-            fwhm_lorentz=line.FWHM('fwhm_l', prior=prior.Uniform(0, 500)),
+            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
+            fwhm_lorentz=line.FWHM('l', prior=prior.Uniform(0, 500)),
             flux=flux)
 ```
 
-### Cauchy
+### Cauchy (Lorentzian)
 
 A pure Lorentzian profile. Internally a `PseudoVoigt` with `fwhm_gauss = 0`.
 
@@ -302,7 +302,7 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='Cauchy',
             flux=flux)
 ```
 
-### Laplace
+### Laplace (Exponential)
 
 A double-exponential (Laplace) profile convolved with the Gaussian LSF.
 
@@ -339,8 +339,8 @@ A two-sided Gaussian with independent widths on the blue and red sides.
 ```python
 lc.add_line('H_alpha', 6563.0 * u.AA, profile='SplitNormal',
             redshift=z,
-            fwhm_blue=line.FWHM('fwhm_b', prior=prior.Uniform(50, 500)),
-            fwhm_red=line.FWHM('fwhm_r',  prior=prior.Uniform(50, 500)),
+            fwhm_blue=line.FWHM('b', prior=prior.Uniform(50, 500)),
+            fwhm_red=line.FWHM('r',  prior=prior.Uniform(50, 500)),
             flux=flux)
 ```
 

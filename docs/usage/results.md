@@ -250,3 +250,114 @@ for pred, spectrum in zip(predictions, model_args.spectra):
 
 {class}`~unite.evaluate.SpectrumPrediction` is a simple dataclass; use standard NumPy
 operations to compute any derived quantity you need.
+
+---
+
+## Model Diagnostics
+
+### Degrees of Freedom
+
+{func}`~unite.results.count_parameters` traces the compiled model once (no sampling
+required) and counts all free scalar parameters.
+
+```python
+from unite.results import count_parameters
+
+model_fn, model_args = builder.build()
+n_params = count_parameters(model_fn, model_args)
+print(f'Free parameters: {n_params}')
+```
+
+### Reduced Chi-Square
+
+Use the median model from {func}`~unite.results.make_spectra_tables` against the
+scaled errors.  The `scaled_error` column reflects any per-region error rescaling
+applied by {meth}`~unite.spectrum.Spectra.compute_scales`.
+
+```python
+import numpy as np
+
+percentiles = np.array([0.16, 0.5, 0.84])
+spectra_tables = make_spectra_tables(samples, model_args, percentiles=percentiles, insert_nan=True)
+
+chi2_total = 0.0
+n_pixels_total = 0
+for t in spectra_tables:
+    obs   = np.asarray(t['observed_flux'])
+    err   = np.asarray(t['scaled_error'])
+    med   = np.asarray(t['model_total'][:, 1])  # median (50th percentile)
+    valid = np.isfinite(obs) & np.isfinite(err) & np.isfinite(med) & (err > 0)
+    resid = (obs[valid] - med[valid]) / err[valid]
+    chi2_total     += float(np.sum(resid**2))
+    n_pixels_total += int(valid.sum())
+
+dof      = n_pixels_total - n_params
+chi2_red = chi2_total / dof
+print(f'χ²_ν = {chi2_red:.3f}  ({n_pixels_total} pixels − {n_params} params = {dof} DoF)')
+```
+
+### Log-Likelihood and Log-Posterior
+
+{func}`~numpyro.infer.util.log_likelihood` returns a dict of per-pixel log-likelihoods
+(one entry per spectrum); {func}`~numpyro.infer.util.log_density` evaluates the full
+log-joint density (likelihood + priors).  `jax.jit(jax.vmap(...))` compiles once and
+evaluates all samples in parallel, which is efficient for the typical ~1 000-sample case.
+
+```python
+import jax
+import jax.numpy as jnp
+from numpyro.infer.util import log_density, log_likelihood
+
+# Log-likelihood — shape (n_samples,) after summing over pixels
+log_liks = log_likelihood(model_fn, samples, model_args)
+n_samp   = next(iter(log_liks.values())).shape[0]
+total_ll = sum(v.reshape(n_samp, -1).sum(-1) for v in log_liks.values())
+print(f'Mean log-likelihood: {total_ll.mean():.2f}')
+
+# Log-posterior (unnormalized log-joint: log p(θ, data))
+def _log_joint(sample):
+    ld, _ = log_density(model_fn, (model_args,), {}, sample)
+    return ld
+
+log_joint = jax.jit(jax.vmap(_log_joint))(samples)
+print(f'Mean log-posterior: {log_joint.mean():.2f}')
+```
+
+### WAIC
+
+WAIC is computed per pixel from the log-likelihood arrays.  Lower WAIC is better.
+
+```python
+# Per-pixel log-likelihoods: (n_samples, n_pixels_total)
+ll_obs = jnp.concatenate(
+    [v.reshape(n_samp, -1) for v in log_liks.values()], axis=-1
+)
+
+lppd   = jnp.sum(jax.nn.logsumexp(ll_obs, axis=0) - jnp.log(n_samp))
+p_waic = jnp.sum(jnp.var(ll_obs, axis=0))
+waic   = -2.0 * (lppd - p_waic)
+print(f'WAIC: {waic:.2f}')
+```
+
+### Going further with ArviZ
+
+[ArviZ](https://python.arviz.org) has first-class NumPyro support and adds WAIC standard
+errors, PSIS-LOO, per-observation
+diagnostics, and `az.compare()` for ranking multiple models.
+
+```python
+import arviz as az
+
+# NUTS — pass the mcmc object directly; ArviZ extracts samples and log-likelihood
+# idata = az.from_numpyro(mcmc, log_likelihood=log_liks)
+
+# SVI — no mcmc object, so build InferenceData from dicts
+idata = az.from_dict(
+    posterior=samples,
+    log_likelihood=log_liks,   # dict of site → (n_samples, n_pixels)
+)
+
+az.waic(idata)   # waic, waic_se, p_waic
+az.loo(idata)    # PSIS-LOO; flags poorly-constrained pixels via Pareto-k
+az.compare({'model_a': idata_a, 'model_b': idata_b})  # rank multiple models
+```

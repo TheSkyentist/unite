@@ -2,7 +2,7 @@
 
 This tests the core power feature of unite: arbitrary-depth dependency
 chains between parameter tokens (FWHM, Redshift, Flux) expressed via
-ParameterRef arithmetic.  The test scenarios model real astrophysical
+parameter expression arithmetic.  The test scenarios model real astrophysical
 constraints such as:
 
 - Narrow → broad → outflow velocity ordering
@@ -19,10 +19,10 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import model
-from unite.instrument import Spectra
-from unite.instrument.generic import GenericSpectrum, SimpleDisperser
+from unite.instrument.generic import SimpleDisperser
 from unite.line.config import FWHM, Flux, LineConfiguration, Redshift
-from unite.prior import ParameterRef, TruncatedNormal, Uniform, topological_sort
+from unite.prior import TruncatedNormal, Uniform, _Expr, topological_sort
+from unite.spectrum import Spectra, Spectrum
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +39,7 @@ def _make_spectrum(wl_range=(6400, 6700), npix=200, name='test'):
     rng = np.random.default_rng(42)
     flux = (10.0 + rng.normal(0, 1, npix)) * flux_unit
     error = np.full(npix, 1.0) * flux_unit
-    return GenericSpectrum(
+    return Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
     )
 
@@ -129,10 +129,9 @@ class TestParameterAsBound:
         broad = FWHM('broad', prior=Uniform(low=narrow, high=3000))
 
         assert narrow in broad.prior.dependencies()
-        # The low bound should be a ParameterRef with scale=1 offset=0
-        assert isinstance(broad.prior.low, ParameterRef)
-        assert broad.prior.low.scale == 1.0
-        assert broad.prior.low.offset == 0.0
+        # The low bound is an expression that resolves to the narrow token's value
+        assert isinstance(broad.prior.low, _Expr)
+        assert broad.prior.low.resolve({narrow: 200.0}) == pytest.approx(200.0)
 
     def test_parameter_as_bound_resolves(self):
         """Parameter used directly as bound should resolve correctly."""
@@ -467,7 +466,7 @@ class TestDiamondDependencies:
 
 
 class TestComplexArithmetic:
-    """Tests for complex ParameterRef arithmetic chains."""
+    """Tests for complex parameter expression arithmetic chains."""
 
     def test_scale_then_add(self):
         """param * 2 + 150."""
@@ -497,7 +496,7 @@ class TestComplexArithmetic:
         assert float(d.low) == pytest.approx(300.0)
 
     def test_nested_ref_in_truncated_normal(self):
-        """TruncatedNormal with all bounds as ParameterRef expressions."""
+        """TruncatedNormal with all bounds as parameter expressions."""
         base = FWHM('base', prior=Uniform(100, 500))
         derived = FWHM(
             'derived',
@@ -541,9 +540,9 @@ class TestDeepChainSerialization:
         assert narrow2 in medium2.prior.dependencies()
         # broad depends on medium
         assert medium2 in broad2.prior.dependencies()
-        # Verify the scale was preserved
-        assert isinstance(broad2.prior.low, ParameterRef)
-        assert broad2.prior.low.scale == pytest.approx(1.5)
+        # Verify the expression was preserved: medium * 1.5
+        assert isinstance(broad2.prior.low, _Expr)
+        assert broad2.prior.low.resolve({medium2: 100.0}) == pytest.approx(150.0)
 
     def test_flux_ratio_serialization(self):
         """Flux ratio dependencies survive serialization."""
@@ -566,9 +565,9 @@ class TestDeepChainSerialization:
         f_w2 = lc2._entries[1].flux
         assert f_s2 in f_w2.prior.dependencies()
 
-        # Verify scale and offset preserved
-        assert isinstance(f_w2.prior.loc, ParameterRef)
-        assert f_w2.prior.loc.scale == pytest.approx(1.0 / 2.95, rel=1e-5)
+        # Verify the expression was preserved: f_s2 / 2.95
+        assert isinstance(f_w2.prior.loc, _Expr)
+        assert f_w2.prior.loc.resolve({f_s2: 2.95}) == pytest.approx(1.0, rel=1e-5)
 
     def test_file_roundtrip_deep_chain(self, tmp_path):
         """Deep chain survives save/load to file."""

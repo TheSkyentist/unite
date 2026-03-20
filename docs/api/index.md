@@ -9,6 +9,7 @@ config
 line
 continuum
 instrument
+spectrum
 prior
 model
 results

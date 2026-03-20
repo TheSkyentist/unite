@@ -1546,3 +1546,108 @@ class TestContinuumConfigurationAdd:
 
 
 # ---------------------------------------------------------------------------
+# Form validation errors and repr
+# ---------------------------------------------------------------------------
+
+
+class TestChebyshevValidation:
+    def test_invalid_stretch_raises(self):
+        with pytest.raises(ValueError, match='stretch factor must be > 0'):
+            Chebyshev(stretch=0.0)
+
+    def test_negative_stretch_raises(self):
+        with pytest.raises(ValueError, match='stretch factor must be > 0'):
+            Chebyshev(stretch=-1.0)
+
+    def test_repr(self):
+        c = Chebyshev(order=3, stretch=2.0)
+        r = repr(c)
+        assert 'Chebyshev' in r
+        assert '3' in r
+        assert '2.0' in r
+
+
+class TestBernsteinValidation:
+    def test_invalid_stretch_raises(self):
+        with pytest.raises(ValueError, match='stretch factor must be > 0'):
+            Bernstein(stretch=0.0)
+
+    def test_negative_stretch_raises(self):
+        with pytest.raises(ValueError, match='stretch factor must be > 0'):
+            Bernstein(stretch=-0.5)
+
+    def test_repr(self):
+        b = Bernstein(degree=3, stretch=1.5)
+        r = repr(b)
+        assert 'Bernstein' in r
+        assert '3' in r
+
+
+class TestBSplineValidation:
+    def test_non_quantity_knots_raises(self):
+        with pytest.raises(ValueError, match='knots must be an astropy Quantity'):
+            BSpline(knots=[6500.0, 6550.0, 6600.0])
+
+    def test_degree_property(self):
+        knots = [6520.0, 6560.0] * u.AA
+        b = BSpline(knots=knots, degree=2)
+        assert b.degree == 2
+
+    def test_knots_property(self):
+        knots = [6520.0, 6560.0] * u.AA
+        b = BSpline(knots=knots)
+        assert len(b.knots) == 2
+
+    def test_repr(self):
+        knots = [6520.0, 6560.0] * u.AA
+        b = BSpline(knots=knots, degree=3)
+        r = repr(b)
+        assert 'BSpline' in r
+        assert '3' in r
+
+
+class TestPolynomialRepr:
+    def test_repr(self):
+        p = Polynomial(degree=2)
+        r = repr(p)
+        assert 'Polynomial' in r
+        assert '2' in r
+
+
+class TestAttenuatedBlackbodyValidation:
+    def test_non_quantity_lambda_ext_raises(self):
+        with pytest.raises(ValueError, match='lambda_ext must be an astropy Quantity'):
+            AttenuatedBlackbody(lambda_ext=0.55)
+
+    def test_repr(self):
+        a = AttenuatedBlackbody()
+        r = repr(a)
+        assert 'AttenuatedBlackbody' in r
+
+    def test_eq_different_type(self):
+        a = AttenuatedBlackbody()
+        assert a.__eq__('other') is NotImplemented
+
+    def test_default_priors(self):
+        a = AttenuatedBlackbody()
+        priors = a.default_priors(region_center=1.0)
+        assert 'scale' in priors
+        assert 'temperature' in priors
+        assert 'tau_v' in priors
+        assert 'alpha' in priors
+        assert 'norm_wav' in priors
+
+
+class TestModifiedBlackbodyDefaultPriors:
+    def test_default_priors(self):
+        m = ModifiedBlackbody()
+        priors = m.default_priors(region_center=1.5)
+        assert 'scale' in priors
+        assert 'temperature' in priors
+        assert 'beta' in priors
+        assert 'norm_wav' in priors
+        # norm_wav should be fixed at region_center
+        assert isinstance(priors['norm_wav'], Fixed)
+
+
+# ---------------------------------------------------------------------------

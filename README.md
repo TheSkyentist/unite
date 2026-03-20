@@ -48,7 +48,7 @@ from unite.results import make_parameter_table, make_spectra_tables
 
 # 1. Configure lines with shared kinematics
 z    = line.Redshift('z',    prior=prior.Uniform(-0.005, 0.005))
-fwhm = line.FWHM('fwhm_nlr', prior=prior.Uniform(100, 1000))
+fwhm = line.FWHM('narrow', prior=prior.Uniform(100, 1000))
 
 lc = line.LineConfiguration()
 lc.add_line('H_alpha',  6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
