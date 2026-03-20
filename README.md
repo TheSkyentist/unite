@@ -43,26 +43,37 @@ from numpyro import infer
 
 from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.instrument import Spectra, nirspec
+from unite.instrument import nirspec
 from unite.results import make_parameter_table, make_spectra_tables
+from unite.spectrum import Spectra, from_DJA
 
 # 1. Configure lines with shared kinematics
-z    = line.Redshift('z',    prior=prior.Uniform(-0.005, 0.005))
+z    = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
 fwhm = line.FWHM('narrow', prior=prior.Uniform(100, 1000))
 
 lc = line.LineConfiguration()
-lc.add_line('H_alpha',  6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 10)))
-lc.add_line('NII_6585', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('NII_flux', prior=prior.Uniform(0, 10)))
+lc.add_line(
+    'H_alpha',  
+    6563.0 * u.AA, 
+    redshift=z, 
+    fwhm_gauss=fwhm,
+    flux=line.Flux(prior=prior.Uniform(0, 10))
+)
+lc.add_line(
+    'NII_6585', 
+    6585.0 * u.AA, 
+    redshift=z, 
+    fwhm_gauss=fwhm,
+    flux=line.Flux(prior=prior.Uniform(0, 10))
+)
 
 cc = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
 
 # 2. Load spectra (NIRSpec example; any instrument works)
 g395m = nirspec.G395M()
-spectrum = nirspec.NIRSpecSpectrum.from_DJA('spectrum.fits', disperser=g395m)
+spec = from_DJA('dja-spectrum.fits', disperser=g395m)
 
-spectra = Spectra([spectrum], redshift=5.28)
+spectra = Spectra([spec], redshift=5.28)
 filtered_lines, filtered_cont = spectra.prepare(lc, cc)
 spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 
@@ -74,8 +85,8 @@ mcmc = infer.MCMC(infer.NUTS(model_fn), num_warmup=500, num_samples=1000)
 mcmc.run(jax.random.PRNGKey(0), model_args)
 
 # 4. Extract results
-param_table   = make_parameter_table(mcmc.get_samples(), model_args)
-spectra_tables = make_spectra_tables(mcmc.get_samples(), model_args, summary=True)
+param_table = make_parameter_table(mcmc.get_samples(), model_args)
+spectra_tables = make_spectra_tables(mcmc.get_samples(), model_args)
 ```
 
 ## Contributing
