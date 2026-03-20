@@ -2,6 +2,7 @@
 
 import astropy.units as u
 import numpy as np
+import pytest
 from astropy.io import fits
 from astropy.table import Table
 from jax import random
@@ -20,30 +21,28 @@ from unite.results import (
 )
 from unite.spectrum import Spectra, Spectrum
 
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
-def _setup():
-    """Create model and get predictive samples."""
-    wavelength = np.linspace(6500, 6600, 60) * u.AA
-    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
+
+def _make_spectrum(name='test', npix=60):
+    wavelength = np.linspace(6500, 6600, npix) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name=name)
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
-
     sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
     line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
     rng = np.random.default_rng(42)
-    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
-    flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
-    error = np.full(len(wavelength), 1.0) * flux_unit
-
-    spectrum = Spectrum(
-        low=low,
-        high=high,
-        flux=flux,
-        error=error,
-        disperser=disperser,
-        name='test_spec',
+    flux = (line_flux + 5.0 + rng.normal(0, 1, npix)) * flux_unit
+    error = np.full(npix, 1.0) * flux_unit
+    return Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
     )
 
+
+def _simple_lc():
     lc = line.LineConfiguration()
     lc.add_line(
         'Ha',
@@ -52,462 +51,55 @@ def _setup():
         fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
         flux=line.Flux(prior=prior.Uniform(0, 5)),
     )
+    return lc
 
+
+def _build_model(spectrum, lc, cc=None):
     spectra = Spectra([spectrum], redshift=0.0)
-    spectra.prepare(lc)
-    spectra.compute_scales(spectra.prepared_line_config)
-
-    model_fn, args = model.ModelBuilder(
-        spectra.prepared_line_config, None, spectra
+    spectra.prepare(lc, cc)
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+    return model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
     ).build()
 
-    rng_key = random.PRNGKey(0)
-    predictive = Predictive(model_fn, num_samples=4)
-    samples = predictive(rng_key, args)
 
+# ---------------------------------------------------------------------------
+# Module-level fixtures (each model built once per module)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope='module')
+def simple_setup():
+    """Lines-only model with 4 predictive samples."""
+    lc = _simple_lc()
+    model_fn, args = _build_model(_make_spectrum(), lc)
+    samples = Predictive(model_fn, num_samples=4)(random.PRNGKey(0), args)
     return samples, args
 
 
-class TestMakeParameterTable:
-    """Tests for make_parameter_table."""
-
-    def test_returns_table(self):
-        samples, args = _setup()
-        table = make_parameter_table(samples, args)
-        assert isinstance(table, Table)
-
-    def test_has_all_parameters(self):
-        samples, args = _setup()
-        table = make_parameter_table(samples, args)
-        for pname in args.dependency_order:
-            assert pname in table.colnames
-
-    def test_correct_n_rows(self):
-        samples, args = _setup()
-        table = make_parameter_table(samples, args)
-        assert len(table) == 4  # 4 samples
-
-    def test_metadata(self):
-        samples, args = _setup()
-        table = make_parameter_table(samples, args)
-        assert 'LFLXSCL' in table.meta
-        assert 'ZSYS' in table.meta
-
-    def test_percentiles_mode(self):
-        samples, args = _setup()
-        percentiles = np.array([0.16, 0.5, 0.84])
-        table = make_parameter_table(samples, args, percentiles=percentiles)
-        assert 'percentile' in table.colnames
-        assert len(table) == 3  # 3 percentiles
-        assert np.allclose(table['percentile'], percentiles)
-
-    def test_percentiles_mode_has_parameters(self):
-        samples, args = _setup()
-        percentiles = np.array([0.16, 0.5, 0.84])
-        table = make_parameter_table(samples, args, percentiles=percentiles)
-        for pname in args.dependency_order:
-            assert pname in table.colnames
-
-
-class TestMakeSpectraTables:
-    """Tests for make_spectra_tables."""
-
-    def test_returns_list_of_tables(self):
-        samples, args = _setup()
-        tables = make_spectra_tables(samples, args)
-        assert isinstance(tables, list)
-        assert len(tables) == 1
-        assert isinstance(tables[0], Table)
-
-    def test_has_wavelength_column(self):
-        samples, args = _setup()
-        tables = make_spectra_tables(samples, args)
-        assert 'wavelength' in tables[0].colnames
-
-    def test_has_model_total_column(self):
-        samples, args = _setup()
-        tables = make_spectra_tables(samples, args)
-        assert 'model_total' in tables[0].colnames
-
-    def test_has_observed_columns(self):
-        samples, args = _setup()
-        tables = make_spectra_tables(samples, args)
-        t = tables[0]
-        assert 'observed_flux' in t.colnames
-        assert 'observed_error' in t.colnames
-        assert 'scaled_error' in t.colnames
-
-    def test_has_spectrum_metadata(self):
-        samples, args = _setup()
-        tables = make_spectra_tables(samples, args)
-        t = tables[0]
-        assert 'SPECNAME' in t.meta
-        assert 'NORMFAC' in t.meta
-
-    def test_percentiles_mode(self):
-        samples, args = _setup()
-        percentiles = np.array([0.16, 0.5, 0.84])
-        tables = make_spectra_tables(samples, args, percentiles=percentiles)
-        t = tables[0]
-        # Percentiles gives (n_pixels, n_percentiles) for model columns
-        assert t['model_total'].shape[0] == len(t['wavelength'])
-        assert t['model_total'].shape[1] == 3  # 3 percentiles
-
-
-def _setup_with_continuum():
-    """Create model with continuum and get predictive samples."""
-    wavelength = np.linspace(6500, 6600, 60) * u.AA
-    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
-    low = wavelength - 0.5 * np.gradient(wavelength)
-    high = wavelength + 0.5 * np.gradient(wavelength)
-
-    sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
-    line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
-    rng = np.random.default_rng(42)
-    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
-    flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
-    error = np.full(len(wavelength), 1.0) * flux_unit
-
-    spectrum = Spectrum(
-        low=low,
-        high=high,
-        flux=flux,
-        error=error,
-        disperser=disperser,
-        name='test_spec',
-    )
-
-    lc = line.LineConfiguration()
-    lc.add_line(
-        'Ha',
-        6563.0 * u.AA,
-        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
-        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
-        flux=line.Flux(prior=prior.Uniform(0, 5)),
-    )
-
+@pytest.fixture(scope='module')
+def continuum_setup():
+    """Lines + continuum model with 4 predictive samples."""
+    lc = _simple_lc()
     cont = ContinuumConfiguration.from_lines(
         lc.centers, width=30_000 * u.km / u.s, form=Linear()
     )
-
-    spectra = Spectra([spectrum], redshift=0.0)
-    spectra.prepare(lc, cont)
-    spectra.compute_scales(spectra.prepared_line_config)
-
-    model_fn, args = model.ModelBuilder(
-        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
-    ).build()
-
-    rng_key = random.PRNGKey(0)
-    predictive = Predictive(model_fn, num_samples=4)
-    samples = predictive(rng_key, args)
-
+    model_fn, args = _build_model(_make_spectrum(), lc, cont)
+    samples = Predictive(model_fn, num_samples=4)(random.PRNGKey(0), args)
     return samples, args
 
 
-class TestRestEquivalentWidths:
-    """Tests for rest equivalent width columns in make_parameter_table."""
-
-    def test_rew_columns_present(self):
-        samples, args = _setup_with_continuum()
-        table = make_parameter_table(samples, args)
-        assert 'rew_Ha' in table.colnames
-
-    def test_rew_has_unit(self):
-        samples, args = _setup_with_continuum()
-        table = make_parameter_table(samples, args)
-        assert table['rew_Ha'].unit is not None
-
-    def test_rew_shape(self):
-        samples, args = _setup_with_continuum()
-        table = make_parameter_table(samples, args)
-        assert len(table['rew_Ha']) == 4  # 4 samples
-
-    def test_rew_finite(self):
-        samples, args = _setup_with_continuum()
-        table = make_parameter_table(samples, args)
-        assert np.all(np.isfinite(np.asarray(table['rew_Ha'])))
-
-    def test_rew_percentiles_mode(self):
-        samples, args = _setup_with_continuum()
-        percentiles = np.array([0.16, 0.5, 0.84])
-        table = make_parameter_table(samples, args, percentiles=percentiles)
-        assert 'rew_Ha' in table.colnames
-        assert len(table['rew_Ha']) == 3  # 3 percentiles
-        assert 'percentile' in table.colnames
-        assert np.allclose(table['percentile'], percentiles)
-
-    def test_no_rew_without_continuum(self):
-        samples, args = _setup()
-        table = make_parameter_table(samples, args)
-        assert not any(col.startswith('rew_') for col in table.colnames)
-
-
-class TestMakeHDUL:
-    """Tests for make_hdul."""
-
-    def test_returns_hdulist(self):
-        samples, args = _setup()
-        hdul = make_hdul(samples, args)
-        assert isinstance(hdul, fits.HDUList)
-
-    def test_primary_hdu(self):
-        samples, args = _setup()
-        hdul = make_hdul(samples, args)
-        assert isinstance(hdul[0], fits.PrimaryHDU)
-        assert 'ZSYS' in hdul[0].header
-
-    def test_parameter_hdu(self):
-        samples, args = _setup()
-        hdul = make_hdul(samples, args)
-        assert hdul[1].name == 'PARAMETERS'
-        assert isinstance(hdul[1], fits.BinTableHDU)
-
-    def test_spectrum_hdu(self):
-        samples, args = _setup()
-        hdul = make_hdul(samples, args)
-        # HDU 2 should be the spectrum table
-        assert len(hdul) >= 3
-        assert isinstance(hdul[2], fits.BinTableHDU)
-
-    def test_n_hdus(self):
-        samples, args = _setup()
-        hdul = make_hdul(samples, args)
-        # Primary + params + 1 spectrum = 3
-        assert len(hdul) == 3
-
-
-# ---------------------------------------------------------------------------
-# _get_n_samples edge case (results.py line 315)
-# ---------------------------------------------------------------------------
-
-
-class TestGetNSamples:
-    """Tests for _get_n_samples helper."""
-
-    def test_empty_dict_returns_1(self):
-        """_get_n_samples with empty dict returns 1."""
-        assert _get_n_samples({}) == 1
-
-    def test_non_empty_returns_first_shape(self):
-        """_get_n_samples returns shape[0] of first array."""
-        result = _get_n_samples({'x': np.ones(7)})
-        assert result == 7
-
-
-# ---------------------------------------------------------------------------
-# make_hdul with continuum (results.py lines 284-286)
-# ---------------------------------------------------------------------------
-
-
-class TestMakeHDULWithContinuum:
-    """Tests for make_hdul with a continuum configuration (covers lines 281-286)."""
-
-    def test_continuum_scale_in_header(self):
-        """make_hdul with continuum: CNTSCL and CNTUNT are in primary header."""
-        samples, args = _setup_with_continuum()
-        hdul = make_hdul(samples, args)
-        # The primary header should have line scale info
-        assert 'LFLXSCL' in hdul[0].header
-        assert 'LFLXUNT' in hdul[0].header
-
-    def test_hdul_with_continuum_n_hdus(self):
-        """make_hdul with continuum has correct number of HDUs."""
-        samples, args = _setup_with_continuum()
-        hdul = make_hdul(samples, args)
-        # Primary + params + 1 spectrum = 3
-        assert len(hdul) == 3
-
-
-# ---------------------------------------------------------------------------
-# make_spectra_tables summary mode with continuum (lines 209-212)
-# ---------------------------------------------------------------------------
-
-
-class TestMakeSpectraTablesWithContinuum:
-    """make_spectra_tables with continuum: covers lines 209-212, 220-221."""
-
-    def test_percentiles_mode_continuum_columns(self):
-        """Percentiles mode with continuum produces (n_pix, n_percentiles) continuum columns."""
-        samples, args = _setup_with_continuum()
-        percentiles = np.array([0.16, 0.5, 0.84])
-        tables = make_spectra_tables(samples, args, percentiles=percentiles)
-        t = tables[0]
-        # Should have at least one continuum region column
-        cont_cols = [
-            c
-            for c in t.colnames
-            if c
-            not in (
-                'wavelength',
-                'model_total',
-                'Ha',
-                'observed_flux',
-                'observed_error',
-                'scaled_error',
-            )
-        ]
-        assert len(cont_cols) > 0
-        for col in cont_cols:
-            assert t[col].shape[1] == 3  # 3 percentiles
-
-    def test_full_mode_continuum_columns(self):
-        """Full mode (percentiles=None) with continuum produces (n_pix, n_samples) continuum columns."""
-        samples, args = _setup_with_continuum()
-        tables = make_spectra_tables(samples, args, percentiles=None)
-        t = tables[0]
-        cont_cols = [
-            c
-            for c in t.colnames
-            if c
-            not in (
-                'wavelength',
-                'model_total',
-                'Ha',
-                'observed_flux',
-                'observed_error',
-                'scaled_error',
-            )
-        ]
-        assert len(cont_cols) > 0
-        n_samples = 4
-        for col in cont_cols:
-            assert t[col].shape[1] == n_samples
-
-
-# ---------------------------------------------------------------------------
-# insert_nan coverage (results.py lines 237-238, 468-503)
-# ---------------------------------------------------------------------------
-
-
-def _setup_two_region_continuum():
-    """Model with TWO non-adjacent continuum regions to test insert_nan."""
-    from jax import random
-    from numpyro.infer import Predictive
-
-    # Wide wavelength range covering two separate regions
-    wavelength = (
-        np.concatenate([np.linspace(6480, 6540, 30), np.linspace(6580, 6640, 30)])
-        * u.AA
-    )
-    wavelength = np.sort(wavelength)
-
-    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='two_region')
-    low = wavelength - 0.5 * np.gradient(wavelength)
-    high = wavelength + 0.5 * np.gradient(wavelength)
-    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
-    flux = np.ones(len(wavelength)) * 5.0 * flux_unit
-    error = np.ones(len(wavelength)) * flux_unit
-
-    spectrum = Spectrum(
-        low=low,
-        high=high,
-        flux=flux,
-        error=error,
-        disperser=disperser,
-        name='two_region_spec',
-    )
-
-    lc = line.LineConfiguration()
-    lc.add_line(
-        'Ha',
-        6510.0 * u.AA,
-        redshift=line.Redshift(prior=prior.Fixed(0.0)),
-        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
-        flux=line.Flux(prior=prior.Uniform(0, 5)),
-    )
-    lc.add_line(
-        'Hb',
-        6610.0 * u.AA,
-        redshift=line.Redshift(prior=prior.Fixed(0.0)),
-        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
-        flux=line.Flux(prior=prior.Uniform(0, 5)),
-    )
-
-    # Two separate continuum regions
-    cc = ContinuumConfiguration(
-        [
-            ContinuumRegion(6480.0 * u.AA, 6540.0 * u.AA, form=Linear()),
-            ContinuumRegion(6580.0 * u.AA, 6640.0 * u.AA, form=Linear()),
-        ]
-    )
-
-    spectra = Spectra([spectrum], redshift=0.0)
-    spectra.prepare(lc, cc)
-    spectra.compute_scales(spectra.prepared_line_config)
-
-    model_fn, args = model.ModelBuilder(
-        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
-    ).build()
-
-    rng_key = random.PRNGKey(42)
-    predictive = Predictive(model_fn, num_samples=2)
-    samples = predictive(rng_key, args)
-
-    return samples, args
-
-
-class TestInsertNan:
-    """Tests for make_spectra_tables with insert_nan=True."""
-
-    def test_insert_nan_adds_rows(self):
-        """With two regions, insert_nan=True adds NaN separator rows."""
-        samples, args = _setup_two_region_continuum()
-        tables_without = make_spectra_tables(samples, args, insert_nan=False)
-        tables_with = make_spectra_tables(samples, args, insert_nan=True)
-        # Should have at least one more row due to NaN insert
-        assert len(tables_with[0]) > len(tables_without[0])
-
-    def test_insert_nan_nan_row_exists(self):
-        """NaN row is actually NaN in the model_total column."""
-        samples, args = _setup_two_region_continuum()
-        tables = make_spectra_tables(samples, args, insert_nan=True)
-        t = tables[0]
-        model_vals = np.asarray(t['model_total'])
-        # At least one row should contain NaN
-        assert np.any(np.isnan(model_vals))
-
-
-# ---------------------------------------------------------------------------
-# count_parameters
-# ---------------------------------------------------------------------------
-
-
-def _setup_with_model_fn():
-    """Return (model_fn, args, samples) from the basic setup."""
-    wavelength = np.linspace(6500, 6600, 60) * u.AA
-    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
-    low = wavelength - 0.5 * np.gradient(wavelength)
-    high = wavelength + 0.5 * np.gradient(wavelength)
-    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
-    rng = np.random.default_rng(0)
-    flux = (5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
-    error = np.full(len(wavelength), 1.0) * flux_unit
-
-    spectrum = Spectrum(
-        low=low, high=high, flux=flux, error=error, disperser=disperser, name='s'
-    )
-
-    lc = line.LineConfiguration()
-    lc.add_line(
-        'Ha',
-        6563.0 * u.AA,
-        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
-        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
-        flux=line.Flux(prior=prior.Uniform(0, 5)),
-    )
-
-    spectra = Spectra([spectrum], redshift=0.0)
-    spectra.prepare(lc)
-    spectra.compute_scales(spectra.prepared_line_config)
-    model_fn, args = model.ModelBuilder(
-        spectra.prepared_line_config, None, spectra
-    ).build()
+@pytest.fixture(scope='module')
+def model_fn_args():
+    """Return (model_fn, args) without samples, for count_parameters."""
+    lc = _simple_lc()
+    model_fn, args = _build_model(_make_spectrum(name='s'), lc)
     return model_fn, args
 
 
-def _setup_with_calib_param():
-    """Create model with a calibration (instrument) parameter."""
+@pytest.fixture(scope='module')
+def calib_param_setup():
+    """Model with a FluxScale calibration parameter and 4 predictive samples."""
     from unite.instrument.base import FluxScale
 
     wavelength = np.linspace(6500, 6600, 60) * u.AA
@@ -517,128 +109,282 @@ def _setup_with_calib_param():
     )
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
-    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
     sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
     line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
     rng = np.random.default_rng(42)
     flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
     error = np.full(len(wavelength), 1.0) * flux_unit
-
-    spectrum = Spectrum(
+    spec = Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name='calib'
     )
-    lc = line.LineConfiguration()
-    lc.add_line(
-        'Ha',
-        6563.0 * u.AA,
-        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
-        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
-        flux=line.Flux(prior=prior.Uniform(0, 5)),
-    )
-    spectra = Spectra([spectrum], redshift=0.0)
-    spectra.prepare(lc)
-    spectra.compute_scales(spectra.prepared_line_config)
-    model_fn, args = model.ModelBuilder(
-        spectra.prepared_line_config, None, spectra
-    ).build()
-    rng_key = random.PRNGKey(0)
-    predictive = Predictive(model_fn, num_samples=4)
-    samples = predictive(rng_key, args)
+    lc = _simple_lc()
+    model_fn, args = _build_model(spec, lc)
+    samples = Predictive(model_fn, num_samples=4)(random.PRNGKey(0), args)
     return samples, args
 
 
-def _setup_with_continuum_scale():
-    """Create model with continuum scale computed (so csq is not None in make_hdul)."""
-    wavelength = np.linspace(6500, 6600, 60) * u.AA
-    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='test')
-    low = wavelength - 0.5 * np.gradient(wavelength)
-    high = wavelength + 0.5 * np.gradient(wavelength)
-    sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
-    line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
-    rng = np.random.default_rng(42)
-    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
-    flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
-    error = np.full(len(wavelength), 1.0) * flux_unit
-    spectrum = Spectrum(
-        low=low, high=high, flux=flux, error=error, disperser=disperser, name='cs'
-    )
-
-    lc = line.LineConfiguration()
-    lc.add_line(
-        'Ha',
-        6563.0 * u.AA,
-        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
-        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
-        flux=line.Flux(prior=prior.Uniform(0, 5)),
-    )
+@pytest.fixture(scope='module')
+def continuum_scale_setup():
+    """Lines + continuum model with continuum_scale computed, 4 samples."""
+    lc = _simple_lc()
     cont = ContinuumConfiguration.from_lines(
         lc.centers, width=30_000 * u.km / u.s, form=Linear()
     )
-
-    spectra = Spectra([spectrum], redshift=0.0)
+    spectra = Spectra([_make_spectrum(name='cs')], redshift=0.0)
     spectra.prepare(lc, cont)
     spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
-
     model_fn, args = model.ModelBuilder(
         spectra.prepared_line_config, spectra.prepared_cont_config, spectra
     ).build()
-    rng_key = random.PRNGKey(0)
-    predictive = Predictive(model_fn, num_samples=4)
-    samples = predictive(rng_key, args)
+    samples = Predictive(model_fn, num_samples=4)(random.PRNGKey(0), args)
     return samples, args
 
 
-class TestInstrumentGroupInParameterTable:
-    """Tests that calibration (instrument) parameters appear in the parameter table."""
+@pytest.fixture(scope='module')
+def two_region_setup():
+    """Model with two non-adjacent continuum regions and 2 predictive samples."""
+    wavelength = (
+        np.concatenate([np.linspace(6480, 6540, 30), np.linspace(6580, 6640, 30)])
+        * u.AA
+    )
+    wavelength = np.sort(wavelength)
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='two_region')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    spec = Spectrum(
+        low=low,
+        high=high,
+        flux=np.ones(len(wavelength)) * 5.0 * flux_unit,
+        error=np.ones(len(wavelength)) * flux_unit,
+        disperser=disperser,
+        name='two_region_spec',
+    )
+    lc = line.LineConfiguration()
+    for name, center in [('Ha', 6510.0), ('Hb', 6610.0)]:
+        lc.add_line(
+            name,
+            center * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Uniform(0, 5)),
+        )
+    cc = ContinuumConfiguration(
+        [
+            ContinuumRegion(6480.0 * u.AA, 6540.0 * u.AA, form=Linear()),
+            ContinuumRegion(6580.0 * u.AA, 6640.0 * u.AA, form=Linear()),
+        ]
+    )
+    spectra = Spectra([spec], redshift=0.0)
+    spectra.prepare(lc, cc)
+    spectra.compute_scales(spectra.prepared_line_config)
+    model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+    samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(42), args)
+    return samples, args
 
-    def test_instrument_param_in_table(self):
-        """Instrument params (FluxScale) should appear in the parameter table."""
-        samples, args = _setup_with_calib_param()
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+_PERCENTILES = np.array([0.16, 0.5, 0.84])
+
+
+class TestMakeParameterTable:
+    """Tests for make_parameter_table."""
+
+    def test_full_mode(self, simple_setup):
+        """Table has correct type, all parameter columns, row count, and metadata."""
+        samples, args = simple_setup
+        table = make_parameter_table(samples, args)
+        assert isinstance(table, Table)
+        assert len(table) == 4
+        for pname in args.dependency_order:
+            assert pname in table.colnames
+        assert 'LFLXSCL' in table.meta
+        assert 'ZSYS' in table.meta
+
+    def test_percentiles_mode(self, simple_setup):
+        """Percentile mode adds 'percentile' column with correct values."""
+        samples, args = simple_setup
+        table = make_parameter_table(samples, args, percentiles=_PERCENTILES)
+        assert 'percentile' in table.colnames
+        assert len(table) == 3
+        assert np.allclose(table['percentile'], _PERCENTILES)
+        for pname in args.dependency_order:
+            assert pname in table.colnames
+
+
+class TestMakeSpectraTables:
+    """Tests for make_spectra_tables."""
+
+    def test_full_mode(self, simple_setup):
+        """Returns list of one Table with correct columns and metadata."""
+        samples, args = simple_setup
+        tables = make_spectra_tables(samples, args)
+        assert isinstance(tables, list) and len(tables) == 1
+        t = tables[0]
+        assert isinstance(t, Table)
+        for col in (
+            'wavelength',
+            'model_total',
+            'observed_flux',
+            'observed_error',
+            'scaled_error',
+        ):
+            assert col in t.colnames
+        assert 'SPECNAME' in t.meta
+        assert 'NORMFAC' in t.meta
+
+    def test_percentiles_mode(self, simple_setup):
+        """Percentile mode: model_total has shape (n_pix, n_percentiles)."""
+        samples, args = simple_setup
+        t = make_spectra_tables(samples, args, percentiles=_PERCENTILES)[0]
+        assert t['model_total'].shape == (len(t['wavelength']), 3)
+
+
+class TestMakeHDUL:
+    """Tests for make_hdul (lines-only model)."""
+
+    def test_structure(self, simple_setup):
+        """HDUList: Primary + PARAMETERS + spectrum = 3 HDUs with correct types."""
+        samples, args = simple_setup
+        hdul = make_hdul(samples, args)
+        assert isinstance(hdul, fits.HDUList)
+        assert len(hdul) == 3
+        assert isinstance(hdul[0], fits.PrimaryHDU)
+        assert 'ZSYS' in hdul[0].header
+        assert hdul[1].name == 'PARAMETERS'
+        assert isinstance(hdul[1], fits.BinTableHDU)
+        assert isinstance(hdul[2], fits.BinTableHDU)
+
+
+class TestRestEquivalentWidths:
+    """Tests for rest equivalent width columns in make_parameter_table."""
+
+    def test_rew_basic(self, continuum_setup):
+        """REW column present, has unit, correct length, all finite."""
+        samples, args = continuum_setup
+        table = make_parameter_table(samples, args)
+        assert 'rew_Ha' in table.colnames
+        assert table['rew_Ha'].unit is not None
+        assert len(table['rew_Ha']) == 4
+        assert np.all(np.isfinite(np.asarray(table['rew_Ha'])))
+
+    def test_rew_percentiles_mode(self, continuum_setup):
+        """REW present in percentile mode with correct shape."""
+        samples, args = continuum_setup
+        table = make_parameter_table(samples, args, percentiles=_PERCENTILES)
+        assert 'rew_Ha' in table.colnames
+        assert len(table['rew_Ha']) == 3
+        assert 'percentile' in table.colnames
+
+    def test_no_rew_without_continuum(self, simple_setup):
+        """No REW columns when no continuum is configured."""
+        samples, args = simple_setup
+        table = make_parameter_table(samples, args)
+        assert not any(col.startswith('rew_') for col in table.colnames)
+
+
+class TestMakeHDULWithContinuum:
+    """Tests for make_hdul with continuum."""
+
+    def test_continuum_header_keys(self, continuum_scale_setup):
+        """LFLXSCL, LFLXUNT, CNTSCL, CNTUNT appear in the primary header."""
+        samples, args = continuum_scale_setup
+        hdul = make_hdul(samples, args)
+        for key in ('LFLXSCL', 'LFLXUNT', 'CNTSCL', 'CNTUNT'):
+            assert key in hdul[0].header
+        assert len(hdul) == 3
+
+
+class TestMakeSpectraTablesWithContinuum:
+    """make_spectra_tables with continuum (summary and full modes)."""
+
+    def _get_cont_cols(self, t):
+        known = {
+            'wavelength',
+            'model_total',
+            'Ha',
+            'observed_flux',
+            'observed_error',
+            'scaled_error',
+        }
+        return [c for c in t.colnames if c not in known]
+
+    def test_percentiles_mode(self, continuum_setup):
+        """Percentile mode: continuum columns have shape (n_pix, 3)."""
+        samples, args = continuum_setup
+        t = make_spectra_tables(samples, args, percentiles=_PERCENTILES)[0]
+        cont_cols = self._get_cont_cols(t)
+        assert len(cont_cols) > 0
+        for col in cont_cols:
+            assert t[col].shape[1] == 3
+
+    def test_full_mode(self, continuum_setup):
+        """Full mode: continuum columns have shape (n_pix, n_samples)."""
+        samples, args = continuum_setup
+        t = make_spectra_tables(samples, args, percentiles=None)[0]
+        cont_cols = self._get_cont_cols(t)
+        assert len(cont_cols) > 0
+        for col in cont_cols:
+            assert t[col].shape[1] == 4
+
+
+class TestInsertNan:
+    """Tests for make_spectra_tables with insert_nan=True."""
+
+    def test_insert_nan(self, two_region_setup):
+        """With two regions: insert_nan=True adds NaN separator rows."""
+        samples, args = two_region_setup
+        tables_without = make_spectra_tables(samples, args, insert_nan=False)
+        tables_with = make_spectra_tables(samples, args, insert_nan=True)
+        assert len(tables_with[0]) > len(tables_without[0])
+        model_vals = np.asarray(tables_with[0]['model_total'])
+        assert np.any(np.isnan(model_vals))
+
+
+class TestGetNSamples:
+    """Tests for _get_n_samples helper."""
+
+    def test_empty_returns_1(self):
+        assert _get_n_samples({}) == 1
+
+    def test_non_empty_returns_shape(self):
+        assert _get_n_samples({'x': np.ones(7)}) == 7
+
+
+class TestInstrumentGroupInParameterTable:
+    """Calibration parameters appear in the parameter table."""
+
+    def test_instrument_param_in_table(self, calib_param_setup):
+        samples, args = calib_param_setup
         table = make_parameter_table(samples, args)
         assert any('flux_scale' in col for col in table.colnames)
-
-    def test_hdul_continuum_scale_in_header(self):
-        """make_hdul with continuum scale computed adds CNTSCL to header."""
-        samples, args = _setup_with_continuum_scale()
-        hdul = make_hdul(samples, args)
-        assert 'CNTSCL' in hdul[0].header
-        assert 'CNTUNT' in hdul[0].header
 
 
 class TestCountParameters:
     """Tests for count_parameters."""
 
-    def test_returns_positive_int(self):
-        model_fn, args = _setup_with_model_fn()
+    def test_count_free_params(self, model_fn_args):
+        """Ha has 3 free params (z, fwhm_gauss, flux); count matches."""
+        model_fn, args = model_fn_args
         n = count_parameters(model_fn, args)
-        assert isinstance(n, int)
-        assert n > 0
-
-    def test_matches_dependency_order_length(self):
-        """Free parameter count should equal non-Fixed params in dependency order."""
-        model_fn, args = _setup_with_model_fn()
-        n = count_parameters(model_fn, args)
-        # Ha has: redshift, fwhm_gauss, flux — all free → 3 free scalar params
-        assert n == 3
-
-
-# ---------------------------------------------------------------------------
-# Fixed params in percentile mode (results.py line 147-149)
-# ---------------------------------------------------------------------------
+        assert isinstance(n, int) and n == 3
 
 
 class TestFixedParamPercentiles:
     """Fixed prior params handled correctly in percentile mode."""
 
-    def test_fixed_param_appears_in_percentile_table(self):
-        """A Fixed prior param should still appear with its fixed value in percentile mode."""
-        samples, args = _setup_two_region_continuum()
-        percentiles = np.array([0.16, 0.5, 0.84])
-        table = make_parameter_table(samples, args, percentiles=percentiles)
-        # _setup_two_region_continuum has Fixed priors for redshift and fwhm
-        # Verify the table has the expected shape (3 percentile rows)
+    def test_fixed_constant_across_percentiles(self, two_region_setup):
+        """Fixed params have identical value for all percentile rows."""
+        samples, args = two_region_setup
+        table = make_parameter_table(samples, args, percentiles=_PERCENTILES)
         assert len(table) == 3
-        # Fixed params should have the same value across all percentile rows
         for pname in args.dependency_order:
             p = args.all_priors[pname]
             if isinstance(p, prior.Fixed):

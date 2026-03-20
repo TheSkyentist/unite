@@ -84,43 +84,51 @@ def _prepare_and_build(line_config, cont_config, spectra):
     ).build()
 
 
+@pytest.fixture(scope='module')
+def basic_model():
+    """Shared module-level fixture: simple H-alpha model built once."""
+    spectrum = create_simple_spectrum()
+    line_config = create_minimal_config()
+    spectra = Spectra([spectrum], redshift=0.0)
+    unite_model, unite_args = _prepare_and_build(line_config, None, spectra)
+    return unite_model, unite_args, spectrum
+
+
+@pytest.fixture(scope='module')
+def continuum_model():
+    """H-alpha model with a continuum region (bounds in microns), built once."""
+    from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
+
+    spectrum = create_simple_spectrum()
+    line_config = create_minimal_config()
+    # Continuum specified in microns — exercises unit conversion in args.cont_low/high.
+    cont_config = ContinuumConfiguration(
+        [ContinuumRegion(0.65 * u.um, 0.66 * u.um, Linear())]
+    )
+    spectra = Spectra([spectrum], redshift=0.0)
+    unite_model, unite_args = _prepare_and_build(line_config, cont_config, spectra)
+    return unite_model, unite_args
+
+
 class TestMinimalModel:
     """Test suite for minimal unite_model validation."""
 
-    def test_model_building(self):
+    def test_model_building(self, basic_model):
         """Test that unite_model can be built without errors."""
-        spectrum = create_simple_spectrum()
-        line_config = create_minimal_config()
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        unite_model, unite_args = _prepare_and_build(line_config, None, spectra)
-
-        # Check that we have the expected components
+        unite_model, unite_args, _ = basic_model
         assert unite_args is not None
         assert unite_model is not None
         assert len(unite_args.matrices.flux_names) == 1
         assert len(unite_args.matrices.z_names) == 1
         assert len(unite_args.matrices.p0_names) == 1
 
-    def test_predictive_execution(self):
+    def test_predictive_execution(self, basic_model):
         """Test that the model can execute predictively."""
-        spectrum = create_simple_spectrum()
-        line_config = create_minimal_config()
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        unite_model, unite_args = _prepare_and_build(line_config, None, spectra)
-
-        # Test predictive execution
+        unite_model, unite_args, _ = basic_model
         rng_key = random.PRNGKey(0)
-        predictive = Predictive(unite_model, num_samples=3)
-        samples = predictive(rng_key, unite_args)
-
-        # Check that we get the expected auto-named parameters
-        # Auto-naming uses "{name}-{wavelength}-{param}" pattern
+        samples = Predictive(unite_model, num_samples=3)(rng_key, unite_args)
         actual_params = set(samples.keys())
 
-        # Check that line parameters exist (at least flux, z, fwhm)
-        # New naming: flux_*, z_*, fwhm_gauss_*
         flux_params = [k for k in actual_params if 'flux' in k and 'scale' not in k]
         z_params = [k for k in actual_params if k.startswith('z_')]
         fwhm_params = [k for k in actual_params if 'fwhm' in k]
@@ -128,37 +136,21 @@ class TestMinimalModel:
         assert len(flux_params) >= 1, f'No flux parameters found in {actual_params}'
         assert len(z_params) >= 1, f'No z parameters found in {actual_params}'
         assert len(fwhm_params) >= 1, f'No fwhm parameters found in {actual_params}'
-
-        # Check shapes
         for param in flux_params + z_params + fwhm_params:
-            assert samples[param].shape == (3,)  # 3 samples
+            assert samples[param].shape == (3,)
 
-    def test_model_with_continuum(self):
+    def test_model_with_continuum(self, continuum_model):
         """Test model building with continuum."""
-        from unite.continuum import ContinuumConfiguration, Linear
-
-        spectrum = create_simple_spectrum()
-        line_config = create_minimal_config()
-
-        # Create simple continuum (note: must pass Quantity with units)
-        cont_config = ContinuumConfiguration.from_lines(
-            [6563.0] * u.AA, width=30_000 * u.km / u.s, form=Linear()
-        )
-
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        # Build model with continuum
-        unite_model, unite_args = _prepare_and_build(line_config, cont_config, spectra)
+        unite_model, unite_args = continuum_model
 
         # Check that continuum configuration is included
         assert unite_args.cont_config is not None
 
         # Test predictive execution
         rng_key = random.PRNGKey(1)
-        predictive = Predictive(unite_model, num_samples=2)
-        samples = predictive(rng_key, unite_args)
+        samples = Predictive(unite_model, num_samples=2)(rng_key, unite_args)
 
-        # Check for continuum parameters — new naming: scale_0, angle_0, norm_wav_0, etc.
+        # Check for continuum parameters — new naming: scale_*, angle_*, norm_wav_*, etc.
         continuum_params = [
             k
             for k in samples
@@ -209,37 +201,23 @@ class TestMinimalModel:
         assert len(samples[z_key]) == 10
         assert len(samples[fwhm_key]) == 10
 
-    def test_parameter_matrices(self):
+    def test_parameter_matrices(self, basic_model):
         """Test that parameter matrices are correctly constructed."""
-        spectrum = create_simple_spectrum()
-        line_config = create_minimal_config()
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        _, unite_args = _prepare_and_build(line_config, None, spectra)
+        _, unite_args, _ = basic_model
         matrices = unite_args.matrices
-
-        # Check matrix shapes
         assert matrices.wavelengths.shape == (1,)
         assert matrices.strengths.shape == (1,)
         assert matrices.profile_codes.shape == (1,)
         assert matrices.flux_matrix.shape == (1, 1)
         assert matrices.z_matrix.shape == (1, 1)
         assert matrices.p0_matrix.shape == (1, 1)
-
-        # Check that matrices are properly populated
         assert jnp.sum(matrices.flux_matrix) == 1.0
         assert jnp.sum(matrices.z_matrix) == 1.0
         assert jnp.sum(matrices.p0_matrix) == 1.0
 
-    def test_spectra_integration(self):
+    def test_spectra_integration(self, basic_model):
         """Test that spectra are properly integrated into the model."""
-        spectrum = create_simple_spectrum()
-        line_config = create_minimal_config()
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        _, unite_args = _prepare_and_build(line_config, None, spectra)
-
-        # Check spectra properties
+        _, unite_args, _ = basic_model
         assert len(unite_args.spectra) == 1
         assert unite_args.spectra[0].npix == 100
         assert unite_args.redshift == 0.0
@@ -261,70 +239,37 @@ class TestMinimalModel:
 class TestModelOutputValidation:
     """Test that model outputs are reasonable."""
 
-    def test_model_predictions_shape(self):
+    def test_model_predictions_shape(self, basic_model):
         """Test that model predictions have the correct shape."""
-        from numpyro import infer
-
         from unite.evaluate import evaluate_model
 
-        spectrum = create_simple_spectrum()
-        line_config = create_minimal_config()
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        unite_model, unite_args = _prepare_and_build(line_config, None, spectra)
-
-        # Run quick MCMC
+        unite_model, unite_args, _ = basic_model
         rng_key = random.PRNGKey(3)
-        kernel = infer.NUTS(unite_model)
-        mcmc = infer.MCMC(kernel, num_samples=5, num_warmup=3, progress_bar=False)
-        mcmc.run(rng_key, unite_args)
+        samples = Predictive(unite_model, num_samples=5)(rng_key, unite_args)
 
-        posterior_samples = mcmc.get_samples()
-
-        # obs sites are still in the trace.
-        obs_pred = posterior_samples.get('obs_test_spectrum')
-        # obs site is observed so it won't appear in posterior samples;
-        # use Predictive to get it.
-        predictive = Predictive(unite_model, posterior_samples)
-        predictions = predictive(rng_key, unite_args)
-        obs_pred = predictions['obs_test_spectrum']
+        obs_pred = samples['obs_test_spectrum']
         assert obs_pred.shape == (5, 100)
         assert jnp.all(jnp.isfinite(obs_pred))
 
-        # Model predictions via evaluate_model (physical units, decomposed).
-        preds = evaluate_model(posterior_samples, unite_args)
+        preds = evaluate_model(samples, unite_args)
         assert len(preds) == 1
-        assert preds[0].total.shape == (5, 100)  # 5 samples, 100 pixels
+        assert preds[0].total.shape == (5, 100)
         assert jnp.all(jnp.isfinite(preds[0].total))
 
-    def test_model_fits_data_range(self):
+    def test_model_fits_data_range(self, basic_model):
         """Test that model predictions are finite and not all zeros."""
-        from numpyro import infer
-
         from unite.evaluate import evaluate_model
 
-        spectrum = create_simple_spectrum()
-        line_config = create_minimal_config()
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        unite_model, unite_args = _prepare_and_build(line_config, None, spectra)
-
-        # Run quick MCMC
+        unite_model, unite_args, _ = basic_model
         rng_key = random.PRNGKey(4)
-        kernel = infer.NUTS(unite_model)
-        mcmc = infer.MCMC(kernel, num_samples=5, num_warmup=3, progress_bar=False)
-        mcmc.run(rng_key, unite_args)
+        samples = Predictive(unite_model, num_samples=5)(rng_key, unite_args)
 
-        posterior_samples = mcmc.get_samples()
-        preds = evaluate_model(posterior_samples, unite_args)
+        preds = evaluate_model(samples, unite_args)
         mean_model = jnp.mean(jnp.asarray(preds[0].total), axis=0)
 
-        print(mean_model)
-
-        # evaluate_model returns physical flux units.
         assert jnp.all(jnp.isfinite(mean_model))
         assert unite_args.norm_factors[0] > 0
-        assert jnp.max(jnp.abs(mean_model)) > 0  # not all zeros
+        assert jnp.max(jnp.abs(mean_model)) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -448,22 +393,9 @@ class TestWavelengthUnitConsistency:
         _, args = _prepare_and_build(lc, None, spectra)
         assert all(s > 0 for s in args.line_flux_scales)
 
-    def test_continuum_bounds_converted(self):
-        """Continuum region bounds should be pre-converted to canonical unit."""
-        from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
-
-        spectrum = self._make_spectrum(u.AA, name='test')
-        spectra = Spectra([spectrum], redshift=0.0)
-
-        lc = line.LineConfiguration()
-        lc.add_line('Ha', 6563.0 * u.AA)
-
-        # Continuum regions in microns.
-        cont = ContinuumConfiguration(
-            [ContinuumRegion(0.65 * u.um, 0.66 * u.um, Linear())]
-        )
-
-        _, args = _prepare_and_build(lc, cont, spectra)
+    def test_continuum_bounds_converted(self, continuum_model):
+        """Continuum region bounds (specified in microns) should be converted to canonical unit."""
+        _, args = continuum_model
 
         # Canonical unit is AA (first spectrum); bounds should be in AA.
         assert args.cont_low[0] == pytest.approx(6500.0, rel=1e-3)
@@ -839,9 +771,8 @@ class TestModelBuilderMatrices:
         spectra.prepare(line_config)
         spectra.compute_scales(spectra.prepared_line_config)
         builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
-        matrices = builder.matrices
-        assert matrices is not None
-        assert len(matrices.flux_names) == 1
+        assert builder.matrices is not None
+        assert len(builder.matrices.flux_names) == 1
 
 
 # ---------------------------------------------------------------------------
