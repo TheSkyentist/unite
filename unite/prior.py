@@ -103,8 +103,6 @@ class _Expr(ABC):
     def __rmul__(self, other):
         if isinstance(other, (int, float)):
             return _BinOpExpr('*', _LiteralLeaf(float(other)), self)
-        if isinstance(other, Parameter):
-            return _BinOpExpr('*', _ParamLeaf(other), self)
         return NotImplemented
 
     def __truediv__(self, other):
@@ -119,8 +117,6 @@ class _Expr(ABC):
     def __rtruediv__(self, other):
         if isinstance(other, (int, float)):
             return _BinOpExpr('/', _LiteralLeaf(float(other)), self)
-        if isinstance(other, Parameter):
-            return _BinOpExpr('/', _ParamLeaf(other), self)
         return NotImplemented
 
     def __add__(self, other):
@@ -135,8 +131,6 @@ class _Expr(ABC):
     def __radd__(self, other):
         if isinstance(other, (int, float)):
             return _BinOpExpr('+', _LiteralLeaf(float(other)), self)
-        if isinstance(other, Parameter):
-            return _BinOpExpr('+', _ParamLeaf(other), self)
         return NotImplemented
 
     def __sub__(self, other):
@@ -151,8 +145,6 @@ class _Expr(ABC):
     def __rsub__(self, other):
         if isinstance(other, (int, float)):
             return _BinOpExpr('-', _LiteralLeaf(float(other)), self)
-        if isinstance(other, Parameter):
-            return _BinOpExpr('-', _ParamLeaf(other), self)
         return NotImplemented
 
 
@@ -674,8 +666,6 @@ class Parameter:
         """Return a product expression."""
         if isinstance(other, (int, float)):
             return _BinOpExpr('*', _LiteralLeaf(float(other)), _ParamLeaf(self))
-        if isinstance(other, _Expr):
-            return _BinOpExpr('*', other, _ParamLeaf(self))
         return NotImplemented
 
     def __truediv__(self, other) -> _Expr:
@@ -692,8 +682,6 @@ class Parameter:
         """Return a division expression."""
         if isinstance(other, (int, float)):
             return _BinOpExpr('/', _LiteralLeaf(float(other)), _ParamLeaf(self))
-        if isinstance(other, _Expr):
-            return _BinOpExpr('/', other, _ParamLeaf(self))
         return NotImplemented
 
     def __add__(self, other) -> _Expr:
@@ -710,8 +698,6 @@ class Parameter:
         """Return an additive expression."""
         if isinstance(other, (int, float)):
             return _BinOpExpr('+', _LiteralLeaf(float(other)), _ParamLeaf(self))
-        if isinstance(other, _Expr):
-            return _BinOpExpr('+', other, _ParamLeaf(self))
         return NotImplemented
 
     def __sub__(self, other) -> _Expr:
@@ -728,8 +714,6 @@ class Parameter:
         """Return a subtractive expression."""
         if isinstance(other, (int, float)):
             return _BinOpExpr('-', _LiteralLeaf(float(other)), _ParamLeaf(self))
-        if isinstance(other, _Expr):
-            return _BinOpExpr('-', other, _ParamLeaf(self))
         return NotImplemented
 
 
