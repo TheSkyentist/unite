@@ -931,7 +931,14 @@ class TestPseudoVoigtModel:
         flux = (line_flux + 5.0 + rng.normal(0, 1, len(wl))) * flux_unit
         error = np.full(len(wl), 1.0) * flux_unit
 
-        spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='pv_spec')
+        spectrum = Spectrum(
+            low=low,
+            high=high,
+            flux=flux,
+            error=error,
+            disperser=disperser,
+            name='pv_spec',
+        )
         spectra = Spectra([spectrum], redshift=0.0)
 
         lc = line.LineConfiguration()
@@ -981,7 +988,14 @@ class TestGaussHermiteModel:
         flux = (line_flux + 5.0 + rng.normal(0, 1, len(wl))) * flux_unit
         error = np.full(len(wl), 1.0) * flux_unit
 
-        spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='gh_spec')
+        spectrum = Spectrum(
+            low=low,
+            high=high,
+            flux=flux,
+            error=error,
+            disperser=disperser,
+            name='gh_spec',
+        )
         spectra = Spectra([spectrum], redshift=0.0)
 
         lc = line.LineConfiguration()
@@ -1033,8 +1047,12 @@ class TestSharedDisperser:
         flux2 = (line_flux + 5.0 + noise2) * flux_unit
         error = np.full(len(wl), 1.0) * flux_unit
 
-        spec1 = Spectrum(low=low, high=high, flux=flux1, error=error, disperser=disperser, name='s1')
-        spec2 = Spectrum(low=low, high=high, flux=flux2, error=error, disperser=disperser, name='s2')
+        spec1 = Spectrum(
+            low=low, high=high, flux=flux1, error=error, disperser=disperser, name='s1'
+        )
+        spec2 = Spectrum(
+            low=low, high=high, flux=flux2, error=error, disperser=disperser, name='s2'
+        )
         spectra = Spectra([spec1, spec2], redshift=0.0)
 
         lc = line.LineConfiguration()
@@ -1090,7 +1108,8 @@ class TestSharedContinuumToken:
 
         lc = line.LineConfiguration()
         lc.add_line(
-            'Ha', 6563.0 * u.AA,
+            'Ha',
+            6563.0 * u.AA,
             redshift=line.Redshift(prior=prior.Fixed(0.0)),
             fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
             flux=line.Flux(prior=prior.Uniform(0, 5)),
@@ -1098,12 +1117,18 @@ class TestSharedContinuumToken:
 
         # Two regions sharing a single Scale token object
         shared_scale = Scale(prior=prior.Uniform(0, 10))
-        region1 = ContinuumRegion(6450 * u.AA, 6510 * u.AA, Linear(), params={'scale': shared_scale})
-        region2 = ContinuumRegion(6570 * u.AA, 6650 * u.AA, Linear(), params={'scale': shared_scale})
+        region1 = ContinuumRegion(
+            6450 * u.AA, 6510 * u.AA, Linear(), params={'scale': shared_scale}
+        )
+        region2 = ContinuumRegion(
+            6570 * u.AA, 6650 * u.AA, Linear(), params={'scale': shared_scale}
+        )
         cc = ContinuumConfiguration([region1, region2])
 
         spectra.prepare(lc, cc)
-        spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
 
         model_fn, args = model.ModelBuilder(
             spectra.prepared_line_config, spectra.prepared_cont_config, spectra

@@ -524,10 +524,13 @@ def _setup_with_calib_param():
     flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
     error = np.full(len(wavelength), 1.0) * flux_unit
 
-    spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='calib')
+    spectrum = Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='calib'
+    )
     lc = line.LineConfiguration()
     lc.add_line(
-        'Ha', 6563.0 * u.AA,
+        'Ha',
+        6563.0 * u.AA,
         redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
         fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
         flux=line.Flux(prior=prior.Uniform(0, 5)),
@@ -535,7 +538,9 @@ def _setup_with_calib_param():
     spectra = Spectra([spectrum], redshift=0.0)
     spectra.prepare(lc)
     spectra.compute_scales(spectra.prepared_line_config)
-    model_fn, args = model.ModelBuilder(spectra.prepared_line_config, None, spectra).build()
+    model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, None, spectra
+    ).build()
     rng_key = random.PRNGKey(0)
     predictive = Predictive(model_fn, num_samples=4)
     samples = predictive(rng_key, args)
@@ -554,16 +559,21 @@ def _setup_with_continuum_scale():
     flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
     flux = (line_flux + 5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
     error = np.full(len(wavelength), 1.0) * flux_unit
-    spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='cs')
+    spectrum = Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='cs'
+    )
 
     lc = line.LineConfiguration()
     lc.add_line(
-        'Ha', 6563.0 * u.AA,
+        'Ha',
+        6563.0 * u.AA,
         redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
         fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
         flux=line.Flux(prior=prior.Uniform(0, 5)),
     )
-    cont = ContinuumConfiguration.from_lines(lc.centers, width=30_000 * u.km / u.s, form=Linear())
+    cont = ContinuumConfiguration.from_lines(
+        lc.centers, width=30_000 * u.km / u.s, form=Linear()
+    )
 
     spectra = Spectra([spectrum], redshift=0.0)
     spectra.prepare(lc, cont)
