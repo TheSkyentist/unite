@@ -10,6 +10,11 @@ from jax.typing import ArrayLike
 
 from unite._utils import _make_register
 from unite.line.functions import (
+    evaluate_gaussHermite,
+    evaluate_gaussian,
+    evaluate_gaussianLaplace,
+    evaluate_split_normal,
+    evaluate_voigt,
     integrate_gaussHermite,
     integrate_gaussian,
     integrate_gaussianLaplace,
@@ -63,6 +68,11 @@ class Profile(ABC):
             For example, ``{'fwhm_gauss': Uniform(0, 1000)}``.
         """
 
+    @property
+    def is_absorption(self) -> bool:
+        """Whether this is an absorption profile."""
+        return False
+
     def integrate(
         self,
         low: ArrayLike,
@@ -73,7 +83,7 @@ class Profile(ABC):
     ) -> Array:
         r"""Integrate the profile over wavelength bins.
 
-        Delegates to :meth:`jax_branch` by mapping keyword arguments to
+        Delegates to :meth:`integrate_branch` by mapping keyword arguments to
         positional slots (p0, p1, p2) in :meth:`param_names` order.
 
         Parameters
@@ -98,10 +108,45 @@ class Profile(ABC):
         p0 = params[pnames[0]] if len(pnames) > 0 else 0.0
         p1 = params[pnames[1]] if len(pnames) > 1 else 0.0
         p2 = params[pnames[2]] if len(pnames) > 2 else 0.0
-        return self.jax_branch()(low, high, center, lsf_fwhm, p0, p1, p2)
+        return self.integrate_branch()(low, high, center, lsf_fwhm, p0, p1, p2)
+
+    def evaluate(
+        self,
+        wavelength: ArrayLike,
+        center: ArrayLike,
+        lsf_fwhm: ArrayLike,
+        **params: ArrayLike,
+    ) -> Array:
+        r"""Evaluate the normalised profile at wavelength points.
+
+        Delegates to :meth:`evaluate_branch` by mapping keyword arguments to
+        positional slots (p0, p1, p2) in :meth:`param_names` order.
+
+        Parameters
+        ----------
+        wavelength : ArrayLike
+            Wavelength points at which to evaluate the profile.
+        center : ArrayLike
+            Line center wavelength.
+        lsf_fwhm : ArrayLike
+            Instrumental line spread function FWHM at the line center.
+        \*\*params : ArrayLike
+            Parameter values, keyed by the names from :meth:`param_names`.
+
+        Returns
+        -------
+        Array
+            Normalised profile value at each wavelength point
+            (1/wavelength units).
+        """
+        pnames = self.param_names()
+        p0 = params[pnames[0]] if len(pnames) > 0 else 0.0
+        p1 = params[pnames[1]] if len(pnames) > 1 else 0.0
+        p2 = params[pnames[2]] if len(pnames) > 2 else 0.0
+        return self.evaluate_branch()(wavelength, center, lsf_fwhm, p0, p1, p2)
 
     @abstractmethod
-    def jax_branch(self):
+    def integrate_branch(self):
         """Return a JAX-compatible branch callable for ``lax.switch`` dispatch.
 
         The returned function must have the fixed signature::
@@ -112,6 +157,22 @@ class Profile(ABC):
         ``param_names()[0]``, ``p1`` is ``param_names()[1]``, ``p2`` is
         ``param_names()[2]``.  Unused slots receive zero from the model
         builder and must be ignored.
+
+        Returns
+        -------
+        callable
+            A pure-JAX function suitable as a ``lax.switch`` branch.
+        """
+
+    @abstractmethod
+    def evaluate_branch(self):
+        """Return a JAX-compatible branch callable for pointwise evaluation.
+
+        The returned function must have the fixed signature::
+
+            fn(wavelength, center, lsf_fwhm, p0, p1, p2) -> Array
+
+        Returns the normalised profile value at each wavelength point.
 
         Returns
         -------
@@ -179,10 +240,16 @@ class Gaussian(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000)}
 
-    def jax_branch(self):
+    def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss
             return integrate_gaussian(lo, hi, c, lsf, p0)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_gaussian(wavelength, c, lsf, p0)
 
         return _fn
 
@@ -223,10 +290,16 @@ class Cauchy(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_lorentz': Uniform(0, 1000)}
 
-    def jax_branch(self):
+    def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_lorentz; pure Cauchy via PseudoVoigt with zero Gaussian width
             return integrate_voigt(lo, hi, c, lsf, 0.0, p0)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_voigt(wavelength, c, lsf, 0.0, p0)
 
         return _fn
 
@@ -264,10 +337,16 @@ class PseudoVoigt(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_lorentz': Uniform(0, 1000)}
 
-    def jax_branch(self):
+    def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz
             return integrate_voigt(lo, hi, c, lsf, p0, p1)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_voigt(wavelength, c, lsf, p0, p1)
 
         return _fn
 
@@ -304,10 +383,16 @@ class Laplace(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_exp': Uniform(0, 1000)}
 
-    def jax_branch(self):
+    def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_exp; pure Laplace convolved with Gaussian LSF
             return integrate_gaussianLaplace(lo, hi, c, lsf, 0.0, p0)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_gaussianLaplace(wavelength, c, lsf, 0.0, p0)
 
         return _fn
 
@@ -347,10 +432,16 @@ class SEMG(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_exp': Uniform(0, 1000)}
 
-    def jax_branch(self):
+    def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_exp
             return integrate_gaussianLaplace(lo, hi, c, lsf, p0, p1)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_gaussianLaplace(wavelength, c, lsf, p0, p1)
 
         return _fn
 
@@ -394,10 +485,16 @@ class GaussHermite(Profile):
             'h4': TruncatedNormal(loc=0, scale=0.1, low=-0.3, high=0.3),
         }
 
-    def jax_branch(self):
+    def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = h3, p2 = h4
             return integrate_gaussHermite(lo, hi, c, lsf, p0, p1, p2)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_gaussHermite(wavelength, c, lsf, p0, p1, p2)
 
         return _fn
 
@@ -436,10 +533,16 @@ class SplitNormal(Profile):
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_blue': Uniform(0, 1000), 'fwhm_red': Uniform(0, 1000)}
 
-    def jax_branch(self):
+    def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_blue, p1 = fwhm_red
             return integrate_split_normal(lo, hi, c, lsf, p0, p1)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_split_normal(wavelength, c, lsf, p0, p1)
 
         return _fn
 
@@ -460,6 +563,163 @@ class SplitNormal(Profile):
         return hash(type(self))
 
 
+# -------------------------------------------------------------------
+# Absorption profiles
+# -------------------------------------------------------------------
+
+
+@_register
+class GaussianAbsorption(Profile):
+    """Gaussian absorption profile.
+
+    Uses the same Gaussian shape as :class:`Gaussian` but is designed for
+    absorption lines.  The ``integrate_branch`` uses pixel-center
+    evaluation (the known approximation for slowly-varying absorbers),
+    while ``evaluate_branch`` returns the exact normalised density.
+    """
+
+    code = 7
+
+    @property
+    def is_absorption(self) -> bool:
+        return True
+
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm_gauss',)
+
+    def default_priors(self) -> dict[str, Prior]:
+        return {'fwhm_gauss': Uniform(0, 1000)}
+
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            mid = (lo + hi) / 2.0
+            return evaluate_gaussian(mid, c, lsf, p0) * (hi - lo)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_gaussian(wavelength, c, lsf, p0)
+
+        return _fn
+
+    def to_dict(self) -> dict:
+        return {'type': 'GaussianAbsorption'}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> GaussianAbsorption:
+        return cls()
+
+    def __repr__(self) -> str:
+        return 'GaussianAbsorption()'
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, GaussianAbsorption)
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
+@_register
+class VoigtAbsorption(Profile):
+    """Pseudo-Voigt absorption profile.
+
+    Uses the same Thompson et al. (1987) pseudo-Voigt shape as
+    :class:`PseudoVoigt` but is designed for absorption lines.
+    """
+
+    code = 8
+
+    @property
+    def is_absorption(self) -> bool:
+        return True
+
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm_gauss', 'fwhm_lorentz')
+
+    def default_priors(self) -> dict[str, Prior]:
+        return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_lorentz': Uniform(0, 1000)}
+
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            mid = (lo + hi) / 2.0
+            return evaluate_voigt(mid, c, lsf, p0, p1) * (hi - lo)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_voigt(wavelength, c, lsf, p0, p1)
+
+        return _fn
+
+    def to_dict(self) -> dict:
+        return {'type': 'VoigtAbsorption'}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> VoigtAbsorption:
+        return cls()
+
+    def __repr__(self) -> str:
+        return 'VoigtAbsorption()'
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, VoigtAbsorption)
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
+@_register
+class LorentzianAbsorption(Profile):
+    """Lorentzian (Cauchy) absorption profile.
+
+    Uses the same Lorentzian shape as :class:`Cauchy` but is designed for
+    absorption lines.
+    """
+
+    code = 9
+
+    @property
+    def is_absorption(self) -> bool:
+        return True
+
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm_lorentz',)
+
+    def default_priors(self) -> dict[str, Prior]:
+        return {'fwhm_lorentz': Uniform(0, 1000)}
+
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            mid = (lo + hi) / 2.0
+            return evaluate_voigt(mid, c, lsf, 0.0, p0) * (hi - lo)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return evaluate_voigt(wavelength, c, lsf, 0.0, p0)
+
+        return _fn
+
+    def to_dict(self) -> dict:
+        return {'type': 'LorentzianAbsorption'}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> LorentzianAbsorption:
+        return cls()
+
+    def __repr__(self) -> str:
+        return 'LorentzianAbsorption()'
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, LorentzianAbsorption)
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
 _PROFILE_ALIASES: dict[str, Profile] = {
     'gaussian': Gaussian(),
     'normal': Gaussian(),
@@ -475,6 +735,9 @@ _PROFILE_ALIASES: dict[str, Profile] = {
     'gauss-hermite': GaussHermite(),
     'split-normal': SplitNormal(),
     'two-sided': SplitNormal(),
+    'gaussian-absorption': GaussianAbsorption(),
+    'voigt-absorption': VoigtAbsorption(),
+    'lorentzian-absorption': LorentzianAbsorption(),
 }
 
 
@@ -509,14 +772,20 @@ def resolve_profile(profile: str | Profile) -> Profile:
 
 
 # -------------------------------------------------------------------
-# JAX dispatch: _integrate_single_line and _integrate_lines
+# JAX dispatch: integration and evaluation branches
 # -------------------------------------------------------------------
 
-# Build the lax.switch branch list once at import time.
-# Each Profile subclass owns its branch via jax_branch(); sorted by code
-# guarantees the list index matches Profile.code.
-_BRANCHES = [
-    cls().jax_branch()
+# Build the lax.switch branch lists once at import time.
+# Each Profile subclass owns its branches via integrate_branch() and
+# evaluate_branch(); sorted by code guarantees the list index matches
+# Profile.code.
+_INTEGRATE_BRANCHES = [
+    cls().integrate_branch()
+    for cls in sorted(_PROFILE_REGISTRY.values(), key=lambda c: c.code)
+]
+
+_EVALUATE_BRANCHES = [
+    cls().evaluate_branch()
     for cls in sorted(_PROFILE_REGISTRY.values(), key=lambda c: c.code)
 ]
 
@@ -537,15 +806,16 @@ def _integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
         parameter slots (in :meth:`Profile.param_names` order).  Slots
         unused by a given profile receive zero.
     code : int
-        ``Profile.code`` for the line (0=Gaussian, 1=Cauchy, 2=PseudoVoigt,
-        3=Laplace, 4=SEMG, 5=GaussHermite, 6=SplitNormal).
+        ``Profile.code`` for the line.
 
     Returns
     -------
     jnp.ndarray, shape (n_pixels,)
         Integrated profile fraction per pixel bin.
     """
-    return jax.lax.switch(code, _BRANCHES, low, high, center, lsf_fwhm, p0, p1, p2)
+    return jax.lax.switch(
+        code, _INTEGRATE_BRANCHES, low, high, center, lsf_fwhm, p0, p1, p2
+    )
 
 
 # vmap over lines: per-line scalars map to axis 0; pixel arrays are shared (None).
@@ -556,4 +826,34 @@ integrate_lines = jax.vmap(
 
 Input shapes: ``low/high (n_pixels,)``, all others ``(n_lines,)``.
 Output shape: ``(n_lines, n_pixels)``.
+"""
+
+
+def _evaluate_single_line(wavelength, center, lsf_fwhm, p0, p1, p2, code):
+    """Evaluate one line profile at wavelength points, dispatched by ``code``.
+
+    Parameters
+    ----------
+    wavelength : jnp.ndarray, shape (n_points,)
+        Wavelength points at which to evaluate.
+    center, lsf_fwhm, p0, p1, p2 : float
+        Per-line scalars.
+    code : int
+        ``Profile.code`` for the line.
+
+    Returns
+    -------
+    jnp.ndarray, shape (n_points,)
+        Normalised profile value at each wavelength point.
+    """
+    return jax.lax.switch(
+        code, _EVALUATE_BRANCHES, wavelength, center, lsf_fwhm, p0, p1, p2
+    )
+
+
+evaluate_lines = jax.vmap(_evaluate_single_line, in_axes=(None, 0, 0, 0, 0, 0, 0))
+"""Vectorised evaluation over all lines simultaneously.
+
+Input shapes: ``wavelength (n_points,)``, all others ``(n_lines,)``.
+Output shape: ``(n_lines, n_points)``.
 """

@@ -22,7 +22,7 @@ from unite.prior import Parameter, Prior, TruncatedNormal, Uniform, prior_from_d
 
 # Maps category name → type prefix for NumPyro site names.
 # Categories not in this map use the category name itself as prefix.
-_CATEGORY_PREFIX: dict[str, str] = {'redshift': 'z', 'flux': 'flux'}
+_CATEGORY_PREFIX: dict[str, str] = {'redshift': 'z', 'flux': 'flux', 'tau': 'tau'}
 
 
 def _prefix_for(category: str) -> str:
@@ -83,6 +83,25 @@ class Flux(Parameter):
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Uniform(-3, 3)
+        super().__init__(name, prior=prior)
+
+
+class Tau(Parameter):
+    """
+    A named optical depth parameter for absorption lines.
+
+    Represents the absorption depth at the line center.  The normalised
+    profile shape (from the absorption profile class) is multiplied by
+    this value to obtain the wavelength-dependent optical depth
+    ``tau(lam) = tau * phi(lam)``, and the resulting transmission is
+    ``exp(-τ(λ))``.
+
+    Default prior is uniform between 0 and 10.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Uniform(0, 10)
         super().__init__(name, prior=prior)
 
 
