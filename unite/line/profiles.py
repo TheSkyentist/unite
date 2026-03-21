@@ -9,18 +9,7 @@ from jax import Array
 from jax.typing import ArrayLike
 
 from unite._utils import _make_register
-from unite.line.functions import (
-    evaluate_gaussHermite,
-    evaluate_gaussian,
-    evaluate_gaussianLaplace,
-    evaluate_split_normal,
-    evaluate_voigt,
-    integrate_gaussHermite,
-    integrate_gaussian,
-    integrate_gaussianLaplace,
-    integrate_split_normal,
-    integrate_voigt,
-)
+from unite.line import functions
 from unite.prior import Prior, TruncatedNormal, Uniform
 
 # -------------------------------------------------------------------
@@ -243,13 +232,13 @@ class Gaussian(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss
-            return integrate_gaussian(lo, hi, c, lsf, p0)
+            return functions.integrate_gaussian(lo, hi, c, lsf, p0)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_gaussian(wavelength, c, lsf, p0)
+            return functions.evaluate_gaussian(wavelength, c, lsf, p0)
 
         return _fn
 
@@ -293,13 +282,13 @@ class Cauchy(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_lorentz; pure Cauchy via PseudoVoigt with zero Gaussian width
-            return integrate_voigt(lo, hi, c, lsf, 0.0, p0)
+            return functions.integrate_voigt(lo, hi, c, lsf, 0.0, p0)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_voigt(wavelength, c, lsf, 0.0, p0)
+            return functions.evaluate_voigt(wavelength, c, lsf, 0.0, p0)
 
         return _fn
 
@@ -340,13 +329,13 @@ class PseudoVoigt(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz
-            return integrate_voigt(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_voigt(lo, hi, c, lsf, p0, p1)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_voigt(wavelength, c, lsf, p0, p1)
+            return functions.evaluate_voigt(wavelength, c, lsf, p0, p1)
 
         return _fn
 
@@ -386,13 +375,13 @@ class Laplace(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_exp; pure Laplace convolved with Gaussian LSF
-            return integrate_gaussianLaplace(lo, hi, c, lsf, 0.0, p0)
+            return functions.integrate_gaussianLaplace(lo, hi, c, lsf, 0.0, p0)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_gaussianLaplace(wavelength, c, lsf, 0.0, p0)
+            return functions.evaluate_gaussianLaplace(wavelength, c, lsf, 0.0, p0)
 
         return _fn
 
@@ -435,13 +424,13 @@ class SEMG(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_exp
-            return integrate_gaussianLaplace(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_gaussianLaplace(lo, hi, c, lsf, p0, p1)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_gaussianLaplace(wavelength, c, lsf, p0, p1)
+            return functions.evaluate_gaussianLaplace(wavelength, c, lsf, p0, p1)
 
         return _fn
 
@@ -488,13 +477,13 @@ class GaussHermite(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = h3, p2 = h4
-            return integrate_gaussHermite(lo, hi, c, lsf, p0, p1, p2)
+            return functions.integrate_gaussHermite(lo, hi, c, lsf, p0, p1, p2)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_gaussHermite(wavelength, c, lsf, p0, p1, p2)
+            return functions.evaluate_gaussHermite(wavelength, c, lsf, p0, p1, p2)
 
         return _fn
 
@@ -536,13 +525,13 @@ class SplitNormal(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_blue, p1 = fwhm_red
-            return integrate_split_normal(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_split_normal(lo, hi, c, lsf, p0, p1)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_split_normal(wavelength, c, lsf, p0, p1)
+            return functions.evaluate_split_normal(wavelength, c, lsf, p0, p1)
 
         return _fn
 
@@ -593,13 +582,13 @@ class GaussianAbsorption(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             mid = (lo + hi) / 2.0
-            return evaluate_gaussian(mid, c, lsf, p0) * (hi - lo)
+            return functions.evaluate_gaussian(mid, c, lsf, p0) * (hi - lo)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_gaussian(wavelength, c, lsf, p0)
+            return functions.evaluate_gaussian(wavelength, c, lsf, p0)
 
         return _fn
 
@@ -643,13 +632,13 @@ class VoigtAbsorption(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             mid = (lo + hi) / 2.0
-            return evaluate_voigt(mid, c, lsf, p0, p1) * (hi - lo)
+            return functions.evaluate_voigt(mid, c, lsf, p0, p1) * (hi - lo)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_voigt(wavelength, c, lsf, p0, p1)
+            return functions.evaluate_voigt(wavelength, c, lsf, p0, p1)
 
         return _fn
 
@@ -693,13 +682,13 @@ class LorentzianAbsorption(Profile):
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             mid = (lo + hi) / 2.0
-            return evaluate_voigt(mid, c, lsf, 0.0, p0) * (hi - lo)
+            return functions.evaluate_voigt(mid, c, lsf, 0.0, p0) * (hi - lo)
 
         return _fn
 
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
-            return evaluate_voigt(wavelength, c, lsf, 0.0, p0)
+            return functions.evaluate_voigt(wavelength, c, lsf, 0.0, p0)
 
         return _fn
 
