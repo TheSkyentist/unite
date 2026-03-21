@@ -261,6 +261,13 @@ class ConfigMatrices:
     #: Indicator matrix for slot-2 parameters. Shape ``(n_p2, n_lines)``.
     p2_matrix: jnp.ndarray
 
+    #: NumPyro site names for unique tau (optical depth) parameters.
+    tau_names: list[str]
+    #: Indicator matrix mapping tau parameters to lines. Shape ``(n_tau, n_lines)``.
+    tau_matrix: jnp.ndarray
+    #: Boolean mask indicating which lines are absorption lines. Shape ``(n_lines,)``.
+    is_absorption: jnp.ndarray
+
     priors: dict[str, Prior]
 
 
@@ -340,7 +347,8 @@ class _LineEntry:
     profile: Profile
     redshift: Redshift
     fwhms: dict[str, Parameter]  # profile param name -> parameter token
-    flux: Flux
+    flux: Flux | None = None  # set for emission lines
+    tau: Tau | None = None  # set for absorption lines
     strength: int | float = 1.0
 
 
@@ -392,6 +400,7 @@ class LineConfiguration:
         profile: str | Profile = 'gaussian',
         redshift: Redshift | None = None,
         flux: Flux | None = None,
+        tau: Tau | None = None,
         strength: int | float = 1.0,
         **param_kwargs: Parameter | None,
     ) -> None:
@@ -410,8 +419,13 @@ class LineConfiguration:
             Redshift parameter token.  A fresh ``Redshift()`` is created
             if not provided.
         flux : Flux, optional
-            Flux parameter token.  A fresh ``Flux()`` is created if not
-            provided.
+            Flux parameter token for emission lines.  A fresh ``Flux()``
+            is created if not provided.  Cannot be used with absorption
+            profiles.
+        tau : Tau, optional
+            Optical depth parameter token for absorption lines.  A fresh
+            ``Tau()`` is created if not provided.  Cannot be used with
+            emission profiles.
         strength : float or sequence of float, optional
             Relative flux strength.  For multiplets, broadcast to match
             the number of centers.  Default ``1.0``.
@@ -429,6 +443,9 @@ class LineConfiguration:
         ------
         ValueError
             If *name* is already used by another line in this configuration.
+        TypeError
+            If *flux* is passed for an absorption profile, or *tau* is
+            passed for an emission profile.
         """
         # --- Enforce unique line names ---
         if name in self._used_line_names:
@@ -448,20 +465,47 @@ class LineConfiguration:
             msg = f'redshift must be a Redshift, got {type(redshift).__name__}.'
             raise TypeError(msg)
 
-        if flux is None:
-            flux = Flux()
-        elif not isinstance(flux, Flux):
-            msg = f'flux must be a Flux, got {type(flux).__name__}.'
-            raise TypeError(msg)
-
         prof = resolve_profile(profile)
         fwhms = _resolve_params(prof, param_kwargs)
+
+        # --- Absorption vs emission auto-detection ---
+        if prof.is_absorption:
+            if flux is not None:
+                msg = (
+                    f'Cannot pass flux to absorption profile '
+                    f'{type(prof).__name__}. Use tau instead.'
+                )
+                raise TypeError(msg)
+            if tau is None:
+                tau = Tau()
+            elif not isinstance(tau, Tau):
+                msg = f'tau must be a Tau, got {type(tau).__name__}.'
+                raise TypeError(msg)
+            flux_tok = None
+            tau_tok = tau
+        else:
+            if tau is not None:
+                msg = (
+                    f'Cannot pass tau to emission profile '
+                    f'{type(prof).__name__}. Use flux instead.'
+                )
+                raise TypeError(msg)
+            if flux is None:
+                flux = Flux()
+            elif not isinstance(flux, Flux):
+                msg = f'flux must be a Flux, got {type(flux).__name__}.'
+                raise TypeError(msg)
+            flux_tok = flux
+            tau_tok = None
 
         # --- Register / auto-name all kinematic tokens ---
         self._register_token(redshift, 'redshift', hint_label=name)
         for wn, w_obj in fwhms.items():
             self._register_token(w_obj, wn, hint_label=name)
-        self._register_token(flux, 'flux', hint_label=name)
+        if flux_tok is not None:
+            self._register_token(flux_tok, 'flux', hint_label=name)
+        if tau_tok is not None:
+            self._register_token(tau_tok, 'tau', hint_label=name)
 
         self._used_line_names.add(name)
         self._entries.append(
@@ -471,7 +515,8 @@ class LineConfiguration:
                 profile=prof,
                 redshift=redshift,
                 fwhms=fwhms,
-                flux=flux,
+                flux=flux_tok,
+                tau=tau_tok,
                 strength=strength,
             )
         )
@@ -484,6 +529,7 @@ class LineConfiguration:
         profile: str | Profile = 'gaussian',
         redshift: Redshift | Sequence[Redshift | None] | None = None,
         flux: Flux | Sequence[Flux | None] | None = None,
+        tau: Tau | Sequence[Tau | None] | None = None,
         strength: int | float | Sequence[int | float] = 1.0,
         **param_kwargs,
     ) -> None:
@@ -509,6 +555,8 @@ class LineConfiguration:
             lines; a sequence assigns one token per line.
         flux : Flux or sequence thereof, optional
             Flux token(s).  Same broadcasting rule as *redshift*.
+        tau : Tau or sequence thereof, optional
+            Optical depth token(s).  Same broadcasting rule as *flux*.
         strength : float or sequence of float, optional
             Relative flux strengths.  Default ``1.0``.
         \*\*param_kwargs : Parameter or sequence of Parameter
@@ -542,6 +590,7 @@ class LineConfiguration:
 
         redshifts = _broadcast(redshift, 'redshift', n)
         fluxes = _broadcast(flux, 'flux', n)
+        taus = _broadcast(tau, 'tau', n)
         strengths = _broadcast(strength, 'strength', n)
         broadcasted_kwargs = {k: _broadcast(v, k, n) for k, v in param_kwargs.items()}
 
@@ -554,6 +603,7 @@ class LineConfiguration:
                 profile=profile,
                 redshift=redshifts[i],
                 flux=fluxes[i],
+                tau=taus[i],
                 strength=strengths[i],
                 **kw,
             )
@@ -653,7 +703,20 @@ class LineConfiguration:
         strengths = jnp.array([float(e.strength) for e in self])
         profile_codes = jnp.array([e.profile.code for e in self], dtype=int)
 
-        flux_names, flux_matrix = _token_matrix(self._entries, lambda e: e.flux, n)
+        # Flux matrix — only for emission lines (absorption lines have flux=None).
+        flux_entries = [(j, e.flux) for j, e in enumerate(self) if e.flux is not None]
+        flux_names, flux_matrix = (
+            _slot_matrix(flux_entries, n) if flux_entries else ([], jnp.zeros((0, n)))
+        )
+
+        # Tau matrix — only for absorption lines (emission lines have tau=None).
+        tau_entries = [(j, e.tau) for j, e in enumerate(self) if e.tau is not None]
+        tau_names, tau_matrix = (
+            _slot_matrix(tau_entries, n) if tau_entries else ([], jnp.zeros((0, n)))
+        )
+
+        is_absorption = jnp.array([e.profile.is_absorption for e in self], dtype=bool)
+
         z_names, z_matrix = _token_matrix(self._entries, lambda e: e.redshift, n)
 
         # Assign profile params to slots based on each profile's param_names() order.
@@ -684,8 +747,8 @@ class LineConfiguration:
         priors: dict[str, Prior] = {}
         seen_ids: set[int] = set()
         for entry in self:
-            for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
-                if id(tok) not in seen_ids:
+            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
+                if tok is not None and id(tok) not in seen_ids:
                     seen_ids.add(id(tok))
                     priors[tok.name] = tok.prior
 
@@ -705,6 +768,9 @@ class LineConfiguration:
             p1d_matrix=p1d_matrix,
             p2_names=p2_names,
             p2_matrix=p2_matrix,
+            tau_names=tau_names,
+            tau_matrix=tau_matrix,
+            is_absorption=is_absorption,
             priors=priors,
         )
 
@@ -740,7 +806,10 @@ class LineConfiguration:
             _collect(entry.redshift, 'redshift')
             for pn, w_obj in entry.fwhms.items():
                 _collect(w_obj, pn)
-            _collect(entry.flux, 'flux')
+            if entry.flux is not None:
+                _collect(entry.flux, 'flux')
+            if entry.tau is not None:
+                _collect(entry.tau, 'tau')
 
         # Create a global param_namer that includes all tokens from all sections
         # This is needed for priors that reference parameters from other sections
@@ -764,8 +833,11 @@ class LineConfiguration:
                 'wavelength_unit': entry.wavelength.unit.to_string(),
                 'redshift': entry.redshift.name,
                 'params': {pn: tok.name for pn, tok in entry.fwhms.items()},
-                'flux': entry.flux.name,
             }
+            if entry.flux is not None:
+                item['flux'] = entry.flux.name
+            if entry.tau is not None:
+                item['tau'] = entry.tau.name
             item['profile'] = entry.profile.to_dict()
             if entry.strength != 1.0:
                 item['strength'] = entry.strength
@@ -806,6 +878,7 @@ class LineConfiguration:
                     profile=entry.profile,
                     redshift=entry.redshift,
                     flux=entry.flux,
+                    tau=entry.tau,
                     strength=entry.strength,
                     **entry.fwhms,
                 )
@@ -830,6 +903,8 @@ class LineConfiguration:
                 return Redshift
             if section == 'flux':
                 return Flux
+            if section == 'tau':
+                return Tau
             if section.startswith('fwhm'):
                 return FWHM
             return LineShape
@@ -879,12 +954,21 @@ class LineConfiguration:
                 pn: section_tokens[pn][tok_name]
                 for pn, tok_name in line_data['params'].items()
             }
+            flux_tok = (
+                section_tokens['flux'][line_data['flux']]
+                if 'flux' in line_data
+                else None
+            )
+            tau_tok = (
+                section_tokens['tau'][line_data['tau']] if 'tau' in line_data else None
+            )
             config.add_line(
                 line_data['name'],
                 line_data['wavelength'] * u.Unit(line_data['wavelength_unit']),
                 profile=profile,
                 redshift=section_tokens['redshift'][line_data['redshift']],
-                flux=section_tokens['flux'][line_data['flux']],
+                flux=flux_tok,
+                tau=tau_tok,
                 strength=line_data.get('strength', 1.0),
                 **param_kwargs,
             )
@@ -984,14 +1068,16 @@ class LineConfiguration:
         # Build a mapping of token name → token from self's entries.
         self_tokens: dict[str, Parameter] = {}
         for entry in self._entries:
-            for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
-                if tok.name not in self_tokens:
+            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
+                if tok is not None and tok.name not in self_tokens:
                     self_tokens[tok.name] = tok
 
         # Build a mapping from other's token id → replacement token.
         other_remap: dict[int, Parameter] = {}
         for entry in other._entries:
-            for tok in (entry.flux, entry.redshift, *entry.fwhms.values()):
+            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
+                if tok is None:
+                    continue
                 tid = id(tok)
                 if tid in other_remap:
                     continue
@@ -1023,12 +1109,16 @@ class LineConfiguration:
                 profile=entry.profile,
                 redshift=entry.redshift,
                 flux=entry.flux,
+                tau=entry.tau,
                 strength=entry.strength,
                 **entry.fwhms,
             )
         for entry in other._entries:
             remapped_z = other_remap[id(entry.redshift)]
-            remapped_flux = other_remap[id(entry.flux)]
+            remapped_flux = (
+                other_remap[id(entry.flux)] if entry.flux is not None else None
+            )
+            remapped_tau = other_remap[id(entry.tau)] if entry.tau is not None else None
             remapped_fwhms = {k: other_remap[id(v)] for k, v in entry.fwhms.items()}
             merged.add_line(
                 entry.name,
@@ -1036,6 +1126,7 @@ class LineConfiguration:
                 profile=entry.profile,
                 redshift=remapped_z,
                 flux=remapped_flux,
+                tau=remapped_tau,
                 strength=entry.strength,
                 **remapped_fwhms,
             )
@@ -1070,7 +1161,7 @@ class LineConfiguration:
         if not self._entries:
             return 'LineConfiguration: empty'
 
-        n_flux = len({id(e.flux) for e in self._entries})
+        n_flux = len({id(e.flux) for e in self._entries if e.flux is not None})
         n_z = len({id(e.redshift) for e in self._entries})
         n_params = sum(
             len({id(e.fwhms.get(wn)) for e in self._entries if wn in e.fwhms})
@@ -1086,6 +1177,8 @@ class LineConfiguration:
             # Tokens are always named after add_line registration
             fwhm_display = ', '.join(f.name for f in entry.fwhms.values())
 
+            flux_or_tau = entry.flux.name if entry.flux is not None else entry.tau.name
+
             rows.append(
                 (
                     entry.name,
@@ -1093,7 +1186,7 @@ class LineConfiguration:
                     prof_name,
                     entry.redshift.name,
                     fwhm_display,
-                    entry.flux.name,
+                    flux_or_tau,
                     f'{entry.strength:.2f}',
                 )
             )
@@ -1104,7 +1197,7 @@ class LineConfiguration:
             'Profile',
             'Redshift',
             'Params',
-            'Flux',
+            'Flux/Tau',
             'Strength',
         )
         widths = [len(h) for h in headers]
@@ -1145,10 +1238,20 @@ class LineConfiguration:
         seen_flux: set[int] = set()
         flux_params: list[tuple[str, Prior]] = []
         for entry in self._entries:
-            fid = id(entry.flux)
-            if fid not in seen_flux:
-                seen_flux.add(fid)
-                flux_params.append((entry.flux.name, entry.flux.prior))
+            if entry.flux is not None:
+                fid = id(entry.flux)
+                if fid not in seen_flux:
+                    seen_flux.add(fid)
+                    flux_params.append((entry.flux.name, entry.flux.prior))
+
+        seen_tau: set[int] = set()
+        tau_params: list[tuple[str, Prior]] = []
+        for entry in self._entries:
+            if entry.tau is not None:
+                tid = id(entry.tau)
+                if tid not in seen_tau:
+                    seen_tau.add(tid)
+                    tau_params.append((entry.tau.name, entry.tau.prior))
 
         def _fmt_section(title: str, params: list[tuple[str, Prior]]) -> list[str]:
             name_w = max(len(p[0]) for p in params)
@@ -1162,6 +1265,10 @@ class LineConfiguration:
         for wn in fwhm_key_order:
             lines_out += _fmt_section(f'Params ({wn})', fwhm_params[wn])
 
-        lines_out += _fmt_section('Flux', flux_params)
+        if flux_params:
+            lines_out += _fmt_section('Flux', flux_params)
+
+        if tau_params:
+            lines_out += _fmt_section('Tau', tau_params)
 
         return '\n'.join(lines_out)

@@ -209,3 +209,47 @@ all pre-computed matrices, scales, and data arrays. You can now proceed to infer
 :::{note}
 Filtering the configurations and computing scales can be skipped; building the model will automatically call `prepare()` and `compute_scales()` with sensible defaults if they have not been called yet. However, we recommend calling them explicitly to inspect the filtered configurations and diagnostics before committing to the full model build.
 :::
+
+### Absorber Position
+
+:::{warning}
+Due to the impossibility of analytically integrating absorption profiles, 
+absorption lines are evaluated at pixel centers rather than integrated over pixels
+when using integration mode in unite. This is accurate when the absorber changes 
+slowly over the pixel width. This may cause issues when simultaneously modeling 
+absorbers in different spectra where the absorption is unresolved in one or many
+spectra, but resolved in others.
+:::
+
+When your line configuration includes absorption lines, the `absorber_position`
+parameter on `build()` controls where the absorbing material sits relative to
+the emission and continuum sources. This affects the model equation:
+
+```python
+# Default: absorber in front of everything
+model_fn, args = builder.build(absorber_position='foreground') # Default
+
+# Absorber between continuum source and emission region
+model_fn, args = builder.build(absorber_position='behind_lines')
+
+# Absorber between emission region and observer, behind continuum
+model_fn, args = builder.build(absorber_position='behind_continuum')
+```
+
+The three options correspond to different physical geometries:
+
+| Position | Model equation | Physical meaning |
+|---|---|---|
+| `'foreground'` | `T * (emission + continuum)` | Absorber in front of lines and and continua |
+| `'behind_lines'` | `emission + T * continuum` | Absorber between continua and lines |
+| `'behind_continuum'` | `T * emission + continuum` | Absorber between lines and continua |
+
+where `T = exp(-tau * phi(lambda))` is the transmission spectrum.
+
+When no absorption lines are present, `T = 1` everywhere and the model reduces to the standard emission + continuum equation regardless of `absorber_position`.
+
+The `fit()` convenience method also accepts `absorber_position`:
+
+```python
+samples, args = builder.fit(absorber_position='foreground')
+```

@@ -202,3 +202,69 @@ class TestEvaluateContinuum:
             assert isinstance(key, str)
             assert arr.shape == (3, n_pix)
         assert np.all(np.isfinite(pred.total))
+
+
+# ---------------------------------------------------------------------------
+# Absorption line evaluation
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateAbsorption:
+    """Tests for evaluate_model with absorption lines."""
+
+    def test_no_absorption_transmission_is_none(self, simple_setup):
+        """No absorption lines → transmission is None."""
+        samples, args, _ = simple_setup
+        pred = evaluate_model(samples, args)[0]
+        assert pred.transmission is None
+
+    def test_absorption_transmission_returned(self):
+        """Absorption lines → transmission is in SpectrumPrediction."""
+        from unite.line.config import Tau
+        from unite.line.profiles import GaussianAbsorption
+
+        spec = _make_spectrum(name='abs_eval')
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=GaussianAbsorption(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=Tau(prior=prior.Fixed(2.0)),
+        )
+        _model_fn, args = _build_model(spec, lc)
+        preds = evaluate_model({}, args)
+        pred = preds[0]
+        assert pred.transmission is not None
+        assert pred.transmission.shape == pred.total.shape
+        # Transmission should be in (0, 1] range
+        assert np.all(pred.transmission > 0)
+        assert np.all(pred.transmission <= 1.0)
+
+    def test_absorption_tau_zero_transmission_one(self):
+        """tau=0 → transmission is 1 everywhere."""
+        from unite.line.config import Tau
+        from unite.line.profiles import GaussianAbsorption
+
+        spec = _make_spectrum(name='abs_t0')
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=GaussianAbsorption(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=Tau(prior=prior.Fixed(0.0)),
+        )
+        _model_fn, args = _build_model(spec, lc)
+        pred = evaluate_model({}, args)[0]
+        assert pred.transmission is not None
+        np.testing.assert_allclose(pred.transmission, 1.0, atol=1e-7)

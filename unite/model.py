@@ -80,6 +80,9 @@ class ModelArgs:
     #: Human-readable column labels for each continuum region, parallel to ``cont_config``.
     #: Derived from form type and wavelength bounds.
     continuum_labels: list[str]
+    #: Absorber placement relative to emission and continuum sources.
+    #: One of ``'foreground'``, ``'behind_lines'``, or ``'behind_continuum'``.
+    absorber_position: str = 'foreground'
 
     def __len__(self) -> int:
         """Return the number of spectra in the model."""
@@ -136,9 +139,19 @@ def unite_model(args: ModelArgs) -> None:
             obj_ctx[tok] = val
 
     # --- 2. Per-line parameter arrays via matrix products ---
-    # Flux: include multiplet strengths.
-    flux_vec = jnp.stack([context[n] for n in cm.flux_names])
-    flux_per_line = flux_vec @ cm.flux_matrix * cm.strengths  # (n_lines,)
+    # Flux: include multiplet strengths (emission lines only; absorption lines have 0).
+    if cm.flux_names:
+        flux_vec = jnp.stack([context[n] for n in cm.flux_names])
+        flux_per_line = flux_vec @ cm.flux_matrix * cm.strengths  # (n_lines,)
+    else:
+        flux_per_line = jnp.zeros(n_lines)
+
+    # Tau: optical depths for absorption lines (emission lines have 0).
+    if cm.tau_names:
+        tau_vec = jnp.stack([context[n] for n in cm.tau_names])
+        tau_per_line = tau_vec @ cm.tau_matrix  # (n_lines,)
+    else:
+        tau_per_line = jnp.zeros(n_lines)
 
     # Redshift (delta from systemic).
     z_vec = jnp.stack([context[n] for n in cm.z_names])
@@ -216,11 +229,18 @@ def unite_model(args: ModelArgs) -> None:
             low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
         ) / (high - low)
 
-        # Sum over lines weighted by flux, scaled by per-spectrum
-        # line_flux_scale and divided by norm to bring to O(1) space.
-        line_model = ((flux_per_line * lfs / norm)[:, None] * pixints).sum(
+        # Emission lines: sum flux-weighted profiles.
+        emission_mask = ~cm.is_absorption  # (n_lines,)
+        emission_pixints = jnp.where(emission_mask[:, None], pixints, 0.0)
+        line_model = ((flux_per_line * lfs / norm)[:, None] * emission_pixints).sum(
             axis=0
         )  # (n_pixels,)
+
+        # Absorption lines: compute transmission = exp(-sum(tau * phi)).
+        absorption_mask = cm.is_absorption
+        absorption_pixints = jnp.where(absorption_mask[:, None], pixints, 0.0)
+        total_tau = (tau_per_line[:, None] * absorption_pixints).sum(axis=0)
+        transmission = jnp.exp(-total_tau)
 
         # Continuum (evaluated in canonical-unit wavelengths, then normalized).
         continuum = jnp.zeros(spectrum.npix)
@@ -245,9 +265,22 @@ def unite_model(args: ModelArgs) -> None:
                 continuum = continuum + jnp.where(in_region, region_cont, 0.0)
 
         # Likelihood (normalized flux space).
-        # Continuum is scaled by per-spectrum continuum_scale so that
-        # sampled 'scale' parameters are O(1).
-        model = flux_scale * (line_model + continuum * cs / norm)
+        # Apply transmission based on absorber_position.
+        cont_term = continuum * cs / norm
+        absorber_position = args.absorber_position
+        if absorber_position == 'foreground':
+            model = flux_scale * transmission * (line_model + cont_term)
+        elif absorber_position == 'behind_lines':
+            model = flux_scale * (line_model + transmission * cont_term)
+        elif absorber_position == 'behind_continuum':
+            model = flux_scale * (transmission * line_model + cont_term)
+        else:
+            msg = (
+                f"absorber_position must be one of ('foreground', "
+                f"'behind_lines', 'behind_continuum'), "
+                f'got {absorber_position!r}.'
+            )
+            raise ValueError(msg)
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(
             obs_name,
@@ -348,7 +381,8 @@ class ModelBuilder:
             # the original entries since tokens carry their .name attribute.
             tok: tok.name
             for entry in line_config._entries
-            for tok in (entry.flux, entry.redshift, *entry.fwhms.values())
+            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values())
+            if tok is not None
         }
 
         # Calibration tokens from each unique disperser.
@@ -391,8 +425,25 @@ class ModelBuilder:
         """Precomputed matrices (after coverage filtering)."""
         return self._matrices
 
-    def build(self) -> tuple[Callable, ModelArgs]:
+    def build(
+        self, *, absorber_position: str = 'foreground'
+    ) -> tuple[Callable, ModelArgs]:
         """Build the numpyro model function and its arguments.
+
+        Parameters
+        ----------
+        absorber_position : str, optional
+            Where the absorber sits relative to emission lines and
+            continuum.  One of:
+
+            * ``'foreground'`` (default) — absorbs both emission and
+              continuum.
+            * ``'behind_lines'`` — absorbs only the continuum (the
+              absorber is between the continuum source and the emission
+              region).
+            * ``'behind_continuum'`` — absorbs only emission lines (the
+              absorber is between the emission region and the observer,
+              but behind the continuum source).
 
         Returns
         -------
@@ -400,7 +451,19 @@ class ModelBuilder:
             The numpyro model function (signature: ``model_fn(args)``).
         model_args : ModelArgs
             Pre-built data bundle to pass to the model function.
+
+        Raises
+        ------
+        ValueError
+            If *absorber_position* is not one of the valid values.
         """
+        valid_positions = ('foreground', 'behind_lines', 'behind_continuum')
+        if absorber_position not in valid_positions:
+            msg = (
+                f'absorber_position must be one of {valid_positions}, '
+                f'got {absorber_position!r}.'
+            )
+            raise ValueError(msg)
         # Trim spectra to union of continuum regions (observed frame).
         # Pixels outside all regions have model = 0 and would corrupt the
         # likelihood if observed flux is nonzero.  Trimming also reduces
@@ -529,6 +592,7 @@ class ModelBuilder:
             continuum_scale_quantity=cont_scale_qty,
             line_labels=line_labels,
             continuum_labels=continuum_labels,
+            absorber_position=absorber_position,
         )
         return unite_model, args
 
@@ -539,6 +603,7 @@ class ModelBuilder:
         num_chains: int = 1,
         seed: int = 0,
         progress_bar: bool = True,
+        absorber_position: str = 'foreground',
     ) -> dict:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -559,6 +624,10 @@ class ModelBuilder:
             Random seed for JAX's PRNG (default: 0).
         progress_bar : bool, optional
             Whether to display a progress bar (default: True).
+        absorber_position : str, optional
+            Where the absorber sits relative to emission lines and
+            continuum (default: ``'foreground'``).  See
+            :meth:`build` for details.
 
         Returns
         -------
@@ -573,7 +642,7 @@ class ModelBuilder:
         import jax
         from numpyro import infer
 
-        model_fn, model_args = self.build()
+        model_fn, model_args = self.build(absorber_position=absorber_position)
         mcmc = infer.MCMC(
             infer.NUTS(model_fn, dense_mass=True),
             num_warmup=num_warmup,

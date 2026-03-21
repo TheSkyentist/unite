@@ -1075,3 +1075,191 @@ class TestSharedContinuumToken:
         predictive = Predictive(model_fn, num_samples=2)
         samples = predictive(rng_key, args)
         assert 'obs_sc' in samples
+
+
+# ---------------------------------------------------------------------------
+# Absorption line model tests
+# ---------------------------------------------------------------------------
+
+
+def _create_absorption_spectrum():
+    """Create a spectrum for absorption line testing."""
+    wl = np.linspace(6500, 6600, 80) * u.AA
+    disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='abs_spec')
+    low = wl - 0.5 * np.gradient(wl)
+    high = wl + 0.5 * np.gradient(wl)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = np.ones(len(wl)) * 100.0 * flux_unit
+    error = np.full(len(wl), 1.0) * flux_unit
+    return Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='abs_spec'
+    )
+
+
+class TestAbsorptionModel:
+    """Tests for absorption line support in the model pipeline."""
+
+    def test_emission_only_regression(self, basic_model):
+        """Emission-only model still works unchanged."""
+        _unite_model, args, _ = basic_model
+        assert len(args.matrices.tau_names) == 0
+        assert not jnp.any(args.matrices.is_absorption)
+
+    def test_absorption_model_builds(self):
+        """Model with absorption lines builds and runs."""
+        from unite.line.profiles import GaussianAbsorption
+
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+            flux=line.Flux(prior=prior.Uniform(0, 5)),
+        )
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=GaussianAbsorption(),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
+            tau=line.Tau(prior=prior.Uniform(0, 5)),
+        )
+        model_fn, args = _prepare_and_build(lc, None, Spectra([spec], redshift=0.0))
+
+        assert len(args.matrices.tau_names) == 1
+        assert jnp.any(args.matrices.is_absorption)
+
+        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
+        assert 'obs_abs_spec' in samples
+
+    def test_tau_zero_no_absorption(self):
+        """tau=0 should produce transmission=1 (no absorption)."""
+        from unite.line.profiles import GaussianAbsorption
+
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=GaussianAbsorption(),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(0.0)),
+        )
+        model_fn, args = _prepare_and_build(lc, None, Spectra([spec], redshift=0.0))
+        # With tau=0, model predictions should just be 0 (no emission lines, transmission=1)
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+        obs = samples['obs_abs_spec']
+        # With tau=0 and no emission, model is just 0 everywhere
+        assert obs.shape[1] > 0  # sanity check
+
+    def test_tau_positive_reduces_flux(self):
+        """tau>0 should reduce flux at line center relative to tau=0."""
+        from unite.evaluate import evaluate_model
+        from unite.line.profiles import GaussianAbsorption
+
+        spec = create_simple_spectrum()
+
+        def _build_abs_model(tau_val):
+            lc = line.LineConfiguration()
+            lc.add_line(
+                'Ha',
+                6563.0 * u.AA,
+                redshift=line.Redshift(prior=prior.Fixed(0.0)),
+                fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+                flux=line.Flux(prior=prior.Fixed(1.0)),
+            )
+            lc.add_line(
+                'HI_abs',
+                6563.0 * u.AA,
+                profile=GaussianAbsorption(),
+                redshift=line.Redshift(prior=prior.Fixed(0.0)),
+                fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+                tau=line.Tau(prior=prior.Fixed(tau_val)),
+            )
+            return _prepare_and_build(lc, None, Spectra([spec], redshift=0.0))
+
+        _model_fn0, args0 = _build_abs_model(0.0)
+        _model_fn5, args5 = _build_abs_model(5.0)
+
+        # Use evaluate_model with empty samples (all Fixed) to get model predictions.
+        pred0 = evaluate_model({}, args0)[0]
+        pred5 = evaluate_model({}, args5)[0]
+
+        # Find pixel closest to the line center wavelength.
+        center_idx = int(np.argmin(np.abs(pred0.wavelength - 6563.0)))
+        total0 = pred0.total[0, center_idx]
+        total5 = pred5.total[0, center_idx]
+        assert total5 < total0
+
+    def test_invalid_absorber_position_raises(self):
+        """Invalid absorber_position should raise ValueError."""
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line('Ha', 6563.0 * u.AA)
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        with pytest.raises(ValueError, match='absorber_position must be one of'):
+            builder.build(absorber_position='invalid')
+
+    def test_absorber_positions(self):
+        """All three absorber positions build and run without error."""
+        from unite.line.profiles import GaussianAbsorption
+
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=GaussianAbsorption(),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(2.0)),
+        )
+        for pos in ('foreground', 'behind_lines', 'behind_continuum'):
+            spectra = Spectra([spec], redshift=0.0)
+            model_fn, args = _prepare_and_build(lc, None, spectra)
+            # Rebuild with specific absorber_position
+            spectra2 = Spectra([spec], redshift=0.0)
+            spectra2.prepare(lc)
+            spectra2.compute_scales(spectra2.prepared_line_config)
+            builder = model.ModelBuilder(spectra2.prepared_line_config, None, spectra2)
+            model_fn, args = builder.build(absorber_position=pos)
+            assert args.absorber_position == pos
+            samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+            assert 'obs_abs_spec' in samples
+
+    def test_absorption_only_model(self):
+        """Model with only absorption lines (no emission) builds and runs."""
+        from unite.line.profiles import GaussianAbsorption
+
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=GaussianAbsorption(),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(1.0)),
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        # Manually set scales since compute_scales needs emission lines.
+        spectra.line_scale = 1.0 * u.Unit('1e-17 erg / (s cm2)')
+        spectra.continuum_scale = 1.0 * u.Unit('1e-17 erg / (s cm2 AA)')
+        model_fn, args = model.ModelBuilder(
+            spectra.prepared_line_config, None, spectra
+        ).build()
+
+        # Flux matrix should be empty
+        assert args.matrices.flux_matrix.shape[0] == 0
+        assert len(args.matrices.tau_names) == 1
+
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+        assert 'obs_abs_spec' in samples

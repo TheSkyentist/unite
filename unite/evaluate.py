@@ -37,6 +37,9 @@ class SpectrumPrediction:
     #: (e.g. ``'linear_6400_6700'``, ``'powerlaw_0.95_2.5'``).
     #: Shape ``(n_samples, n_pixels)`` each.
     continuum_regions: dict[str, np.ndarray]
+    #: Combined transmission from all absorption lines. Shape ``(n_samples, n_pixels)``.
+    #: ``None`` when no absorption lines are present.
+    transmission: np.ndarray | None = None
 
 
 def evaluate_model(
@@ -128,8 +131,17 @@ def evaluate_model(
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
-            flux_vec = jnp.stack([params[n] for n in cm.flux_names])
-            flux_per_line = flux_vec @ cm.flux_matrix * cm.strengths
+            if cm.flux_names:
+                flux_vec = jnp.stack([params[n] for n in cm.flux_names])
+                flux_per_line = flux_vec @ cm.flux_matrix * cm.strengths
+            else:
+                flux_per_line = jnp.zeros(n_lines)
+
+            if cm.tau_names:
+                tau_vec = jnp.stack([params[n] for n in cm.tau_names])
+                tau_per_line = tau_vec @ cm.tau_matrix
+            else:
+                tau_per_line = jnp.zeros(n_lines)
 
             z_vec = jnp.stack([params[n] for n in cm.z_names])
             z_per_line = z_vec @ cm.z_matrix
@@ -185,8 +197,17 @@ def evaluate_model(
                 low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
             ) / (high - low)
 
-            line_contribs = (flux_per_line * _line_scale)[:, None] * pixints
+            # Emission lines: flux-weighted profiles.
+            emission_mask = ~cm.is_absorption
+            emission_pixints = jnp.where(emission_mask[:, None], pixints, 0.0)
+            line_contribs = (flux_per_line * _line_scale)[:, None] * emission_pixints
             line_contribs_scaled = line_contribs * flux_scale_val
+
+            # Absorption: transmission = exp(-sum(tau * phi)).
+            absorption_mask = cm.is_absorption
+            absorption_pixints = jnp.where(absorption_mask[:, None], pixints, 0.0)
+            total_tau = (tau_per_line[:, None] * absorption_pixints).sum(axis=0)
+            transmission = jnp.exp(-total_tau)
 
             # --- Continuum ---
             continuum_total = jnp.zeros(_n_pix)
@@ -214,15 +235,25 @@ def evaluate_model(
                     cont_contributions.append(region_cont * flux_scale_val)
                     continuum_total = continuum_total + region_cont
 
-            total = flux_scale_val * (line_contribs.sum(axis=0) + continuum_total)
-            return total, line_contribs_scaled, cont_contributions
+            # Apply transmission based on absorber_position.
+            emission_sum = line_contribs.sum(axis=0)
+            absorber_position = args.absorber_position
+            if absorber_position == 'foreground':
+                total = flux_scale_val * transmission * (emission_sum + continuum_total)
+            elif absorber_position == 'behind_lines':
+                total = flux_scale_val * (emission_sum + transmission * continuum_total)
+            else:  # behind_continuum (validated at build time)
+                total = flux_scale_val * (transmission * emission_sum + continuum_total)
+
+            return total, line_contribs_scaled, cont_contributions, transmission
 
         # Vectorise over the leading sample axis of every parameter in context.
         # JAX treats the dict as a pytree and maps axis 0 of each leaf.
-        total_arr, line_arr, cont_arr = jax.vmap(_single)(context)
+        total_arr, line_arr, cont_arr, trans_arr = jax.vmap(_single)(context)
         # total_arr:  (n_samples, n_pix)
         # line_arr:   (n_samples, n_lines, n_pix)
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
+        # trans_arr:  (n_samples, n_pix)
 
         lines_dict: dict[str, np.ndarray] = {
             args.line_labels[j]: np.asarray(line_arr[:, j, :]) for j in range(n_lines)
@@ -232,12 +263,17 @@ def evaluate_model(
             for k in range(len(args.cont_config)):
                 cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
 
+        # Only include transmission when there are absorption lines.
+        has_absorption = bool(jnp.any(cm.is_absorption))
+        transmission_out = np.asarray(trans_arr) if has_absorption else None
+
         results.append(
             SpectrumPrediction(
                 wavelength=wl_out,
                 total=np.asarray(total_arr),
                 lines=lines_dict,
                 continuum_regions=cont_dict,
+                transmission=transmission_out,
             )
         )
 

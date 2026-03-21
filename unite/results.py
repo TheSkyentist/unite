@@ -481,15 +481,20 @@ def _compute_rew_columns(
     z_sys = args.redshift
 
     # --- flux per line: (n_samples, n_lines) ---
-    flux_vecs = np.column_stack(
-        [
-            np.full(n_samples, float(args.all_priors[n].value))
-            if isinstance(args.all_priors[n], Fixed)
-            else np.asarray(samples[n])
-            for n in cm.flux_names
-        ]
-    )
-    flux_per_line = flux_vecs @ np.asarray(cm.flux_matrix) * np.asarray(cm.strengths)
+    if cm.flux_names:
+        flux_vecs = np.column_stack(
+            [
+                np.full(n_samples, float(args.all_priors[n].value))
+                if isinstance(args.all_priors[n], Fixed)
+                else np.asarray(samples[n])
+                for n in cm.flux_names
+            ]
+        )
+        flux_per_line = (
+            flux_vecs @ np.asarray(cm.flux_matrix) * np.asarray(cm.strengths)
+        )
+    else:
+        flux_per_line = np.zeros((n_samples, n_lines))
 
     # --- redshift per line: (n_samples, n_lines) ---
     if cm.z_names:
@@ -510,7 +515,15 @@ def _compute_rew_columns(
 
     result: dict[str, np.ndarray] = {}
 
+    is_absorption = np.asarray(cm.is_absorption)
+
     for j in range(n_lines):
+        # Skip absorption lines — their REW requires numerical integration
+        # of (1 - exp(-tau * phi)) over the profile, which is not yet
+        # implemented.  See GitHub issue for future curve-of-growth support.
+        if is_absorption[j]:
+            continue
+
         label = args.line_labels[j]
         rest_wl = float(cm.wavelengths[j])  # rest-frame, canonical unit
 

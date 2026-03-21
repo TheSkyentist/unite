@@ -369,6 +369,85 @@ and you want them to be treated as the same model parameter. However, proceed wi
 
 ---
 
+## Absorption Lines
+
+`unite` supports absorption lines alongside emission lines. Absorption profiles
+produce a transmission factor `exp(-tau * phi(lambda))` that multiplies the
+emission and/or continuum flux, rather than adding flux. The key difference from
+emission lines is that absorption lines use a {class}`~unite.line.Tau` (optical
+depth) token instead of a {class}`~unite.line.Flux` token.
+
+:::{warning}
+Due to the impossibility of analytically integrating absorption profiles, 
+absorption lines are evaluated at pixel centers rather than integrated over pixels
+when using integration mode in unite. This is accurate when the absorber changes 
+slowly over the pixel width. This may cause issues when simultaneously modeling 
+absorbers in different spectra where the absorption is unresolved in one or many
+spectra, but resolved in others.
+:::
+
+### Adding Absorption Lines
+
+Absorption lines are added with `add_line` using an absorption profile. The
+profile's `is_absorption` property is `True`, and `add_line` auto-detects this
+and creates a `Tau` token instead of `Flux`:
+
+```python
+from unite.line.profiles import GaussianAbsorption, VoigtAbsorption, LorentzianAbsorption
+
+# Gaussian absorption (single FWHM parameter)
+lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+
+# Voigt absorption (Gaussian + Lorentzian FWHM)
+lc.add_line('HI_voigt', 4861.0 * u.AA, profile=VoigtAbsorption())
+
+# Lorentzian absorption (single Lorentzian FWHM)
+lc.add_line('HI_lor', 4341.0 * u.AA, profile=LorentzianAbsorption())
+```
+
+### Tau vs Flux
+
+The `Tau` token controls the optical depth at line center. Higher values mean
+stronger absorption:
+
+```python
+# Explicit tau token with custom prior
+tau = line.Tau('deep', prior=prior.Uniform(0, 50))
+lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+```
+
+Passing `flux` to an absorption profile (or `tau` to an emission profile)
+raises `TypeError`:
+
+```python
+# These raise TypeError:
+lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), flux=line.Flux())  # Error!
+lc.add_line('Ha', 6563.0 * u.AA, tau=line.Tau())  # Error!
+```
+
+### Sharing Tau Parameters
+
+Like `Flux`, `Redshift`, and `FWHM` tokens, `Tau` tokens can be shared across
+multiple absorption lines to produce a single model parameter:
+
+```python
+tau = line.Tau('balmer_tau')
+lc.add_line('HI_Ha', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+lc.add_line('HI_Hb', 4861.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+```
+
+### Mixing Emission and Absorption
+
+Emission and absorption lines coexist naturally in the same configuration:
+
+```python
+lc = line.LineConfiguration()
+lc.add_line('Ha', 6563.0 * u.AA)  # emission (Gaussian by default)
+lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())  # absorption
+```
+
+---
+
 ## Serialization
 
 {class}`~unite.line.LineConfiguration` supports standalone YAML serialization:
