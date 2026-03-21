@@ -83,24 +83,49 @@ The **canonical unit** is the wavelength unit of the first spectrum's disperser 
 ### Rest equivalent widths
 
 When a continuum is included in the fit, `make_parameter_table` automatically appends one
-rest equivalent width (REW) column per emission line. 
+rest equivalent width (REW) column per line (both emission and absorption).
 
-The REW is computed per posterior sample as:
+#### Emission lines
+
+For emission lines, the REW is computed analytically per posterior sample:
 
 $$\mathrm{REW}_j = \frac{F_j}{C_j^\mathrm{obs} \,(1 + z_j)}$$
 
 where $F_j$ is the physical integrated line flux (in `flux_unit * canonical_unit`),
-$C_j^\mathrm{obs}$ is the continuum flux density evaluated at the observed-frame line center
-(in `flux_unit`), and the $(1 + z_j)$ factor (with $z_j = z_\mathrm{sys} + \Delta z_j$)
-converts the observer-frame equivalent width to **rest frame**.  The result is in
-`canonical_unit`.
+$C_j^\mathrm{obs}$ is the total continuum flux density at the observed-frame line center
+(summing all covering continuum regions, in `flux_unit`), and the $(1 + z_j)$ factor
+(with $z_j = z_\mathrm{sys} + \Delta z_j$) converts the observer-frame equivalent
+width to **rest frame**.  The result is in `canonical_unit`.
 
-A few things to keep in mind:
+#### Absorption lines
 
-- **Sign follows line flux** — emission lines yield positive REW; absorption lines (negative
-  flux) yield negative REW.  This matches the standard spectroscopic sign convention.
-- **Lines without continuum coverage are omitted** — if a line's rest-frame wavelength falls
-  outside every continuum region, no `_rew` column is produced for it.
+For absorption lines (parameterized with optical depth $\tau$), the REW is computed
+by numerical integration:
+
+$$\mathrm{REW}_j = \frac{1}{1 + z_j} \int \frac{\Delta_j(\lambda)}{C_j^\mathrm{obs}} \, d\lambda$$
+
+where $\Delta_j(\lambda) = F_\mathrm{total}(\lambda) \times (1 - 1/T_j(\lambda))$ is the
+flux removed by absorber $j$, and $T_j = \exp(-\tau_j \, \phi_j)$ is its transmission.
+The integral is evaluated via the trapezoidal rule on the spectrum with the finest pixel
+grid covering the line.  Absorption REW values are negative.
+
+:::{note}
+Absorption REW values should be used with caution:
+
+1. The integration uses the pixel grid of the highest-resolution spectrum covering
+   the absorption line.  If no spectrum fully resolves the absorption profile, the
+   REW may be underestimated.
+2. The continuum normalization sums **all** continuum regions covering the line center.
+   In regions where continuum regions overlap, this may differ from the user's intended
+   local continuum level.
+:::
+
+#### General notes
+
+- **Sign convention** — emission lines yield positive REW; absorption lines yield
+  negative REW.
+- **Lines without continuum coverage are omitted** — if a line's rest-frame wavelength
+  falls outside every continuum region, no `rew_` column is produced for it.
 
 ### Table metadata
 

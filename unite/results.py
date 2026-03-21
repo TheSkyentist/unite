@@ -93,6 +93,14 @@ def make_parameter_table(
           ``canonical_wl_unit``.  One column per line whose rest-frame
           wavelength falls within a continuum region.  Appended after all
           model parameters when a continuum is present.
+
+    Notes
+    -----
+    For **absorption lines**, the rest equivalent width is computed by
+    numerically integrating the absorbed flux profile over the spectrum with
+    the finest pixel grid covering the line.  Use absorption REW values with
+    caution when the covering spectrum does not fully resolve the absorption
+    profile.
     """
     table = QTable()
 
@@ -108,6 +116,7 @@ def make_parameter_table(
 
     # Classify parameter names.
     flux_names: set[str] = set(cm.flux_names)
+    tau_names: set[str] = set(cm.tau_names)
     fwhm_names: set[str] = set(cm.p0_names or []) | set(cm.p1v_names or [])
     z_names: set[str] = set(cm.z_names or [])
 
@@ -123,6 +132,8 @@ def make_parameter_table(
         if pname in flux_names:
             phys = arr * line_flux_scale_0
             return u.Quantity(phys, unit=line_flux_unit)
+        if pname in tau_names:
+            return arr  # dimensionless optical depth
         if pname in fwhm_names:
             return u.Quantity(arr, unit=u.km / u.s)
         if pname in z_names:
@@ -137,7 +148,12 @@ def make_parameter_table(
         return arr  # calibration or other dimensionless param
 
     ordered = _categorized_order(
-        args.dependency_order, z_names, fwhm_names, flux_names, cont_param_lookup
+        args.dependency_order,
+        z_names,
+        fwhm_names,
+        flux_names,
+        tau_names,
+        cont_param_lookup,
     )
     rew_cols = _compute_rew_columns(samples, args)
 
@@ -166,21 +182,40 @@ def make_parameter_table(
             vals = rew_arr
         table[col_name] = u.Quantity(vals, unit=canonical_unit)
 
+    # Split REW columns into emission (after flux) and absorption (after tau).
+    abs_labels = {
+        args.line_labels[j]
+        for j in range(len(args.line_labels))
+        if np.asarray(cm.is_absorption)[j]
+    }
+    emission_rew = {
+        k: v for k, v in rew_cols.items() if k.removeprefix('rew_') not in abs_labels
+    }
+    absorption_rew = {
+        k: v for k, v in rew_cols.items() if k.removeprefix('rew_') in abs_labels
+    }
+
     if percentiles is not None:
         pct_arr = np.asarray(percentiles)
         table['percentile'] = pct_arr
         for category, pnames in ordered.items():
             for pname in pnames:
                 _add_param(pname, pct_arr=pct_arr)
-            if category == 'flux' and rew_cols:
-                for col_name, rew_arr in rew_cols.items():
+            if category == 'flux' and emission_rew:
+                for col_name, rew_arr in emission_rew.items():
+                    _add_rew(rew_arr, col_name, pct_arr=pct_arr)
+            if category == 'tau' and absorption_rew:
+                for col_name, rew_arr in absorption_rew.items():
                     _add_rew(rew_arr, col_name, pct_arr=pct_arr)
     else:
         for category, pnames in ordered.items():
             for pname in pnames:
                 _add_param(pname)
-            if category == 'flux' and rew_cols:
-                for col_name, rew_arr in rew_cols.items():
+            if category == 'flux' and emission_rew:
+                for col_name, rew_arr in emission_rew.items():
+                    _add_rew(rew_arr, col_name)
+            if category == 'tau' and absorption_rew:
+                for col_name, rew_arr in absorption_rew.items():
                     _add_rew(rew_arr, col_name)
 
     # Add metadata (short keys for FITS compatibility).
@@ -371,6 +406,7 @@ def _categorized_order(
     z_names: set[str],
     fwhm_names: set[str],
     flux_names: set[str],
+    tau_names: set[str],
     cont_param_lookup: dict[str, tuple[int, str]],
 ) -> dict[str, list[str]]:
     """Return parameters grouped by category, preserving topological order within each group.
@@ -379,7 +415,7 @@ def _categorized_order(
     ----------
     dependency_order : list of str
         Topologically sorted parameter names from ModelArgs.
-    z_names, fwhm_names, flux_names : set of str
+    z_names, fwhm_names, flux_names, tau_names : set of str
         Parameter name sets from the coupling matrices.
     cont_param_lookup : dict
         Mapping of continuum param name → (region_idx, slot_name).
@@ -387,14 +423,15 @@ def _categorized_order(
     Returns
     -------
     dict of str to list of str
-        Ordered dict with keys ``'z'``, ``'fwhm'``, ``'flux'``, ``'cont'``,
-        ``'instrument'`` and values being the parameter names in each category,
-        in their original topological order.
+        Ordered dict with keys ``'z'``, ``'fwhm'``, ``'flux'``, ``'tau'``,
+        ``'cont'``, ``'instrument'`` and values being the parameter names in
+        each category, in their original topological order.
     """
     groups: dict[str, list[str]] = {
         'z': [],
         'fwhm': [],
         'flux': [],
+        'tau': [],
         'cont': [],
         'instrument': [],
     }
@@ -405,6 +442,8 @@ def _categorized_order(
             groups['fwhm'].append(pname)
         elif pname in flux_names:
             groups['flux'].append(pname)
+        elif pname in tau_names:
+            groups['tau'].append(pname)
         elif pname in cont_param_lookup:
             groups['cont'].append(pname)
         else:
@@ -447,17 +486,22 @@ def _compute_rew_columns(
 ) -> dict[str, np.ndarray]:
     """Compute rest equivalent width per line per posterior sample.
 
-    For each line whose rest-frame wavelength falls within a continuum
-    region, the rest EW is::
+    For **emission lines**, the rest EW is::
 
         REW = F_line / (C_obs * (1 + z_total))
 
-    where ``F_line`` is the physical integrated line flux
-    (``flux_unit * canonical_wl_unit``), ``C_obs`` is the continuum flux
-    density evaluated at the observed-frame line center (``flux_unit``),
-    and the ``(1 + z_total)`` factor converts the observer-frame equivalent
-    width to rest frame.  The result is in rest-frame canonical wavelength
-    units.
+    where ``F_line`` is the physical integrated line flux, ``C_obs`` is the
+    total continuum flux density evaluated at the observed-frame line center
+    (summing all covering continuum regions), and the ``(1 + z_total)``
+    factor converts the observer-frame equivalent width to rest frame.
+
+    For **absorption lines**, the rest EW is computed numerically::
+
+        REW = ∫ delta_j / C_center_j  dλ / (1 + z)
+
+    where ``delta_j`` is the flux removed by the absorber
+    (``total * (1 - 1/T_j)``, negative).  The integral is evaluated via the
+    trapezoidal rule on the finest spectrum grid that covers the line.
 
     Parameters
     ----------
@@ -469,8 +513,9 @@ def _compute_rew_columns(
     Returns
     -------
     dict of str to ndarray
-        Mapping of ``'rew_{line_label}'`` → ``(n_samples,)`` array.
-        Lines without a covering continuum region are omitted.
+        Mapping of ``'rew_{line_label}'`` → ``(n_samples,)`` array for
+        both emission and absorption lines.  Lines without a covering
+        continuum region are omitted.
     """
     if args.cont_config is None or args.cont_resolved_params is None:
         return {}
@@ -479,6 +524,8 @@ def _compute_rew_columns(
     n_samples = _get_n_samples(samples)
     n_lines = int(cm.wavelengths.shape[0])
     z_sys = args.redshift
+    is_absorption = np.asarray(cm.is_absorption)
+    has_absorption = bool(np.any(is_absorption))
 
     # --- flux per line: (n_samples, n_lines) ---
     if cm.flux_names:
@@ -513,69 +560,93 @@ def _compute_rew_columns(
     line_flux_scale = args.line_flux_scales[0]
     cont_scale = args.continuum_scales[0]
 
+    # Compute predictions for absorption REW (numerical integration).
+    predictions = evaluate_model(samples, args) if has_absorption else None
+
     result: dict[str, np.ndarray] = {}
 
-    is_absorption = np.asarray(cm.is_absorption)
+    # --- Helper: evaluate total continuum at a point, summing all covering regions ---
+    def _cont_at_point(obs_wl: np.ndarray) -> np.ndarray:
+        """Total un-scaled continuum at obs_wl (n_samples,) → (n_samples,)."""
+        total = np.zeros(n_samples)
+        for k in range(len(args.cont_config)):
+            obs_low = float(args.cont_low[k]) * (1.0 + z_sys)
+            obs_high = float(args.cont_high[k]) * (1.0 + z_sys)
+            obs_center = float(args.cont_center[k]) * (1.0 + z_sys)
+            median_wl = float(np.median(obs_wl))
+            if median_wl < obs_low or median_wl > obs_high:
+                continue
+            cont_p: dict[str, np.ndarray] = {}
+            for pn, tok in args.cont_resolved_params[k].items():
+                prior = args.all_priors[tok.name]
+                val: np.ndarray = (
+                    np.full(n_samples, float(prior.value))
+                    if isinstance(prior, Fixed)
+                    else np.asarray(samples[tok.name])
+                )
+                if pn == 'norm_wav':
+                    val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
+                cont_p[pn] = val
+            form = args.cont_forms[k]
+            total = total + np.asarray(
+                form.evaluate(obs_wl, obs_center, cont_p, obs_low, obs_high)
+            )
+        return total
 
     for j in range(n_lines):
-        # Skip absorption lines — their REW requires numerical integration
-        # of (1 - exp(-tau * phi)) over the profile, which is not yet
-        # implemented.  See GitHub issue for future curve-of-growth support.
-        if is_absorption[j]:
-            continue
-
         label = args.line_labels[j]
-        rest_wl = float(cm.wavelengths[j])  # rest-frame, canonical unit
-
-        # Find the first continuum region whose rest-frame bounds cover this line.
-        covering_k = None
-        for k in range(len(args.cont_config)):
-            if args.cont_low[k] <= rest_wl <= args.cont_high[k]:
-                covering_k = k
-                break
-
-        if covering_k is None:
-            continue
-
-        k = covering_k
-        form = args.cont_forms[k]
-        obs_low = float(args.cont_low[k]) * (1.0 + z_sys)
-        obs_high = float(args.cont_high[k]) * (1.0 + z_sys)
-        obs_center = float(args.cont_center[k]) * (1.0 + z_sys)
-
-        # Build cont_p with (n_samples,) arrays, mirroring evaluate.py.
-        cont_p: dict[str, np.ndarray] = {}
-        for pn, tok in args.cont_resolved_params[k].items():
-            prior = args.all_priors[tok.name]
-            val: np.ndarray = (
-                np.full(n_samples, float(prior.value))
-                if isinstance(prior, Fixed)
-                else np.asarray(samples[tok.name])
-            )
-            if pn == 'norm_wav':
-                val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
-            cont_p[pn] = val
-
-        # Observed-frame line center per sample: (n_samples,)
+        rest_wl = float(cm.wavelengths[j])
         z_j = z_per_line[:, j]
         obs_wl_j = rest_wl * (1.0 + z_sys + z_j)
-
-        # Continuum flux density at line center (un-scaled, from form.evaluate).
-        cont_val = np.asarray(
-            form.evaluate(obs_wl_j, obs_center, cont_p, obs_low, obs_high)
-        )
-
-        # Physical quantities.
-        cont_physical = cont_val * cont_scale  # flux_unit
-        flux_physical = (
-            flux_per_line[:, j] * line_flux_scale
-        )  # flux_unit * canonical_unit
-
-        # Rest EW = obs EW / (1 + z_total).
         z_total = z_sys + z_j
-        rew = flux_physical / (cont_physical * (1.0 + z_total))  # canonical_unit
 
-        result[f'rew_{label}'] = rew
+        if is_absorption[j]:
+            # --- Absorption REW via numerical integration ---
+            # delta_j = total * (1 - 1/T_j), already stored in pred.lines.
+            # Find the finest spectrum grid that covers this line.
+            obs_center_median = float(np.median(obs_wl_j))
+            best_spec_idx = None
+            best_dpix = np.inf
+            for si, spectrum in enumerate(args.spectra):
+                wl = np.asarray(spectrum.wavelength) * args.spec_to_canonical[si]
+                if wl[0] <= obs_center_median <= wl[-1]:
+                    cidx = np.argmin(np.abs(wl - obs_center_median))
+                    dpix = float(wl[cidx] - wl[cidx - 1] if cidx > 0 else wl[1] - wl[0])
+                    if dpix < best_dpix:
+                        best_dpix = dpix
+                        best_spec_idx = si
+            if best_spec_idx is None:
+                continue
+
+            pred = predictions[best_spec_idx]
+            if label not in pred.lines:
+                continue
+            delta_flux = pred.lines[label]  # (n_samples, n_pix), negative
+
+            # Total continuum at line center, summing all covering regions.
+            cont_center = _cont_at_point(obs_wl_j) * cont_scale  # (n_samples,)
+            cont_center = np.where(np.abs(cont_center) > 1e-30, cont_center, 1e-30)
+
+            # Trapezoid integration: REW = ∫ (delta / C_center) dλ / (1+z).
+            wl_grid = pred.wavelength * args.spec_to_canonical[best_spec_idx]
+            integrand = delta_flux / cont_center[:, None]  # (n_samples, n_pix)
+            rew_obs = np.trapezoid(integrand, x=wl_grid, axis=1)  # (n_samples,)
+            rew = rew_obs / (1.0 + z_total)
+
+            result[f'rew_{label}'] = rew
+
+        else:
+            # --- Emission REW: F_line / (C_center * (1+z)) ---
+            # Sum all covering continuum regions at line center.
+            cont_val = _cont_at_point(obs_wl_j)
+            if np.all(cont_val == 0.0):
+                continue
+
+            cont_physical = cont_val * cont_scale
+            flux_physical = flux_per_line[:, j] * line_flux_scale
+
+            rew = flux_physical / (cont_physical * (1.0 + z_total))
+            result[f'rew_{label}'] = rew
 
     return result
 

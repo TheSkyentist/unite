@@ -212,14 +212,8 @@ class TestEvaluateContinuum:
 class TestEvaluateAbsorption:
     """Tests for evaluate_model with absorption lines."""
 
-    def test_no_absorption_transmission_is_none(self, simple_setup):
-        """No absorption lines → transmission is None."""
-        samples, args, _ = simple_setup
-        pred = evaluate_model(samples, args)[0]
-        assert pred.transmission is None
-
-    def test_absorption_transmission_returned(self):
-        """Absorption lines → transmission is in SpectrumPrediction."""
+    def test_absorption_delta_flux_negative(self):
+        """Absorption line entry in pred.lines is negative (flux removed)."""
         from unite.line.config import Tau
         from unite.line.profiles import GaussianAbsorption
 
@@ -241,16 +235,19 @@ class TestEvaluateAbsorption:
             tau=Tau(prior=prior.Fixed(2.0)),
         )
         _model_fn, args = _build_model(spec, lc)
-        preds = evaluate_model({}, args)
-        pred = preds[0]
-        assert pred.transmission is not None
-        assert pred.transmission.shape == pred.total.shape
-        # Transmission should be in (0, 1] range
-        assert np.all(pred.transmission > 0)
-        assert np.all(pred.transmission <= 1.0)
+        pred = evaluate_model({}, args)[0]
+        # Emission line should be positive.
+        assert 'Ha' in pred.lines
+        assert np.all(pred.lines['Ha'] >= 0)
+        # Absorption line should be negative (flux removed).
+        assert 'HI_abs' in pred.lines
+        delta = pred.lines['HI_abs']
+        assert delta.shape == pred.total.shape
+        # At least some pixels should be notably negative near line center.
+        assert np.min(delta) < 0
 
-    def test_absorption_tau_zero_transmission_one(self):
-        """tau=0 → transmission is 1 everywhere."""
+    def test_absorption_tau_zero_delta_zero(self):
+        """tau=0 → absorption delta is zero everywhere."""
         from unite.line.config import Tau
         from unite.line.profiles import GaussianAbsorption
 
@@ -266,5 +263,10 @@ class TestEvaluateAbsorption:
         )
         _model_fn, args = _build_model(spec, lc)
         pred = evaluate_model({}, args)[0]
-        assert pred.transmission is not None
-        np.testing.assert_allclose(pred.transmission, 1.0, atol=1e-7)
+        np.testing.assert_allclose(pred.lines['HI_abs'], 0.0, atol=1e-7)
+
+    def test_no_transmissions_attr(self, simple_setup):
+        """SpectrumPrediction no longer has a transmissions field."""
+        samples, args, _ = simple_setup
+        pred = evaluate_model(samples, args)[0]
+        assert not hasattr(pred, 'transmissions')

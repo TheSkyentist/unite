@@ -24,6 +24,13 @@ class SpectrumPrediction:
     """Decomposed model prediction for a single spectrum.
 
     All arrays are in original (un-normalized) flux units.
+
+    For **emission lines**, each entry in :attr:`lines` is the flux-weighted
+    line profile (positive, adds to the total).
+
+    For **absorption lines**, each entry in :attr:`lines` is the flux
+    *removed* by that absorber: ``total * (1 - 1/T_j)``, which is negative.
+    This is the delta that would appear if you turned off that absorber.
     """
 
     #: Pixel-center wavelengths in the disperser's unit. Shape ``(n_pixels,)``.
@@ -31,15 +38,14 @@ class SpectrumPrediction:
     #: Total model flux (lines + continuum). Shape ``(n_samples, n_pixels)``.
     total: np.ndarray
     #: Per-line contributions keyed by informative line labels (e.g. ``'Ha'``, ``'[NII]_6585'``).
+    #: For emission lines: flux-weighted profile (positive).
+    #: For absorption lines: flux removed by the absorber (negative).
     #: Shape ``(n_samples, n_pixels)`` each.
     lines: dict[str, np.ndarray]
     #: Per-continuum-region contributions keyed by informative region labels
     #: (e.g. ``'linear_6400_6700'``, ``'powerlaw_0.95_2.5'``).
     #: Shape ``(n_samples, n_pixels)`` each.
     continuum_regions: dict[str, np.ndarray]
-    #: Combined transmission from all absorption lines. Shape ``(n_samples, n_pixels)``.
-    #: ``None`` when no absorption lines are present.
-    transmission: np.ndarray | None = None
 
 
 def evaluate_model(
@@ -203,11 +209,16 @@ def evaluate_model(
             line_contribs = (flux_per_line * _line_scale)[:, None] * emission_pixints
             line_contribs_scaled = line_contribs * flux_scale_val
 
-            # Absorption: transmission = exp(-sum(tau * phi)).
-            absorption_mask = cm.is_absorption
-            absorption_pixints = jnp.where(absorption_mask[:, None], pixints, 0.0)
-            total_tau = (tau_per_line[:, None] * absorption_pixints).sum(axis=0)
-            transmission = jnp.exp(-total_tau)
+            # Per-line optical depth: tau_j * phi_j for each line (0 for emission).
+            per_line_tau = tau_per_line[:, None] * jnp.where(
+                cm.is_absorption[:, None], pixints, 0.0
+            )  # (n_lines, n_pix)
+            # Per-line transmission: T_j = exp(-tau_j * phi_j).
+            per_line_trans = jnp.exp(-per_line_tau)  # (n_lines, n_pix)
+            # Combined transmission for the total model.
+            transmission = per_line_trans.prod(axis=0)  # (n_pix,)
+            # Note: for emission lines, per_line_tau=0 → per_line_trans=1,
+            # so they contribute a factor of 1 to the product.
 
             # --- Continuum ---
             continuum_total = jnp.zeros(_n_pix)
@@ -245,15 +256,25 @@ def evaluate_model(
             else:  # behind_continuum (validated at build time)
                 total = flux_scale_val * (transmission * emission_sum + continuum_total)
 
-            return total, line_contribs_scaled, cont_contributions, transmission
+            # Absorption lines: compute the flux each absorber removes.
+            # delta_j = total * (1 - 1/T_j), negative for absorption.
+            # For emission lines T_j=1, so delta_j=0 (no change).
+            t_j_safe = jnp.where(per_line_trans > 1e-30, per_line_trans, 1e-30)
+            abs_delta = total[None, :] * (1.0 - 1.0 / t_j_safe)  # (n_lines, n_pix)
+            # Merge: emission lines keep their flux profiles, absorption lines
+            # get their delta flux.
+            line_contribs_scaled = jnp.where(
+                cm.is_absorption[:, None], abs_delta, line_contribs_scaled
+            )
+
+            return total, line_contribs_scaled, cont_contributions
 
         # Vectorise over the leading sample axis of every parameter in context.
         # JAX treats the dict as a pytree and maps axis 0 of each leaf.
-        total_arr, line_arr, cont_arr, trans_arr = jax.vmap(_single)(context)
+        total_arr, line_arr, cont_arr = jax.vmap(_single)(context)
         # total_arr:  (n_samples, n_pix)
         # line_arr:   (n_samples, n_lines, n_pix)
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
-        # trans_arr:  (n_samples, n_pix)
 
         lines_dict: dict[str, np.ndarray] = {
             args.line_labels[j]: np.asarray(line_arr[:, j, :]) for j in range(n_lines)
@@ -263,17 +284,12 @@ def evaluate_model(
             for k in range(len(args.cont_config)):
                 cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
 
-        # Only include transmission when there are absorption lines.
-        has_absorption = bool(jnp.any(cm.is_absorption))
-        transmission_out = np.asarray(trans_arr) if has_absorption else None
-
         results.append(
             SpectrumPrediction(
                 wavelength=wl_out,
                 total=np.asarray(total_arr),
                 lines=lines_dict,
                 continuum_regions=cont_dict,
-                transmission=transmission_out,
             )
         )
 

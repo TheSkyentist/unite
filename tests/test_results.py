@@ -10,7 +10,7 @@ from numpyro.infer import Predictive
 
 from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.continuum.config import ContinuumRegion
+from unite.continuum.config import ContinuumRegion, ContShape, Scale
 from unite.instrument.generic import SimpleDisperser
 from unite.results import (
     _get_n_samples,
@@ -390,3 +390,158 @@ class TestFixedParamPercentiles:
             if isinstance(p, prior.Fixed):
                 vals = np.asarray(table[pname])
                 assert np.all(vals == vals[0]), f'{pname} should be constant'
+
+
+# ---------------------------------------------------------------------------
+# REW accuracy tests with fully-determined (Fixed prior) models
+# ---------------------------------------------------------------------------
+
+
+def _make_rew_spectrum(npix=500):
+    """High-resolution flat-continuum spectrum centred on Ha at z=0."""
+    wavelength = np.linspace(6400, 6700, npix) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=5000.0, name='rew')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+    line_flux = 50 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
+    flux = (line_flux + 10.0) * flux_unit
+    error = np.full(npix, 1.0) * flux_unit
+    return Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='rew'
+    )
+
+
+@pytest.fixture(scope='module')
+def emission_rew_setup():
+    """Deterministic emission model: known flux and flat continuum, z=0."""
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha',
+        6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        flux=line.Flux(prior=prior.Fixed(1.0)),
+    )
+    cont = ContinuumConfiguration.from_lines(
+        lc.centers, width=30_000 * u.km / u.s, form=Linear()
+    )
+    # Override continuum priors: flat at scale=1, angle=0.
+    for region in cont:
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        region.params['angle'] = ContShape(prior=prior.Fixed(0.0))
+    spec = _make_rew_spectrum()
+    spectra = Spectra([spec], redshift=0.0)
+    spectra.prepare(lc, cont)
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+    _model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+    return args
+
+
+@pytest.fixture(scope='module')
+def absorption_rew_setup():
+    """Deterministic absorption model: known tau on flat continuum, z=0."""
+    from unite.line.config import Tau
+    from unite.line.profiles import GaussianAbsorption
+
+    lc = line.LineConfiguration()
+    # Need an emission line for compute_scales to work.
+    lc.add_line(
+        'Ha',
+        6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        flux=line.Flux(prior=prior.Fixed(1.0)),
+    )
+    lc.add_line(
+        'HI_abs',
+        6563.0 * u.AA,
+        profile=GaussianAbsorption(),
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        tau=Tau(prior=prior.Fixed(2.0)),
+    )
+    cont = ContinuumConfiguration.from_lines(
+        lc.centers, width=30_000 * u.km / u.s, form=Linear()
+    )
+    for region in cont:
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        region.params['angle'] = ContShape(prior=prior.Fixed(0.0))
+    spec = _make_rew_spectrum()
+    spectra = Spectra([spec], redshift=0.0)
+    spectra.prepare(lc, cont)
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+    _model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+    return args
+
+
+class TestREWAccuracy:
+    """Verify REW values against analytic expectations."""
+
+    def test_emission_rew_value(self, emission_rew_setup):
+        """Emission REW = flux / continuum at z=0.
+
+        With scale=1 (un-scaled), cont_physical = 1 * cont_scale.
+        flux_physical = 1 * line_flux_scale.
+        REW = line_flux_scale / (cont_scale * 1.0) at z=0.
+        """
+        args = emission_rew_setup
+        from unite.results import _compute_rew_columns
+
+        rew_cols = _compute_rew_columns({}, args)
+        assert 'rew_Ha' in rew_cols
+        rew = rew_cols['rew_Ha']
+        # Expected: flux_physical / cont_physical = line_flux_scale / cont_scale
+        expected = args.line_flux_scales[0] / args.continuum_scales[0]
+        np.testing.assert_allclose(rew, expected, rtol=1e-4)
+
+    def test_absorption_rew_negative(self, absorption_rew_setup):
+        """Absorption REW should be negative (flux is removed)."""
+        args = absorption_rew_setup
+        from unite.results import _compute_rew_columns
+
+        rew_cols = _compute_rew_columns({}, args)
+        assert 'rew_HI_abs' in rew_cols
+        rew = rew_cols['rew_HI_abs']
+        assert np.all(rew < 0), f'Absorption REW should be negative, got {rew}'
+
+    def test_absorption_rew_appears_in_table(self, absorption_rew_setup):
+        """Absorption REW appears in parameter table."""
+        args = absorption_rew_setup
+        table = make_parameter_table({}, args)
+        assert 'rew_HI_abs' in table.colnames
+        assert table['rew_HI_abs'].unit is not None
+
+    def test_absorption_rew_magnitude(self, absorption_rew_setup):
+        """Absorption REW magnitude is physical: non-zero, finite, order-of-AA.
+
+        For a Gaussian absorber with tau=2 and FWHM=300 km/s at 6563 AA,
+        the effective FWHM in AA is ~6.56 AA.  The integral of (T-1) for
+        tau=2 is between -FWHM (weak limit) and 0 (no absorption), so the
+        REW should be a few AA (negative).
+        """
+        args = absorption_rew_setup
+        from unite.results import _compute_rew_columns
+
+        rew_cols = _compute_rew_columns({}, args)
+        rew = rew_cols['rew_HI_abs']
+        assert np.all(np.isfinite(rew))
+        assert np.all(np.abs(rew) > 0.1)  # not negligibly small
+        assert np.all(np.abs(rew) < 100)  # not unphysically large
+
+    def test_absorption_line_in_spectra_table(self, absorption_rew_setup):
+        """Absorption line appears as a regular (negative) column in spectra tables."""
+        args = absorption_rew_setup
+        tables = make_spectra_tables({}, args)
+        t = tables[0]
+        # Absorption line appears under its label, not as trans_*.
+        assert 'HI_abs' in t.colnames
+        assert 'trans_HI_abs' not in t.colnames
+        delta_vals = np.asarray(t['HI_abs'])
+        # Should be non-positive (flux removed).
+        assert np.all(delta_vals <= 0)
