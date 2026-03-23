@@ -19,7 +19,7 @@ from numpyro import distributions as dist
 from unite._utils import C_KMS, _get_conversion_factor
 from unite.continuum.config import ContinuumConfiguration
 from unite.line.config import ConfigMatrices, LineConfiguration
-from unite.line.profiles import integrate_lines
+from unite.line.profiles import analytic_integrate_lines, quadrature_integrate_lines
 from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum import Spectra, Spectrum
 
@@ -83,6 +83,16 @@ class ModelArgs:
     #: Absorber placement relative to emission and continuum sources.
     #: One of ``'foreground'``, ``'behind_lines'``, or ``'behind_continuum'``.
     absorber_position: str = 'foreground'
+    #: Line integration mode: ``'analytic'`` (default) uses exact CDF-based
+    #: integration for emission and pixel-center evaluation for absorption;
+    #: ``'quadrature'`` uses Gauss-Legendre quadrature for all profiles.
+    integration_mode: str = 'analytic'
+    #: Gauss-Legendre quadrature nodes on ``[-1, 1]``.
+    #: ``None`` when ``integration_mode='analytic'``.
+    quadrature_nodes: object = None
+    #: Gauss-Legendre quadrature weights.
+    #: ``None`` when ``integration_mode='analytic'``.
+    quadrature_weights: object = None
 
     def __len__(self) -> int:
         """Return the number of spectra in the model."""
@@ -225,9 +235,23 @@ def unite_model(args: ModelArgs) -> None:
 
         # Integrate all lines simultaneously and divide by pixel width
         # to get average flux density per pixel.
-        pixints = integrate_lines(
-            low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
-        ) / (high - low)
+        if args.integration_mode == 'quadrature':
+            pixints = quadrature_integrate_lines(
+                low,
+                high,
+                centers,
+                lsf_fwhm,
+                p0,
+                p1,
+                p2,
+                cm.profile_codes,
+                args.quadrature_nodes,
+                args.quadrature_weights,
+            ) / (high - low)
+        else:
+            pixints = analytic_integrate_lines(
+                low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
+            ) / (high - low)
 
         # Emission lines: sum flux-weighted profiles.
         emission_mask = ~cm.is_absorption  # (n_lines,)
@@ -426,7 +450,11 @@ class ModelBuilder:
         return self._matrices
 
     def build(
-        self, *, absorber_position: str = 'foreground'
+        self,
+        *,
+        absorber_position: str = 'foreground',
+        integration_mode: str = 'analytic',
+        n_nodes: int = 7,
     ) -> tuple[Callable, ModelArgs]:
         """Build the numpyro model function and its arguments.
 
@@ -445,6 +473,22 @@ class ModelBuilder:
               absorber is between the emission region and the observer,
               but behind the continuum source).
 
+        integration_mode : str, optional
+            How line profiles are integrated over pixels.  One of:
+
+            * ``'analytic'`` (default) — exact CDF-based integration
+              for emission profiles and pixel-center evaluation for
+              absorption profiles.
+            * ``'quadrature'`` — Gauss-Legendre quadrature for all
+              profiles (both emission and absorption).  This is more
+              accurate for absorption lines at the cost of speed.
+
+        n_nodes : int, optional
+            Number of Gauss-Legendre quadrature nodes per pixel
+            (default: 7).  Only used when ``integration_mode='quadrature'``.
+            Higher values give more accurate integration at greater
+            computational cost.
+
         Returns
         -------
         model_fn : callable
@@ -455,7 +499,8 @@ class ModelBuilder:
         Raises
         ------
         ValueError
-            If *absorber_position* is not one of the valid values.
+            If *absorber_position* or *integration_mode* is not one of
+            the valid values.
         """
         valid_positions = ('foreground', 'behind_lines', 'behind_continuum')
         if absorber_position not in valid_positions:
@@ -464,6 +509,26 @@ class ModelBuilder:
                 f'got {absorber_position!r}.'
             )
             raise ValueError(msg)
+
+        valid_modes = ('analytic', 'quadrature')
+        if integration_mode not in valid_modes:
+            msg = (
+                f'integration_mode must be one of {valid_modes}, '
+                f'got {integration_mode!r}.'
+            )
+            raise ValueError(msg)
+
+        # Pre-compute Gauss-Legendre nodes and weights if needed.
+        if integration_mode == 'quadrature':
+            from numpy.polynomial.legendre import leggauss
+
+            gl_nodes, gl_weights = leggauss(n_nodes)
+            quadrature_nodes = jnp.asarray(gl_nodes)
+            quadrature_weights = jnp.asarray(gl_weights)
+        else:
+            quadrature_nodes = None
+            quadrature_weights = None
+
         # Trim spectra to union of continuum regions (observed frame).
         # Pixels outside all regions have model = 0 and would corrupt the
         # likelihood if observed flux is nonzero.  Trimming also reduces
@@ -593,6 +658,9 @@ class ModelBuilder:
             line_labels=line_labels,
             continuum_labels=continuum_labels,
             absorber_position=absorber_position,
+            integration_mode=integration_mode,
+            quadrature_nodes=quadrature_nodes,
+            quadrature_weights=quadrature_weights,
         )
         return unite_model, args
 
@@ -604,6 +672,8 @@ class ModelBuilder:
         seed: int = 0,
         progress_bar: bool = True,
         absorber_position: str = 'foreground',
+        integration_mode: str = 'analytic',
+        n_nodes: int = 7,
     ) -> dict:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -628,6 +698,12 @@ class ModelBuilder:
             Where the absorber sits relative to emission lines and
             continuum (default: ``'foreground'``).  See
             :meth:`build` for details.
+        integration_mode : str, optional
+            Line integration mode (default: ``'analytic'``).  See
+            :meth:`build` for details.
+        n_nodes : int, optional
+            Gauss-Legendre quadrature nodes per pixel (default: 7).
+            See :meth:`build` for details.
 
         Returns
         -------
@@ -642,7 +718,11 @@ class ModelBuilder:
         import jax
         from numpyro import infer
 
-        model_fn, model_args = self.build(absorber_position=absorber_position)
+        model_fn, model_args = self.build(
+            absorber_position=absorber_position,
+            integration_mode=integration_mode,
+            n_nodes=n_nodes,
+        )
         mcmc = infer.MCMC(
             infer.NUTS(model_fn, dense_mass=True),
             num_warmup=num_warmup,

@@ -1263,3 +1263,77 @@ class TestAbsorptionModel:
 
         samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
         assert 'obs_abs_spec' in samples
+
+
+class TestIntegrationMode:
+    """Tests for the integration_mode parameter on build() and fit()."""
+
+    def test_invalid_mode_raises(self, basic_model):
+        """Invalid integration_mode should raise ValueError."""
+        spec = create_simple_spectrum()
+        lc = create_minimal_config()
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        with pytest.raises(ValueError, match='integration_mode must be one of'):
+            builder.build(integration_mode='invalid')
+
+    def test_analytic_mode_no_quadrature_arrays(self, basic_model):
+        """Analytic mode should not store quadrature nodes/weights."""
+        _, args, _ = basic_model
+        assert args.integration_mode == 'analytic'
+        assert args.quadrature_nodes is None
+        assert args.quadrature_weights is None
+
+    def test_quadrature_mode_stores_arrays(self):
+        """Quadrature mode should store GL nodes/weights."""
+        spec = create_simple_spectrum()
+        lc = create_minimal_config()
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        _, args = builder.build(integration_mode='quadrature', n_nodes=5)
+        assert args.integration_mode == 'quadrature'
+        assert args.quadrature_nodes.shape == (5,)
+        assert args.quadrature_weights.shape == (5,)
+
+    def test_quadrature_predictive(self):
+        """Model with quadrature integration runs without errors."""
+        spec = create_simple_spectrum()
+        lc = create_minimal_config()
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
+        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
+        assert f'obs_{spec.name}' in samples
+
+    def test_quadrature_matches_analytic_emission(self):
+        """For emission-only models, quadrature should match analytic closely."""
+        from unite.evaluate import evaluate_model
+
+        spec = create_simple_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+
+        _, args_a = builder.build(integration_mode='analytic')
+        _, args_q = builder.build(integration_mode='quadrature', n_nodes=11)
+
+        pred_a = evaluate_model({}, args_a)[0]
+        pred_q = evaluate_model({}, args_q)[0]
+
+        # Total model predictions should match to high precision
+        assert np.allclose(pred_a.total, pred_q.total, rtol=1e-4)

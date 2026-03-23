@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 import jax
+import jax.numpy as jnp
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -779,8 +780,8 @@ _EVALUATE_BRANCHES = [
 ]
 
 
-def _integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
-    """Integrate one line profile over pixel bins, dispatched by ``code``.
+def _analytic_integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
+    """Integrate one line profile over pixel bins analytically, dispatched by ``code``.
 
     All FWHM parameters are in wavelength units.  Shape parameters (h3, h4)
     are dimensionless.  ``lax.switch`` selects the branch at trace time, so
@@ -808,10 +809,10 @@ def _integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
 
 
 # vmap over lines: per-line scalars map to axis 0; pixel arrays are shared (None).
-integrate_lines = jax.vmap(
-    _integrate_single_line, in_axes=(None, None, 0, 0, 0, 0, 0, 0)
+analytic_integrate_lines = jax.vmap(
+    _analytic_integrate_single_line, in_axes=(None, None, 0, 0, 0, 0, 0, 0)
 )
-"""Vectorised integration over all lines simultaneously.
+"""Vectorised analytic integration over all lines simultaneously.
 
 Input shapes: ``low/high (n_pixels,)``, all others ``(n_lines,)``.
 Output shape: ``(n_lines, n_pixels)``.
@@ -845,4 +846,67 @@ evaluate_lines = jax.vmap(_evaluate_single_line, in_axes=(None, 0, 0, 0, 0, 0, 0
 
 Input shapes: ``wavelength (n_points,)``, all others ``(n_lines,)``.
 Output shape: ``(n_lines, n_points)``.
+"""
+
+
+# -------------------------------------------------------------------
+# Gauss-Legendre quadrature integration
+# -------------------------------------------------------------------
+
+
+def _quadrature_integrate_single_line(
+    low, high, center, lsf_fwhm, p0, p1, p2, code, nodes, weights
+):
+    """Integrate one line profile over pixel bins using Gauss-Legendre quadrature.
+
+    Maps quadrature nodes from ``[-1, 1]`` to each pixel ``[lo, hi]`` and
+    evaluates the profile at those points via ``lax.switch`` on the
+    ``evaluate_branch`` dispatch table.
+
+    Parameters
+    ----------
+    low, high : jnp.ndarray, shape (n_pixels,)
+        Pixel bin edges.
+    center, lsf_fwhm, p0, p1, p2 : float
+        Per-line scalars (same meaning as in :func:`_integrate_single_line`).
+    code : int
+        ``Profile.code`` for the line.
+    nodes : jnp.ndarray, shape (n_nodes,)
+        Gauss-Legendre nodes on ``[-1, 1]``.
+    weights : jnp.ndarray, shape (n_nodes,)
+        Gauss-Legendre weights.
+
+    Returns
+    -------
+    jnp.ndarray, shape (n_pixels,)
+        Integrated profile fraction per pixel bin (same output semantics
+        as :func:`_integrate_single_line`).
+    """
+    mid = (low + high) / 2.0
+    half_width = (high - low) / 2.0
+
+    # Quadrature points mapped to each pixel: (n_nodes, n_pixels)
+    x = mid[None, :] + half_width[None, :] * nodes[:, None]
+
+    # Evaluate profile at all quadrature points via lax.switch
+    def _eval_at_node(x_node):
+        return jax.lax.switch(
+            code, _EVALUATE_BRANCHES, x_node, center, lsf_fwhm, p0, p1, p2
+        )
+
+    vals = jax.vmap(_eval_at_node)(x)  # (n_nodes, n_pixels)
+
+    # Weighted sum: ∫f(x)dx ≈ (Δx/2) Σ_j w_j f(x_j)
+    return half_width * jnp.dot(weights, vals)
+
+
+quadrature_integrate_lines = jax.vmap(
+    _quadrature_integrate_single_line,
+    in_axes=(None, None, 0, 0, 0, 0, 0, 0, None, None),
+)
+"""Vectorised Gauss-Legendre quadrature integration over all lines.
+
+Input shapes: ``low/high (n_pixels,)``, ``centers/lsf_fwhm/p0/p1/p2/codes
+(n_lines,)``, ``nodes/weights (n_nodes,)``.
+Output shape: ``(n_lines, n_pixels)``.
 """

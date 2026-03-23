@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from unite._utils import C_KMS
-from unite.line.profiles import integrate_lines
+from unite.line.profiles import analytic_integrate_lines, quadrature_integrate_lines
 from unite.model import ModelArgs
 from unite.prior import Fixed
 
@@ -199,9 +199,23 @@ def evaluate_model(
 
             # --- Line integration ---
             lsf_fwhm = centers / (_disp.R(centers * _inv_wl_scale) * r_scale)
-            pixints = integrate_lines(
-                low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
-            ) / (high - low)
+            if args.integration_mode == 'quadrature':
+                pixints = quadrature_integrate_lines(
+                    low,
+                    high,
+                    centers,
+                    lsf_fwhm,
+                    p0,
+                    p1,
+                    p2,
+                    cm.profile_codes,
+                    args.quadrature_nodes,
+                    args.quadrature_weights,
+                ) / (high - low)
+            else:
+                pixints = analytic_integrate_lines(
+                    low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
+                ) / (high - low)
 
             # Emission lines: flux-weighted profiles.
             emission_mask = ~cm.is_absorption
