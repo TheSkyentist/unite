@@ -1,21 +1,22 @@
-"""Tests for Gauss-Legendre quadrature integration of line profiles."""
+"""Tests for Gauss-Legendre quadrature integration of line profiles.
 
+These tests verify that GL quadrature of ``evaluate_lines`` converges to
+``analytic_integrate_lines`` and that profiles integrate to unity over wide bins.
+"""
+
+import jax
 import jax.numpy as jnp
 import pytest
 
+from unite.line.compute import analytic_integrate_lines, evaluate_lines
 from unite.line.profiles import (
     SEMG,
     Cauchy,
     GaussHermite,
     Gaussian,
-    GaussianAbsorption,
     Laplace,
-    LorentzianAbsorption,
     PseudoVoigt,
     SplitNormal,
-    VoigtAbsorption,
-    analytic_integrate_lines,
-    quadrature_integrate_lines,
 )
 
 
@@ -27,11 +28,29 @@ def _gl_nodes_weights(n):
     return jnp.asarray(nodes), jnp.asarray(weights)
 
 
+def _quadrature_integrate(
+    low, high, centers, lsf, p0s, p1s, p2s, codes, nodes, weights
+):
+    """Integrate line profiles over pixels using GL quadrature of evaluate_lines."""
+    mid = (low + high) / 2.0
+    half_width = (high - low) / 2.0
+    # Sub-pixel points: (n_nodes, n_pix)
+    x = mid[None, :] + half_width[None, :] * nodes[:, None]
+
+    # Evaluate all profiles at each set of node points: (n_nodes, n_lines, n_pix)
+    phi_at_nodes = jax.vmap(
+        lambda wav: evaluate_lines(wav, centers, lsf, p0s, p1s, p2s, codes)
+    )(x)
+
+    # GL weighted sum: (n_lines, n_pix)
+    return half_width[None, :] * jnp.einsum('n,nlp->lp', weights, phi_at_nodes)
+
+
 # ---------------------------------------------------------------------------
 # Quadrature normalization: all profiles should sum to ~1 over wide bins
 # ---------------------------------------------------------------------------
 
-_EMISSION_PROFILES = [
+_ALL_PROFILES = [
     (Gaussian(), {'fwhm_gauss': 100.0}),
     (Cauchy(), {'fwhm_lorentz': 100.0}),
     (PseudoVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0}),
@@ -40,14 +59,6 @@ _EMISSION_PROFILES = [
     (GaussHermite(), {'fwhm_gauss': 80.0, 'h3': 0.1, 'h4': 0.05}),
     (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
 ]
-
-_ABSORPTION_PROFILES = [
-    (GaussianAbsorption(), {'fwhm_gauss': 100.0}),
-    (VoigtAbsorption(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0}),
-    (LorentzianAbsorption(), {'fwhm_lorentz': 100.0}),
-]
-
-_ALL_PROFILES = _EMISSION_PROFILES + _ABSORPTION_PROFILES
 
 
 class TestQuadratureNormalization:
@@ -74,7 +85,7 @@ class TestQuadratureNormalization:
         p2s = jnp.array([p2])
         codes = jnp.array([profile.code])
 
-        result = quadrature_integrate_lines(
+        result = _quadrature_integrate(
             self.low,
             self.high,
             centers,
@@ -87,24 +98,24 @@ class TestQuadratureNormalization:
             self.weights,
         )
         total = float(jnp.sum(result[0]))
-        # Cauchy/Lorentzian have heavy tails
-        tol = 0.1 if isinstance(profile, (Cauchy, LorentzianAbsorption)) else 0.01
+        # Cauchy has heavy tails
+        tol = 0.1 if isinstance(profile, Cauchy) else 0.01
         assert total == pytest.approx(1.0, rel=tol)
 
 
 # ---------------------------------------------------------------------------
-# Convergence: quadrature should match analytic integration for emission
+# Convergence: quadrature should match analytic integration
 # ---------------------------------------------------------------------------
 
 
 class TestQuadratureMatchesAnalytic:
-    """For emission profiles, quadrature integration should converge to
-    analytic integration as n_nodes increases."""
+    """Quadrature integration should converge to analytic integration
+    as n_nodes increases."""
 
     center = 5000.0
     lsf_fwhm = 10.0
 
-    @pytest.mark.parametrize('profile,extra_kwargs', _EMISSION_PROFILES)
+    @pytest.mark.parametrize('profile,extra_kwargs', _ALL_PROFILES)
     def test_convergence(self, profile, extra_kwargs):
         # Use reasonably wide pixels to make the test meaningful
         edges = jnp.linspace(4800.0, 5200.0, 200)
@@ -130,7 +141,7 @@ class TestQuadratureMatchesAnalytic:
         prev_err = float('inf')
         for n_nodes in [3, 5, 7, 11]:
             nodes, weights = _gl_nodes_weights(n_nodes)
-            quad = quadrature_integrate_lines(
+            quad = _quadrature_integrate(
                 lo, hi, centers, lsf, p0s, p1s, p2s, codes, nodes, weights
             )[0]
 
@@ -150,65 +161,6 @@ class TestQuadratureMatchesAnalytic:
 
 
 # ---------------------------------------------------------------------------
-# Absorption profiles: quadrature is more accurate than pixel-center
-# ---------------------------------------------------------------------------
-
-
-class TestAbsorptionQuadratureImprovement:
-    """Quadrature should be more accurate than the pixel-center approximation
-    used by analytic mode for absorption profiles."""
-
-    center = 5000.0
-    lsf_fwhm = 10.0
-
-    def test_gaussian_absorption_vs_reference(self):
-        """For wide pixels, quadrature should match the analytic Gaussian
-        integral better than the pixel-center approximation does."""
-        # Use wide pixels where pixel-center approximation is less accurate
-        edges = jnp.linspace(4950.0, 5050.0, 20)
-        lo, hi = edges[:-1], edges[1:]
-
-        centers = jnp.array([self.center])
-        lsf = jnp.array([self.lsf_fwhm])
-        p0s = jnp.array([100.0])
-        p1s = jnp.zeros(1)
-        p2s = jnp.zeros(1)
-
-        # Reference: use the emission Gaussian (code 0) analytic integration
-        # which is exact via erf.
-        ref_codes = jnp.array([0])  # Gaussian emission (exact)
-        reference = analytic_integrate_lines(
-            lo, hi, centers, lsf, p0s, p1s, p2s, ref_codes
-        )[0]
-
-        # Absorption pixel-center approximation (code 7)
-        abs_codes = jnp.array([7])  # GaussianAbsorption
-        approx = analytic_integrate_lines(
-            lo, hi, centers, lsf, p0s, p1s, p2s, abs_codes
-        )[0]
-
-        # Quadrature on the absorption profile
-        nodes, weights = _gl_nodes_weights(7)
-        quad = quadrature_integrate_lines(
-            lo, hi, centers, lsf, p0s, p1s, p2s, abs_codes, nodes, weights
-        )[0]
-
-        # Both should be close to reference, but quadrature should be closer
-        mask = reference > 1e-8
-        err_approx = float(
-            jnp.max(jnp.abs(reference[mask] - approx[mask]) / reference[mask])
-        )
-        err_quad = float(
-            jnp.max(jnp.abs(reference[mask] - quad[mask]) / reference[mask])
-        )
-
-        assert err_quad < err_approx, (
-            f'Quadrature error ({err_quad:.2e}) should be smaller than '
-            f'pixel-center error ({err_approx:.2e})'
-        )
-
-
-# ---------------------------------------------------------------------------
 # Multi-line dispatch: quadrature handles mixed profile codes
 # ---------------------------------------------------------------------------
 
@@ -221,21 +173,21 @@ class TestQuadratureMultiLine:
         edges = jnp.linspace(4800.0, 5200.0, 100)
         lo, hi = edges[:-1], edges[1:]
 
-        # Two lines: Gaussian (code 0) and GaussianAbsorption (code 7)
+        # Two lines: Gaussian (code 0) and PseudoVoigt (code 2)
         centers = jnp.array([5000.0, 5050.0])
         lsf = jnp.array([10.0, 10.0])
         p0 = jnp.array([100.0, 80.0])
-        p1 = jnp.zeros(2)
+        p1 = jnp.array([0.0, 20.0])
         p2 = jnp.zeros(2)
-        codes = jnp.array([0, 7])
+        codes = jnp.array([0, 2])
 
         nodes, weights = _gl_nodes_weights(7)
-        result = quadrature_integrate_lines(
+        result = _quadrature_integrate(
             lo, hi, centers, lsf, p0, p1, p2, codes, nodes, weights
         )
         assert result.shape == (2, 99)
         # Both should sum to ~1
         assert float(jnp.sum(result[0])) == pytest.approx(1.0, rel=0.01)
-        assert float(jnp.sum(result[1])) == pytest.approx(1.0, rel=0.01)
+        assert float(jnp.sum(result[1])) == pytest.approx(1.0, rel=0.05)
         # Peaks at different locations
         assert jnp.argmax(result[0]) != jnp.argmax(result[1])

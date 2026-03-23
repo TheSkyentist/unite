@@ -1107,7 +1107,7 @@ class TestAbsorptionModel:
 
     def test_absorption_model_builds(self):
         """Model with absorption lines builds and runs."""
-        from unite.line.profiles import GaussianAbsorption
+        from unite.line.profiles import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
@@ -1120,7 +1120,7 @@ class TestAbsorptionModel:
         lc.add_line(
             'HI_abs',
             6563.0 * u.AA,
-            profile=GaussianAbsorption(),
+            profile=Gaussian(),
             fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 1000)),
             tau=line.Tau(prior=prior.Uniform(0, 5)),
         )
@@ -1134,14 +1134,14 @@ class TestAbsorptionModel:
 
     def test_tau_zero_no_absorption(self):
         """tau=0 should produce transmission=1 (no absorption)."""
-        from unite.line.profiles import GaussianAbsorption
+        from unite.line.profiles import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
         lc.add_line(
             'HI_abs',
             6563.0 * u.AA,
-            profile=GaussianAbsorption(),
+            profile=Gaussian(),
             fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
             tau=line.Tau(prior=prior.Fixed(0.0)),
         )
@@ -1155,7 +1155,7 @@ class TestAbsorptionModel:
     def test_tau_positive_reduces_flux(self):
         """tau>0 should reduce flux at line center relative to tau=0."""
         from unite.evaluate import evaluate_model
-        from unite.line.profiles import GaussianAbsorption
+        from unite.line.profiles import Gaussian
 
         spec = create_simple_spectrum()
 
@@ -1171,7 +1171,7 @@ class TestAbsorptionModel:
             lc.add_line(
                 'HI_abs',
                 6563.0 * u.AA,
-                profile=GaussianAbsorption(),
+                profile=Gaussian(),
                 redshift=line.Redshift(prior=prior.Fixed(0.0)),
                 fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
                 tau=line.Tau(prior=prior.Fixed(tau_val)),
@@ -1205,7 +1205,7 @@ class TestAbsorptionModel:
 
     def test_absorber_positions(self):
         """All three absorber positions build and run without error."""
-        from unite.line.profiles import GaussianAbsorption
+        from unite.line.profiles import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
@@ -1218,7 +1218,7 @@ class TestAbsorptionModel:
         lc.add_line(
             'HI_abs',
             6563.0 * u.AA,
-            profile=GaussianAbsorption(),
+            profile=Gaussian(),
             fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
             tau=line.Tau(prior=prior.Fixed(2.0)),
         )
@@ -1237,14 +1237,14 @@ class TestAbsorptionModel:
 
     def test_absorption_only_model(self):
         """Model with only absorption lines (no emission) builds and runs."""
-        from unite.line.profiles import GaussianAbsorption
+        from unite.line.profiles import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
         lc.add_line(
             'HI_abs',
             6563.0 * u.AA,
-            profile=GaussianAbsorption(),
+            profile=Gaussian(),
             fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
             tau=line.Tau(prior=prior.Fixed(1.0)),
         )
@@ -1337,3 +1337,50 @@ class TestIntegrationMode:
 
         # Total model predictions should match to high precision
         assert np.allclose(pred_a.total, pred_q.total, rtol=1e-4)
+
+    def test_quadrature_absorption_runs(self):
+        """Quadrature mode with tau-parametrized lines runs without errors."""
+        spec = create_simple_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(1.0)),
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
+        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
+        assert f'obs_{spec.name}' in samples
+
+    def test_quadrature_mixed_emission_absorption(self):
+        """Quadrature mode with both flux and tau lines runs without errors."""
+        spec = create_simple_spectrum()
+        lc = line.LineConfiguration()
+        z = line.Redshift('z', prior=prior.Fixed(0.0))
+        fwhm = line.FWHM('fwhm', prior=prior.Fixed(300.0))
+        lc.add_line(
+            'Ha_em',
+            6563.0 * u.AA,
+            redshift=z,
+            fwhm_gauss=fwhm,
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        lc.add_line(
+            'Ha_abs',
+            6563.0 * u.AA,
+            redshift=z,
+            fwhm_gauss=fwhm,
+            tau=line.Tau(prior=prior.Fixed(0.5)),
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
+        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
+        assert f'obs_{spec.name}' in samples

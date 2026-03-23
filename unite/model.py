@@ -12,14 +12,17 @@ import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import jax
 import jax.numpy as jnp
 import numpyro
 from numpyro import distributions as dist
 
+from unite._compose import compose_from_profiles
 from unite._utils import C_KMS, _get_conversion_factor
+from unite.continuum.compute import eval_continuum, integrate_continuum
 from unite.continuum.config import ContinuumConfiguration
+from unite.line.compute import analytic_integrate_lines, evaluate_lines
 from unite.line.config import ConfigMatrices, LineConfiguration
-from unite.line.profiles import analytic_integrate_lines, quadrature_integrate_lines
 from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum import Spectra, Spectrum
 
@@ -84,8 +87,9 @@ class ModelArgs:
     #: One of ``'foreground'``, ``'behind_lines'``, or ``'behind_continuum'``.
     absorber_position: str = 'foreground'
     #: Line integration mode: ``'analytic'`` (default) uses exact CDF-based
-    #: integration for emission and pixel-center evaluation for absorption;
-    #: ``'quadrature'`` uses Gauss-Legendre quadrature for all profiles.
+    #: integration for all line profiles individually;
+    #: ``'quadrature'`` uses Gauss-Legendre quadrature to integrate the full
+    #: composed model over pixels.
     integration_mode: str = 'analytic'
     #: Gauss-Legendre quadrature nodes on ``[-1, 1]``.
     #: ``None`` when ``integration_mode='analytic'``.
@@ -227,84 +231,70 @@ def unite_model(args: ModelArgs) -> None:
             low = low + shift
             high = high + shift
 
-        wavelength = (low + high) / 2.0
-
         # LSF FWHM at each line center (n_lines,).
         # R() expects disperser-unit wavelengths, result is in canonical unit.
         lsf_fwhm = centers / (disp.R(centers * inv_wl_scale) * r_scale)
 
-        # Integrate all lines simultaneously and divide by pixel width
-        # to get average flux density per pixel.
+        # Scaled line fluxes and continuum for this spectrum.
+        scaled_flux = flux_per_line * lfs / norm
+        cont_scale_norm = cs / norm
+
+        # --- Compute pixel-averaged model ---
         if args.integration_mode == 'quadrature':
-            pixints = quadrature_integrate_lines(
-                low,
-                high,
-                centers,
-                lsf_fwhm,
-                p0,
-                p1,
-                p2,
-                cm.profile_codes,
-                args.quadrature_nodes,
-                args.quadrature_weights,
-            ) / (high - low)
+            # Gauss-Legendre quadrature: evaluate full composed model at
+            # sub-pixel nodes and integrate.  This properly computes
+            # ∫ F(λ) · exp(-τ·φ(λ)) dλ over each pixel.
+            mid = (low + high) / 2.0
+            half_width = (high - low) / 2.0
+            nodes = args.quadrature_nodes  # (n_nodes,)
+            weights = args.quadrature_weights  # (n_nodes,)
+
+            # Map GL nodes to pixel sub-points: (n_nodes, n_pixels)
+            x = mid[None, :] + half_width[None, :] * nodes[:, None]
+
+            # Evaluate full model at each set of node points and integrate.
+            # Default keyword args bind per-spectrum values at definition
+            # time to avoid late-binding closure issues (ruff B023).
+            def _glq_eval(
+                wav,
+                *,
+                _lsf=lsf_fwhm,
+                _scaled_flux=scaled_flux,
+                _csn=cont_scale_norm,
+                _fs=flux_scale,
+            ):
+                phi = evaluate_lines(wav, centers, _lsf, p0, p1, p2, cm.profile_codes)
+                cont = eval_continuum(wav, args, context, z_sys) * _csn
+                total = compose_from_profiles(
+                    phi,
+                    _scaled_flux,
+                    tau_per_line,
+                    cm.is_absorption,
+                    cont,
+                    args.absorber_position,
+                )
+                return _fs * total
+
+            model_at_nodes = jax.vmap(_glq_eval)(x)  # (n_nodes, n_pix)
+            model = 0.5 * jnp.dot(weights, model_at_nodes)  # pixel-averaged
         else:
+            # Analytic: integrate each line profile individually via CDF,
+            # then combine.  Exact for flux-parametrized lines; approximate
+            # for tau-parametrized lines (integrates phi before applying exp).
             pixints = analytic_integrate_lines(
                 low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
             ) / (high - low)
-
-        # Emission lines: sum flux-weighted profiles.
-        emission_mask = ~cm.is_absorption  # (n_lines,)
-        emission_pixints = jnp.where(emission_mask[:, None], pixints, 0.0)
-        line_model = ((flux_per_line * lfs / norm)[:, None] * emission_pixints).sum(
-            axis=0
-        )  # (n_pixels,)
-
-        # Absorption lines: compute transmission = exp(-sum(tau * phi)).
-        absorption_mask = cm.is_absorption
-        absorption_pixints = jnp.where(absorption_mask[:, None], pixints, 0.0)
-        total_tau = (tau_per_line[:, None] * absorption_pixints).sum(axis=0)
-        transmission = jnp.exp(-total_tau)
-
-        # Continuum (evaluated in canonical-unit wavelengths, then normalized).
-        continuum = jnp.zeros(spectrum.npix)
-        if args.cont_config is not None:
-            for k in range(len(args.cont_config)):
-                obs_low = args.cont_low[k] * (1.0 + z_sys)
-                obs_high = args.cont_high[k] * (1.0 + z_sys)
-                obs_center = args.cont_center[k] * (1.0 + z_sys)
-                in_region = (wavelength >= obs_low) & (wavelength <= obs_high)
-                cont_params = {
-                    pn: (
-                        context[tok.name] * args.cont_nw_conv[k] * (1.0 + z_sys)
-                        if pn == 'norm_wav'
-                        else context[tok.name]
-                    )
-                    for pn, tok in args.cont_resolved_params[k].items()
-                }
-                form = args.cont_forms[k]
-                region_cont = form.evaluate(
-                    wavelength, obs_center, cont_params, obs_low, obs_high
-                )
-                continuum = continuum + jnp.where(in_region, region_cont, 0.0)
-
-        # Likelihood (normalized flux space).
-        # Apply transmission based on absorber_position.
-        cont_term = continuum * cs / norm
-        absorber_position = args.absorber_position
-        if absorber_position == 'foreground':
-            model = flux_scale * transmission * (line_model + cont_term)
-        elif absorber_position == 'behind_lines':
-            model = flux_scale * (line_model + transmission * cont_term)
-        elif absorber_position == 'behind_continuum':
-            model = flux_scale * (transmission * line_model + cont_term)
-        else:
-            msg = (
-                f"absorber_position must be one of ('foreground', "
-                f"'behind_lines', 'behind_continuum'), "
-                f'got {absorber_position!r}.'
+            cont = (
+                integrate_continuum(low, high, args, context, z_sys) * cont_scale_norm
             )
-            raise ValueError(msg)
+            model = flux_scale * compose_from_profiles(
+                pixints,
+                scaled_flux,
+                tau_per_line,
+                cm.is_absorption,
+                cont,
+                args.absorber_position,
+            )
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(
             obs_name,

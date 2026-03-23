@@ -6,12 +6,9 @@ from unite.line.profiles import (
     Cauchy,
     GaussHermite,
     Gaussian,
-    GaussianAbsorption,
     Laplace,
-    LorentzianAbsorption,
     PseudoVoigt,
     SplitNormal,
-    VoigtAbsorption,
 )
 
 __all__ = [
@@ -21,14 +18,11 @@ __all__ = [
     'Flux',
     'GaussHermite',
     'Gaussian',
-    'GaussianAbsorption',
     'Laplace',
     'LineConfiguration',
     'LineShape',
-    'LorentzianAbsorption',
     'PseudoVoigt',
     'Redshift',
     'SplitNormal',
     'Tau',
-    'VoigtAbsorption',
 ]

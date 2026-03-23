@@ -7,12 +7,9 @@ from unite.line.profiles import (
     Cauchy,
     GaussHermite,
     Gaussian,
-    GaussianAbsorption,
     Laplace,
-    LorentzianAbsorption,
     PseudoVoigt,
     SplitNormal,
-    VoigtAbsorption,
     profile_from_dict,
     resolve_profile,
 )
@@ -29,9 +26,6 @@ _ALL_PROFILES = [
     SEMG(),
     GaussHermite(),
     SplitNormal(),
-    GaussianAbsorption(),
-    VoigtAbsorption(),
-    LorentzianAbsorption(),
 ]
 
 
@@ -59,9 +53,6 @@ _ALL_PROFILE_CLASSES = [
     SEMG,
     GaussHermite,
     SplitNormal,
-    GaussianAbsorption,
-    VoigtAbsorption,
-    LorentzianAbsorption,
 ]
 
 
@@ -73,7 +64,6 @@ class TestProfileEqHash:
     def test_different_types_not_equal(self):
         assert Gaussian() != Cauchy()
         assert PseudoVoigt() != Laplace()
-        assert Gaussian() != GaussianAbsorption()
 
     @pytest.mark.parametrize('profile_cls', _ALL_PROFILE_CLASSES)
     def test_hashable(self, profile_cls):
@@ -93,32 +83,6 @@ class TestProfileEqHash:
 def test_resolve_profile_invalid_type_raises():
     with pytest.raises(TypeError, match='str or Profile'):
         resolve_profile(42)
-
-
-# ---------------------------------------------------------------------------
-# is_absorption property
-# ---------------------------------------------------------------------------
-
-_EMISSION_PROFILES = [
-    Gaussian,
-    Cauchy,
-    PseudoVoigt,
-    Laplace,
-    SEMG,
-    GaussHermite,
-    SplitNormal,
-]
-_ABSORPTION_PROFILES = [GaussianAbsorption, VoigtAbsorption, LorentzianAbsorption]
-
-
-class TestIsAbsorption:
-    @pytest.mark.parametrize('profile_cls', _EMISSION_PROFILES)
-    def test_emission_profiles_are_not_absorption(self, profile_cls):
-        assert profile_cls().is_absorption is False
-
-    @pytest.mark.parametrize('profile_cls', _ABSORPTION_PROFILES)
-    def test_absorption_profiles_are_absorption(self, profile_cls):
-        assert profile_cls().is_absorption is True
 
 
 # ---------------------------------------------------------------------------

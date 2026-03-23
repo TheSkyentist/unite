@@ -468,28 +468,22 @@ class LineConfiguration:
         prof = resolve_profile(profile)
         fwhms = _resolve_params(prof, param_kwargs)
 
-        # --- Absorption vs emission auto-detection ---
-        if prof.is_absorption:
-            if flux is not None:
-                msg = (
-                    f'Cannot pass flux to absorption profile '
-                    f'{type(prof).__name__}. Use tau instead.'
-                )
-                raise TypeError(msg)
-            if tau is None:
-                tau = Tau()
-            elif not isinstance(tau, Tau):
+        # --- Emission vs absorption: determined by flux/tau tokens ---
+        if flux is not None and tau is not None:
+            msg = (
+                'Cannot specify both flux and tau for the same line. '
+                'Use flux for emission lines or tau for absorption lines.'
+            )
+            raise TypeError(msg)
+        if tau is not None:
+            # Absorption line
+            if not isinstance(tau, Tau):
                 msg = f'tau must be a Tau, got {type(tau).__name__}.'
                 raise TypeError(msg)
             flux_tok = None
             tau_tok = tau
         else:
-            if tau is not None:
-                msg = (
-                    f'Cannot pass tau to emission profile '
-                    f'{type(prof).__name__}. Use flux instead.'
-                )
-                raise TypeError(msg)
+            # Emission line (default)
             if flux is None:
                 flux = Flux()
             elif not isinstance(flux, Flux):
@@ -715,7 +709,7 @@ class LineConfiguration:
             _slot_matrix(tau_entries, n) if tau_entries else ([], jnp.zeros((0, n)))
         )
 
-        is_absorption = jnp.array([e.profile.is_absorption for e in self], dtype=bool)
+        is_absorption = jnp.array([e.tau is not None for e in self], dtype=bool)
 
         z_names, z_matrix = _token_matrix(self._entries, lambda e: e.redshift, n)
 

@@ -13,8 +13,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from unite._compose import compose_leave_one_out
 from unite._utils import C_KMS
-from unite.line.profiles import analytic_integrate_lines, quadrature_integrate_lines
+from unite.continuum.compute import eval_continuum, eval_continuum_regions
+from unite.line.compute import analytic_integrate_lines, evaluate_lines
 from unite.model import ModelArgs
 from unite.prior import Fixed
 
@@ -25,12 +27,11 @@ class SpectrumPrediction:
 
     All arrays are in original (un-normalized) flux units.
 
-    For **emission lines**, each entry in :attr:`lines` is the flux-weighted
-    line profile (positive, adds to the total).
+    For **emission lines**, each entry in :attr:`lines` is the exact
+    flux contribution of that line (positive, adds to the total).
 
     For **absorption lines**, each entry in :attr:`lines` is the flux
-    *removed* by that absorber: ``total * (1 - 1/T_j)``, which is negative.
-    This is the delta that would appear if you turned off that absorber.
+    *removed* by that absorber (negative): ``total - total_without_j``.
     """
 
     #: Pixel-center wavelengths in the disperser's unit. Shape ``(n_pixels,)``.
@@ -118,7 +119,6 @@ def evaluate_model(
 
         line_scale = float(args.line_flux_scales[i])
         cont_scale = float(args.continuum_scales[i])
-        n_pix = spectrum.npix
 
         # Keyword-only defaults bind the per-iteration values at definition
         # time, avoiding late-binding closure issues (ruff B023) while
@@ -133,7 +133,6 @@ def evaluate_model(
             _inv_wl_scale=inv_wl_scale,
             _line_scale=line_scale,
             _cont_scale=cont_scale,
-            _n_pix=n_pix,
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
@@ -197,91 +196,77 @@ def evaluate_model(
                 high = high + pix_offset * _dlam
             wavelength = (low + high) / 2.0
 
-            # --- Line integration ---
+            # --- LSF ---
             lsf_fwhm = centers / (_disp.R(centers * _inv_wl_scale) * r_scale)
+
+            # Scaled line fluxes for this spectrum.
+            scaled_flux = flux_per_line * _line_scale
+
+            # --- Continuum (per-region for decomposition) ---
+            cont_regions = eval_continuum_regions(wavelength, args, params, z_sys)
+            cont_total = jnp.zeros_like(wavelength)
+            for region in cont_regions:
+                cont_total = cont_total + region
+            cont_total_scaled = cont_total * _cont_scale
+            cont_regions_scaled = [
+                r * _cont_scale * flux_scale_val for r in cont_regions
+            ]
+
+            # --- Line decomposition ---
             if args.integration_mode == 'quadrature':
-                pixints = quadrature_integrate_lines(
-                    low,
-                    high,
-                    centers,
-                    lsf_fwhm,
-                    p0,
-                    p1,
-                    p2,
-                    cm.profile_codes,
-                    args.quadrature_nodes,
-                    args.quadrature_weights,
-                ) / (high - low)
+                # GL quadrature: evaluate full composed model at sub-pixel
+                # nodes and integrate.  Leave-one-out at each node gives
+                # exact per-line contributions.
+                mid = (low + high) / 2.0
+                half_width = (high - low) / 2.0
+                nodes = args.quadrature_nodes  # (n_nodes,)
+                weights = args.quadrature_weights  # (n_nodes,)
+
+                # Sub-pixel wavelengths: (n_nodes, n_pix)
+                x = mid[None, :] + half_width[None, :] * nodes[:, None]
+
+                # Evaluate all profiles and continuum at each node.
+                def _at_node(wav):
+                    phi = evaluate_lines(
+                        wav, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
+                    )
+                    cont = eval_continuum(wav, args, params, z_sys) * _cont_scale
+                    total, deltas = compose_leave_one_out(
+                        phi,
+                        scaled_flux,
+                        tau_per_line,
+                        cm.is_absorption,
+                        cont,
+                        args.absorber_position,
+                    )
+                    return total, deltas
+
+                # (n_nodes, n_pix) and (n_nodes, n_lines, n_pix)
+                node_totals, node_deltas = jax.vmap(_at_node)(x)
+
+                # Pixel-average via GL weighted sum (factor 0.5 from
+                # the [-1,1] → [low,high] change of variable).
+                total = 0.5 * jnp.dot(weights, node_totals)
+                line_contribs = 0.5 * jnp.einsum('n,nlp->lp', weights, node_deltas)
             else:
+                # Analytic: CDF-based per-line integration, then compose.
                 pixints = analytic_integrate_lines(
                     low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
                 ) / (high - low)
+                total, line_contribs = compose_leave_one_out(
+                    pixints,
+                    scaled_flux,
+                    tau_per_line,
+                    cm.is_absorption,
+                    cont_total_scaled,
+                    args.absorber_position,
+                )
 
-            # Emission lines: flux-weighted profiles.
-            emission_mask = ~cm.is_absorption
-            emission_pixints = jnp.where(emission_mask[:, None], pixints, 0.0)
-            line_contribs = (flux_per_line * _line_scale)[:, None] * emission_pixints
-            line_contribs_scaled = line_contribs * flux_scale_val
+            # Apply flux_scale to total and per-line contributions.
+            total = flux_scale_val * total
+            line_contribs = flux_scale_val * line_contribs
 
-            # Per-line optical depth: tau_j * phi_j for each line (0 for emission).
-            per_line_tau = tau_per_line[:, None] * jnp.where(
-                cm.is_absorption[:, None], pixints, 0.0
-            )  # (n_lines, n_pix)
-            # Per-line transmission: T_j = exp(-tau_j * phi_j).
-            per_line_trans = jnp.exp(-per_line_tau)  # (n_lines, n_pix)
-            # Combined transmission for the total model.
-            transmission = per_line_trans.prod(axis=0)  # (n_pix,)
-            # Note: for emission lines, per_line_tau=0 → per_line_trans=1,
-            # so they contribute a factor of 1 to the product.
-
-            # --- Continuum ---
-            continuum_total = jnp.zeros(_n_pix)
-            cont_contributions = []
-            if args.cont_config is not None:
-                for k in range(len(args.cont_config)):
-                    obs_low = args.cont_low[k] * (1.0 + z_sys)
-                    obs_high = args.cont_high[k] * (1.0 + z_sys)
-                    obs_center = args.cont_center[k] * (1.0 + z_sys)
-                    in_region = (wavelength >= obs_low) & (wavelength <= obs_high)
-                    cont_p = {
-                        pn: (
-                            params[tok.name] * args.cont_nw_conv[k] * (1.0 + z_sys)
-                            if pn == 'norm_wav'
-                            else params[tok.name]
-                        )
-                        for pn, tok in args.cont_resolved_params[k].items()
-                    }
-                    form = args.cont_forms[k]
-                    region_cont = (
-                        form.evaluate(wavelength, obs_center, cont_p, obs_low, obs_high)
-                        * _cont_scale
-                    )
-                    region_cont = jnp.where(in_region, region_cont, 0.0)
-                    cont_contributions.append(region_cont * flux_scale_val)
-                    continuum_total = continuum_total + region_cont
-
-            # Apply transmission based on absorber_position.
-            emission_sum = line_contribs.sum(axis=0)
-            absorber_position = args.absorber_position
-            if absorber_position == 'foreground':
-                total = flux_scale_val * transmission * (emission_sum + continuum_total)
-            elif absorber_position == 'behind_lines':
-                total = flux_scale_val * (emission_sum + transmission * continuum_total)
-            else:  # behind_continuum (validated at build time)
-                total = flux_scale_val * (transmission * emission_sum + continuum_total)
-
-            # Absorption lines: compute the flux each absorber removes.
-            # delta_j = total * (1 - 1/T_j), negative for absorption.
-            # For emission lines T_j=1, so delta_j=0 (no change).
-            t_j_safe = jnp.where(per_line_trans > 1e-30, per_line_trans, 1e-30)
-            abs_delta = total[None, :] * (1.0 - 1.0 / t_j_safe)  # (n_lines, n_pix)
-            # Merge: emission lines keep their flux profiles, absorption lines
-            # get their delta flux.
-            line_contribs_scaled = jnp.where(
-                cm.is_absorption[:, None], abs_delta, line_contribs_scaled
-            )
-
-            return total, line_contribs_scaled, cont_contributions
+            return total, line_contribs, cont_regions_scaled
 
         # Vectorise over the leading sample axis of every parameter in context.
         # JAX treats the dict as a pytree and maps axis 0 of each leaf.

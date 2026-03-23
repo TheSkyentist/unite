@@ -378,31 +378,33 @@ emission lines is that absorption lines use a {class}`~unite.line.Tau` (optical
 depth) token instead of a {class}`~unite.line.Flux` token.
 
 :::{warning}
-Due to the impossibility of analytically integrating absorption profiles, 
-absorption lines are evaluated at pixel centers rather than integrated over pixels
-when using integration mode in unite. This is accurate when the absorber changes 
-slowly over the pixel width. This may cause issues when simultaneously modeling 
-absorbers in different spectra where the absorption is unresolved in one or many
-spectra, but resolved in others.
+In analytic integration mode, each line profile is integrated over pixels
+individually before the nonlinear transmission is applied. This means the model
+computes `exp(-tau * ∫phi)` rather than `∫F * exp(-tau * phi)` — the integral
+should be over the flux multiplied by the transmission, not the profile alone.
+This is accurate when the tau-parametrized line is well-resolved (profile varies
+slowly across a pixel), but introduces an approximation for unresolved or
+marginally resolved absorbers. Use quadrature integration mode
+(`integration_mode='quadrature'`) for proper pixel integration of the full
+composed model at the cost of speed.
 :::
 
-### Adding Absorption Lines
+### Adding Tau-Parametrized Lines
 
-Absorption lines are added with `add_line` using an absorption profile. The
-profile's `is_absorption` property is `True`, and `add_line` auto-detects this
-and creates a `Tau` token instead of `Flux`:
+Tau-parametrized lines use the same profile shapes as flux-parametrized lines.
+The distinction is made by passing a `Tau` token instead of `Flux`. Any profile
+can be used — the profile controls the shape, `tau` vs `flux` controls how
+it enters the model:
 
 ```python
-from unite.line.profiles import GaussianAbsorption, VoigtAbsorption, LorentzianAbsorption
-
 # Gaussian absorption (single FWHM parameter)
-lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+lc.add_line('HI_abs', 6563.0 * u.AA, tau=line.Tau())
 
 # Voigt absorption (Gaussian + Lorentzian FWHM)
-lc.add_line('HI_voigt', 4861.0 * u.AA, profile=VoigtAbsorption())
+lc.add_line('HI_voigt', 4861.0 * u.AA, profile='voigt', tau=line.Tau())
 
 # Lorentzian absorption (single Lorentzian FWHM)
-lc.add_line('HI_lor', 4341.0 * u.AA, profile=LorentzianAbsorption())
+lc.add_line('HI_lor', 4341.0 * u.AA, profile='cauchy', tau=line.Tau())
 ```
 
 ### Tau vs Flux
@@ -413,16 +415,16 @@ stronger absorption:
 ```python
 # Explicit tau token with custom prior
 tau = line.Tau('deep', prior=prior.Uniform(0, 50))
-lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+lc.add_line('HI_abs', 6563.0 * u.AA, tau=tau)
 ```
 
-Passing `flux` to an absorption profile (or `tau` to an emission profile)
-raises `TypeError`:
+If neither `flux` nor `tau` is specified, the line defaults to emission
+(with an auto-created `Flux` token). Passing both `flux` and `tau` raises
+`TypeError`:
 
 ```python
-# These raise TypeError:
-lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), flux=line.Flux())  # Error!
-lc.add_line('Ha', 6563.0 * u.AA, tau=line.Tau())  # Error!
+# This raises TypeError:
+lc.add_line('bad', 6563.0 * u.AA, flux=line.Flux(), tau=line.Tau())  # Error!
 ```
 
 ### Sharing Tau Parameters
@@ -432,8 +434,8 @@ multiple absorption lines to produce a single model parameter:
 
 ```python
 tau = line.Tau('balmer_tau')
-lc.add_line('HI_Ha', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
-lc.add_line('HI_Hb', 4861.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+lc.add_line('HI_Ha', 6563.0 * u.AA, tau=tau)
+lc.add_line('HI_Hb', 4861.0 * u.AA, tau=tau)
 ```
 
 ### Mixing Emission and Absorption
@@ -443,7 +445,7 @@ Emission and absorption lines coexist naturally in the same configuration:
 ```python
 lc = line.LineConfiguration()
 lc.add_line('Ha', 6563.0 * u.AA)  # emission (Gaussian by default)
-lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())  # absorption
+lc.add_line('HI_abs', 6563.0 * u.AA, tau=line.Tau())  # absorption
 ```
 
 ---

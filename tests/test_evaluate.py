@@ -215,7 +215,7 @@ class TestEvaluateAbsorption:
     def test_absorption_delta_flux_negative(self):
         """Absorption line entry in pred.lines is negative (flux removed)."""
         from unite.line.config import Tau
-        from unite.line.profiles import GaussianAbsorption
+        from unite.line.profiles import Gaussian
 
         spec = _make_spectrum(name='abs_eval')
         lc = line.LineConfiguration()
@@ -229,7 +229,7 @@ class TestEvaluateAbsorption:
         lc.add_line(
             'HI_abs',
             6563.0 * u.AA,
-            profile=GaussianAbsorption(),
+            profile=Gaussian(),
             redshift=line.Redshift(prior=prior.Fixed(0.0)),
             fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
             tau=Tau(prior=prior.Fixed(2.0)),
@@ -249,14 +249,14 @@ class TestEvaluateAbsorption:
     def test_absorption_tau_zero_delta_zero(self):
         """tau=0 → absorption delta is zero everywhere."""
         from unite.line.config import Tau
-        from unite.line.profiles import GaussianAbsorption
+        from unite.line.profiles import Gaussian
 
         spec = _make_spectrum(name='abs_t0')
         lc = line.LineConfiguration()
         lc.add_line(
             'HI_abs',
             6563.0 * u.AA,
-            profile=GaussianAbsorption(),
+            profile=Gaussian(),
             redshift=line.Redshift(prior=prior.Fixed(0.0)),
             fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
             tau=Tau(prior=prior.Fixed(0.0)),

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-import jax
-import jax.numpy as jnp
 from jax import Array
 from jax.typing import ArrayLike
 
@@ -57,11 +55,6 @@ class Profile(ABC):
         dict of str to Prior
             For example, ``{'fwhm_gauss': Uniform(0, 1000)}``.
         """
-
-    @property
-    def is_absorption(self) -> bool:
-        """Whether this is an absorption profile."""
-        return False
 
     def integrate(
         self,
@@ -553,163 +546,6 @@ class SplitNormal(Profile):
         return hash(type(self))
 
 
-# -------------------------------------------------------------------
-# Absorption profiles
-# -------------------------------------------------------------------
-
-
-@_register
-class GaussianAbsorption(Profile):
-    """Gaussian absorption profile.
-
-    Uses the same Gaussian shape as :class:`Gaussian` but is designed for
-    absorption lines.  The ``integrate_branch`` uses pixel-center
-    evaluation (the known approximation for slowly-varying absorbers),
-    while ``evaluate_branch`` returns the exact normalised density.
-    """
-
-    code = 7
-
-    @property
-    def is_absorption(self) -> bool:
-        return True
-
-    def param_names(self) -> tuple[str, ...]:
-        return ('fwhm_gauss',)
-
-    def default_priors(self) -> dict[str, Prior]:
-        return {'fwhm_gauss': Uniform(0, 1000)}
-
-    def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
-            mid = (lo + hi) / 2.0
-            return functions.evaluate_gaussian(mid, c, lsf, p0) * (hi - lo)
-
-        return _fn
-
-    def evaluate_branch(self):
-        def _fn(wavelength, c, lsf, p0, p1, p2):
-            return functions.evaluate_gaussian(wavelength, c, lsf, p0)
-
-        return _fn
-
-    def to_dict(self) -> dict:
-        return {'type': 'GaussianAbsorption'}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> GaussianAbsorption:
-        return cls()
-
-    def __repr__(self) -> str:
-        return 'GaussianAbsorption()'
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, GaussianAbsorption)
-
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-@_register
-class VoigtAbsorption(Profile):
-    """Pseudo-Voigt absorption profile.
-
-    Uses the same Thompson et al. (1987) pseudo-Voigt shape as
-    :class:`PseudoVoigt` but is designed for absorption lines.
-    """
-
-    code = 8
-
-    @property
-    def is_absorption(self) -> bool:
-        return True
-
-    def param_names(self) -> tuple[str, ...]:
-        return ('fwhm_gauss', 'fwhm_lorentz')
-
-    def default_priors(self) -> dict[str, Prior]:
-        return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_lorentz': Uniform(0, 1000)}
-
-    def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
-            mid = (lo + hi) / 2.0
-            return functions.evaluate_voigt(mid, c, lsf, p0, p1) * (hi - lo)
-
-        return _fn
-
-    def evaluate_branch(self):
-        def _fn(wavelength, c, lsf, p0, p1, p2):
-            return functions.evaluate_voigt(wavelength, c, lsf, p0, p1)
-
-        return _fn
-
-    def to_dict(self) -> dict:
-        return {'type': 'VoigtAbsorption'}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> VoigtAbsorption:
-        return cls()
-
-    def __repr__(self) -> str:
-        return 'VoigtAbsorption()'
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, VoigtAbsorption)
-
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
-@_register
-class LorentzianAbsorption(Profile):
-    """Lorentzian (Cauchy) absorption profile.
-
-    Uses the same Lorentzian shape as :class:`Cauchy` but is designed for
-    absorption lines.
-    """
-
-    code = 9
-
-    @property
-    def is_absorption(self) -> bool:
-        return True
-
-    def param_names(self) -> tuple[str, ...]:
-        return ('fwhm_lorentz',)
-
-    def default_priors(self) -> dict[str, Prior]:
-        return {'fwhm_lorentz': Uniform(0, 1000)}
-
-    def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
-            mid = (lo + hi) / 2.0
-            return functions.evaluate_voigt(mid, c, lsf, 0.0, p0) * (hi - lo)
-
-        return _fn
-
-    def evaluate_branch(self):
-        def _fn(wavelength, c, lsf, p0, p1, p2):
-            return functions.evaluate_voigt(wavelength, c, lsf, 0.0, p0)
-
-        return _fn
-
-    def to_dict(self) -> dict:
-        return {'type': 'LorentzianAbsorption'}
-
-    @classmethod
-    def from_dict(cls, d: dict) -> LorentzianAbsorption:
-        return cls()
-
-    def __repr__(self) -> str:
-        return 'LorentzianAbsorption()'
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, LorentzianAbsorption)
-
-    def __hash__(self) -> int:
-        return hash(type(self))
-
-
 _PROFILE_ALIASES: dict[str, Profile] = {
     'gaussian': Gaussian(),
     'normal': Gaussian(),
@@ -725,9 +561,6 @@ _PROFILE_ALIASES: dict[str, Profile] = {
     'gauss-hermite': GaussHermite(),
     'split-normal': SplitNormal(),
     'two-sided': SplitNormal(),
-    'gaussian-absorption': GaussianAbsorption(),
-    'voigt-absorption': VoigtAbsorption(),
-    'lorentzian-absorption': LorentzianAbsorption(),
 }
 
 
@@ -780,133 +613,5 @@ _EVALUATE_BRANCHES = [
 ]
 
 
-def _analytic_integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
-    """Integrate one line profile over pixel bins analytically, dispatched by ``code``.
-
-    All FWHM parameters are in wavelength units.  Shape parameters (h3, h4)
-    are dimensionless.  ``lax.switch`` selects the branch at trace time, so
-    every branch must have identical output shape.
-
-    Parameters
-    ----------
-    low, high : jnp.ndarray, shape (n_pixels,)
-        Pixel bin edges.
-    center, lsf_fwhm, p0, p1, p2 : float
-        Per-line scalars: observed center, LSF FWHM, and three profile
-        parameter slots (in :meth:`Profile.param_names` order).  Slots
-        unused by a given profile receive zero.
-    code : int
-        ``Profile.code`` for the line.
-
-    Returns
-    -------
-    jnp.ndarray, shape (n_pixels,)
-        Integrated profile fraction per pixel bin.
-    """
-    return jax.lax.switch(
-        code, _INTEGRATE_BRANCHES, low, high, center, lsf_fwhm, p0, p1, p2
-    )
-
-
-# vmap over lines: per-line scalars map to axis 0; pixel arrays are shared (None).
-analytic_integrate_lines = jax.vmap(
-    _analytic_integrate_single_line, in_axes=(None, None, 0, 0, 0, 0, 0, 0)
-)
-"""Vectorised analytic integration over all lines simultaneously.
-
-Input shapes: ``low/high (n_pixels,)``, all others ``(n_lines,)``.
-Output shape: ``(n_lines, n_pixels)``.
-"""
-
-
-def _evaluate_single_line(wavelength, center, lsf_fwhm, p0, p1, p2, code):
-    """Evaluate one line profile at wavelength points, dispatched by ``code``.
-
-    Parameters
-    ----------
-    wavelength : jnp.ndarray, shape (n_points,)
-        Wavelength points at which to evaluate.
-    center, lsf_fwhm, p0, p1, p2 : float
-        Per-line scalars.
-    code : int
-        ``Profile.code`` for the line.
-
-    Returns
-    -------
-    jnp.ndarray, shape (n_points,)
-        Normalised profile value at each wavelength point.
-    """
-    return jax.lax.switch(
-        code, _EVALUATE_BRANCHES, wavelength, center, lsf_fwhm, p0, p1, p2
-    )
-
-
-evaluate_lines = jax.vmap(_evaluate_single_line, in_axes=(None, 0, 0, 0, 0, 0, 0))
-"""Vectorised evaluation over all lines simultaneously.
-
-Input shapes: ``wavelength (n_points,)``, all others ``(n_lines,)``.
-Output shape: ``(n_lines, n_points)``.
-"""
-
-
-# -------------------------------------------------------------------
-# Gauss-Legendre quadrature integration
-# -------------------------------------------------------------------
-
-
-def _quadrature_integrate_single_line(
-    low, high, center, lsf_fwhm, p0, p1, p2, code, nodes, weights
-):
-    """Integrate one line profile over pixel bins using Gauss-Legendre quadrature.
-
-    Maps quadrature nodes from ``[-1, 1]`` to each pixel ``[lo, hi]`` and
-    evaluates the profile at those points via ``lax.switch`` on the
-    ``evaluate_branch`` dispatch table.
-
-    Parameters
-    ----------
-    low, high : jnp.ndarray, shape (n_pixels,)
-        Pixel bin edges.
-    center, lsf_fwhm, p0, p1, p2 : float
-        Per-line scalars (same meaning as in :func:`_integrate_single_line`).
-    code : int
-        ``Profile.code`` for the line.
-    nodes : jnp.ndarray, shape (n_nodes,)
-        Gauss-Legendre nodes on ``[-1, 1]``.
-    weights : jnp.ndarray, shape (n_nodes,)
-        Gauss-Legendre weights.
-
-    Returns
-    -------
-    jnp.ndarray, shape (n_pixels,)
-        Integrated profile fraction per pixel bin (same output semantics
-        as :func:`_integrate_single_line`).
-    """
-    mid = (low + high) / 2.0
-    half_width = (high - low) / 2.0
-
-    # Quadrature points mapped to each pixel: (n_nodes, n_pixels)
-    x = mid[None, :] + half_width[None, :] * nodes[:, None]
-
-    # Evaluate profile at all quadrature points via lax.switch
-    def _eval_at_node(x_node):
-        return jax.lax.switch(
-            code, _EVALUATE_BRANCHES, x_node, center, lsf_fwhm, p0, p1, p2
-        )
-
-    vals = jax.vmap(_eval_at_node)(x)  # (n_nodes, n_pixels)
-
-    # Weighted sum: ∫f(x)dx ≈ (Δx/2) Σ_j w_j f(x_j)
-    return half_width * jnp.dot(weights, vals)
-
-
-quadrature_integrate_lines = jax.vmap(
-    _quadrature_integrate_single_line,
-    in_axes=(None, None, 0, 0, 0, 0, 0, 0, None, None),
-)
-"""Vectorised Gauss-Legendre quadrature integration over all lines.
-
-Input shapes: ``low/high (n_pixels,)``, ``centers/lsf_fwhm/p0/p1/p2/codes
-(n_lines,)``, ``nodes/weights (n_nodes,)``.
-Output shape: ``(n_lines, n_pixels)``.
-"""
+# Re-export from compute module for backward compatibility.
+from unite.line.compute import analytic_integrate_lines, evaluate_lines  # noqa: I001, E402, F401

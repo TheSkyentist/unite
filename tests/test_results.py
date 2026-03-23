@@ -445,7 +445,7 @@ def emission_rew_setup():
 def absorption_rew_setup():
     """Deterministic absorption model: known tau on flat continuum, z=0."""
     from unite.line.config import Tau
-    from unite.line.profiles import GaussianAbsorption
+    from unite.line.profiles import Gaussian
 
     lc = line.LineConfiguration()
     # Need an emission line for compute_scales to work.
@@ -459,7 +459,7 @@ def absorption_rew_setup():
     lc.add_line(
         'HI_abs',
         6563.0 * u.AA,
-        profile=GaussianAbsorption(),
+        profile=Gaussian(),
         redshift=line.Redshift(prior=prior.Fixed(0.0)),
         fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
         tau=Tau(prior=prior.Fixed(2.0)),

@@ -3,6 +3,7 @@
 import jax.numpy as jnp
 import pytest
 
+from unite.line.compute import evaluate_lines
 from unite.line.functions import (
     evaluate_gaussHermite,
     evaluate_gaussian,
@@ -20,14 +21,9 @@ from unite.line.profiles import (
     Cauchy,
     GaussHermite,
     Gaussian,
-    GaussianAbsorption,
     Laplace,
-    LorentzianAbsorption,
     PseudoVoigt,
     SplitNormal,
-    VoigtAbsorption,
-    evaluate_lines,
-    profile_from_dict,
 )
 
 # ---------------------------------------------------------------------------
@@ -254,89 +250,3 @@ class TestEvaluateLines:
         assert result.shape == (2, 100)
         # Each line should have a peak near its center
         assert jnp.argmax(result[0]) != jnp.argmax(result[1])
-
-
-# ---------------------------------------------------------------------------
-# Absorption profiles
-# ---------------------------------------------------------------------------
-
-
-_ABSORPTION_PROFILES = [GaussianAbsorption(), VoigtAbsorption(), LorentzianAbsorption()]
-
-
-class TestAbsorptionProfiles:
-    """Test absorption profile classes."""
-
-    @pytest.mark.parametrize('profile', _ABSORPTION_PROFILES)
-    def test_is_absorption(self, profile):
-        assert profile.is_absorption is True
-
-    def test_emission_is_not_absorption(self):
-        assert Gaussian().is_absorption is False
-        assert PseudoVoigt().is_absorption is False
-
-    @pytest.mark.parametrize('profile', _ABSORPTION_PROFILES)
-    def test_serialization_roundtrip(self, profile):
-        d = profile.to_dict()
-        restored = profile_from_dict(d)
-        assert type(restored) is type(profile)
-
-    @pytest.mark.parametrize('profile', _ABSORPTION_PROFILES)
-    def test_repr(self, profile):
-        assert type(profile).__name__ in repr(profile)
-
-    @pytest.mark.parametrize('profile', _ABSORPTION_PROFILES)
-    def test_eq_hash(self, profile):
-        other = type(profile)()
-        assert profile == other
-        assert hash(profile) == hash(other)
-
-    def test_gaussian_absorption_matches_gaussian_evaluate(self):
-        """GaussianAbsorption.evaluate should match Gaussian.evaluate."""
-        wavelength = jnp.linspace(4900.0, 5100.0, 200)
-        emission = Gaussian().evaluate(
-            wavelength, center=5000.0, lsf_fwhm=5.0, fwhm_gauss=100.0
-        )
-        absorption = GaussianAbsorption().evaluate(
-            wavelength, center=5000.0, lsf_fwhm=5.0, fwhm_gauss=100.0
-        )
-        assert jnp.allclose(emission, absorption, rtol=1e-10)
-
-    def test_voigt_absorption_matches_pseudovoigt_evaluate(self):
-        """VoigtAbsorption.evaluate should match PseudoVoigt.evaluate."""
-        wavelength = jnp.linspace(4900.0, 5100.0, 200)
-        emission = PseudoVoigt().evaluate(
-            wavelength, center=5000.0, lsf_fwhm=5.0, fwhm_gauss=80.0, fwhm_lorentz=50.0
-        )
-        absorption = VoigtAbsorption().evaluate(
-            wavelength, center=5000.0, lsf_fwhm=5.0, fwhm_gauss=80.0, fwhm_lorentz=50.0
-        )
-        assert jnp.allclose(emission, absorption, rtol=1e-10)
-
-    def test_lorentzian_absorption_matches_cauchy_evaluate(self):
-        """LorentzianAbsorption.evaluate should match Cauchy.evaluate."""
-        wavelength = jnp.linspace(4900.0, 5100.0, 200)
-        emission = Cauchy().evaluate(
-            wavelength, center=5000.0, lsf_fwhm=5.0, fwhm_lorentz=100.0
-        )
-        absorption = LorentzianAbsorption().evaluate(
-            wavelength, center=5000.0, lsf_fwhm=5.0, fwhm_lorentz=100.0
-        )
-        assert jnp.allclose(emission, absorption, rtol=1e-10)
-
-    def test_absorption_integrate_is_center_evaluation(self):
-        """Absorption integrate_branch uses pixel-center approximation."""
-        lo = jnp.linspace(4900.0, 5100.0, 50)[:-1]
-        hi = jnp.linspace(4900.0, 5100.0, 50)[1:]
-        mid = (lo + hi) / 2.0
-        dlam = hi - lo
-
-        profile = GaussianAbsorption()
-        integrated = profile.integrate(
-            lo, hi, center=5000.0, lsf_fwhm=5.0, fwhm_gauss=100.0
-        )
-        evaluated = (
-            profile.evaluate(mid, center=5000.0, lsf_fwhm=5.0, fwhm_gauss=100.0) * dlam
-        )
-
-        assert jnp.allclose(integrated, evaluated, rtol=1e-10)

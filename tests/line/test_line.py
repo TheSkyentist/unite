@@ -4,14 +4,7 @@ import pytest
 from astropy import units as u
 
 from unite.line.config import FWHM, Flux, LineConfiguration, LineShape, Redshift, Tau
-from unite.line.profiles import (
-    GaussHermite,
-    Gaussian,
-    GaussianAbsorption,
-    LorentzianAbsorption,
-    PseudoVoigt,
-    VoigtAbsorption,
-)
+from unite.line.profiles import Cauchy, GaussHermite, Gaussian, PseudoVoigt
 from unite.prior import Fixed, TruncatedNormal, Uniform
 
 # ---------------------------------------------------------------------------
@@ -485,7 +478,7 @@ class TestSaveLoad:
 class TestAbsorptionAddLine:
     def test_absorption_auto_creates_tau(self):
         lc = LineConfiguration()
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         entry = lc._entries[0]
         assert entry.tau is not None
         assert isinstance(entry.tau, Tau)
@@ -494,57 +487,48 @@ class TestAbsorptionAddLine:
     def test_absorption_explicit_tau(self):
         tau = Tau('deep', prior=Uniform(0, 50))
         lc = LineConfiguration()
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=tau)
         assert lc._entries[0].tau is tau
 
-    def test_absorption_with_flux_raises(self):
+    def test_flux_and_tau_raises(self):
         lc = LineConfiguration()
-        with pytest.raises(TypeError, match='Cannot pass flux to absorption'):
+        with pytest.raises(TypeError, match='Cannot specify both flux and tau'):
             lc.add_line(
-                'HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), flux=Flux()
+                'HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau(), flux=Flux()
             )
-
-    def test_emission_with_tau_raises(self):
-        lc = LineConfiguration()
-        with pytest.raises(TypeError, match='Cannot pass tau to emission'):
-            lc.add_line('Ha', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
 
     def test_absorption_wrong_tau_type_raises(self):
         lc = LineConfiguration()
         with pytest.raises(TypeError, match='tau must be a Tau'):
-            lc.add_line(
-                'HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), tau='not_a_tau'
-            )
+            lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau='not_a_tau')
 
     def test_shared_tau_across_lines(self):
         tau = Tau('shared')
         lc = LineConfiguration()
-        lc.add_line('HI_a', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
-        lc.add_line('HI_b', 4861.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+        lc.add_line('HI_a', 6563.0 * u.AA, profile=Gaussian(), tau=tau)
+        lc.add_line('HI_b', 4861.0 * u.AA, profile=Gaussian(), tau=tau)
         assert lc._entries[0].tau is lc._entries[1].tau
 
     def test_voigt_absorption(self):
         lc = LineConfiguration()
-        lc.add_line('HI_v', 6563.0 * u.AA, profile=VoigtAbsorption())
+        lc.add_line('HI_v', 6563.0 * u.AA, profile=PseudoVoigt(), tau=Tau())
         entry = lc._entries[0]
-        assert entry.profile.is_absorption
         assert entry.tau is not None
         assert entry.flux is None
         assert 'fwhm_gauss' in entry.fwhms
         assert 'fwhm_lorentz' in entry.fwhms
 
-    def test_lorentzian_absorption(self):
+    def test_cauchy_absorption(self):
         lc = LineConfiguration()
-        lc.add_line('HI_l', 6563.0 * u.AA, profile=LorentzianAbsorption())
+        lc.add_line('HI_l', 6563.0 * u.AA, profile=Cauchy(), tau=Tau())
         entry = lc._entries[0]
-        assert entry.profile.is_absorption
         assert entry.tau is not None
         assert 'fwhm_lorentz' in entry.fwhms
 
     def test_mixed_emission_absorption(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         assert lc._entries[0].flux is not None
         assert lc._entries[0].tau is None
         assert lc._entries[1].flux is None
@@ -552,16 +536,14 @@ class TestAbsorptionAddLine:
 
     def test_tau_site_name_prefix(self):
         lc = LineConfiguration()
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         entry = lc._entries[0]
         assert entry.tau.name.startswith('tau_')
 
     def test_add_lines_with_absorption(self):
         tau = Tau('shared')
         lc = LineConfiguration()
-        lc.add_lines(
-            'Balmer_abs', [6563.0, 4861.0] * u.AA, profile=GaussianAbsorption(), tau=tau
-        )
+        lc.add_lines('Balmer_abs', [6563.0, 4861.0] * u.AA, profile=Gaussian(), tau=tau)
         assert len(lc) == 2
         assert lc._entries[0].tau is lc._entries[1].tau
 
@@ -569,7 +551,7 @@ class TestAbsorptionAddLine:
 class TestAbsorptionConfigMatrices:
     def test_tau_matrix_shape(self):
         lc = LineConfiguration()
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         cm = lc.build_matrices()
         assert cm.tau_matrix.shape == (1, 1)
         assert len(cm.tau_names) == 1
@@ -585,7 +567,7 @@ class TestAbsorptionConfigMatrices:
     def test_is_absorption_mask(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         cm = lc.build_matrices()
         assert not cm.is_absorption[0]
         assert cm.is_absorption[1]
@@ -593,7 +575,7 @@ class TestAbsorptionConfigMatrices:
     def test_mixed_matrices(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         cm = lc.build_matrices()
         # Flux matrix: 1 emission line → 1 unique flux param
         assert cm.flux_matrix.shape == (1, 2)
@@ -607,7 +589,7 @@ class TestAbsorptionConfigMatrices:
     def test_tau_priors_collected(self):
         tau = Tau('deep', prior=Uniform(0, 50))
         lc = LineConfiguration()
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=tau)
         cm = lc.build_matrices()
         assert tau.name in cm.priors
         assert cm.priors[tau.name].high == pytest.approx(50.0)
@@ -617,7 +599,7 @@ class TestAbsorptionRoundTrip:
     def test_absorption_to_dict_from_dict(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         d = lc.to_dict()
 
         # Check dict structure
@@ -636,21 +618,21 @@ class TestAbsorptionRoundTrip:
         assert lc2._entries[0].tau is None
         assert lc2._entries[1].flux is None
         assert lc2._entries[1].tau is not None
-        assert isinstance(lc2._entries[1].profile, GaussianAbsorption)
+        assert isinstance(lc2._entries[1].profile, Gaussian)
 
     def test_voigt_absorption_roundtrip(self):
         lc = LineConfiguration()
-        lc.add_line('HI_v', 6563.0 * u.AA, profile=VoigtAbsorption())
+        lc.add_line('HI_v', 6563.0 * u.AA, profile=PseudoVoigt(), tau=Tau())
         d = lc.to_dict()
         lc2 = LineConfiguration.from_dict(d)
-        assert isinstance(lc2._entries[0].profile, VoigtAbsorption)
+        assert isinstance(lc2._entries[0].profile, PseudoVoigt)
         assert lc2._entries[0].tau is not None
 
     def test_shared_tau_roundtrip(self):
         tau = Tau('shared')
         lc = LineConfiguration()
-        lc.add_line('HI_a', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
-        lc.add_line('HI_b', 4861.0 * u.AA, profile=GaussianAbsorption(), tau=tau)
+        lc.add_line('HI_a', 6563.0 * u.AA, profile=Gaussian(), tau=tau)
+        lc.add_line('HI_b', 4861.0 * u.AA, profile=Gaussian(), tau=tau)
         d = lc.to_dict()
         lc2 = LineConfiguration.from_dict(d)
         assert lc2._entries[0].tau is lc2._entries[1].tau
@@ -658,7 +640,7 @@ class TestAbsorptionRoundTrip:
     def test_yaml_roundtrip_absorption(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         text = lc.to_yaml()
         lc2 = LineConfiguration.from_yaml(text)
         assert len(lc2) == 2
@@ -669,7 +651,7 @@ class TestAbsorptionFilter:
     def test_filter_preserves_absorption(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('HI_abs', 4861.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 4861.0 * u.AA, profile=Gaussian(), tau=Tau())
         filtered = lc._filter([False, True])
         assert len(filtered) == 1
         assert filtered._entries[0].tau is not None
@@ -678,7 +660,7 @@ class TestAbsorptionFilter:
     def test_filter_preserves_emission(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
-        lc.add_line('HI_abs', 4861.0 * u.AA, profile=GaussianAbsorption())
+        lc.add_line('HI_abs', 4861.0 * u.AA, profile=Gaussian(), tau=Tau())
         filtered = lc._filter([True, False])
         assert len(filtered) == 1
         assert filtered._entries[0].flux is not None
@@ -690,7 +672,7 @@ class TestAbsorptionMerge:
         a = LineConfiguration()
         a.add_line('Ha', 6563.0 * u.AA)
         b = LineConfiguration()
-        b.add_line('HI_abs', 6563.0 * u.AA, profile=GaussianAbsorption())
+        b.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         merged = a + b
         assert len(merged) == 2
         assert merged._entries[0].flux is not None
@@ -698,13 +680,9 @@ class TestAbsorptionMerge:
 
     def test_merge_shared_tau_lenient(self):
         a = LineConfiguration()
-        a.add_line(
-            'HI_a', 6563.0 * u.AA, profile=GaussianAbsorption(), tau=Tau('shared')
-        )
+        a.add_line('HI_a', 6563.0 * u.AA, profile=Gaussian(), tau=Tau('shared'))
         b = LineConfiguration()
-        b.add_line(
-            'HI_b', 4861.0 * u.AA, profile=GaussianAbsorption(), tau=Tau('shared')
-        )
+        b.add_line('HI_b', 4861.0 * u.AA, profile=Gaussian(), tau=Tau('shared'))
         merged = a.merge(b, strict=False)
         assert len(merged) == 2
         tau_ids = {id(e.tau) for e in merged._entries}
