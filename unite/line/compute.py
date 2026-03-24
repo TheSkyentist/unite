@@ -4,7 +4,7 @@ Provides two vmapped dispatch functions:
 
 - :func:`evaluate_lines` — pointwise evaluation of all line profiles at
   arbitrary wavelength arrays (used by the Gauss-Legendre quadrature path).
-- :func:`analytic_integrate_lines` — exact CDF-based integration of all
+- :func:`integrate_lines` — exact CDF-based integration of all
   line profiles over pixel bins (used by the analytic integration path).
 
 Both dispatch to per-profile JAX kernels via ``lax.switch`` keyed on
@@ -57,7 +57,7 @@ Output shape: ``(n_lines, n_points)``.
 # -------------------------------------------------------------------
 
 
-def _analytic_integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
+def _integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, code):
     """Integrate one line profile over pixel bins analytically.
 
     Dispatches to the correct CDF-based kernel via ``lax.switch`` on
@@ -85,8 +85,8 @@ def _analytic_integrate_single_line(low, high, center, lsf_fwhm, p0, p1, p2, cod
     )
 
 
-analytic_integrate_lines = jax.vmap(
-    _analytic_integrate_single_line, in_axes=(None, None, 0, 0, 0, 0, 0, 0)
+integrate_lines = jax.vmap(
+    _integrate_single_line, in_axes=(None, None, 0, 0, 0, 0, 0, 0)
 )
 """Vectorised analytic integration over all lines simultaneously.
 

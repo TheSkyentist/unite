@@ -16,7 +16,7 @@ import numpy as np
 from unite._compose import compose_leave_one_out
 from unite._utils import C_KMS
 from unite.continuum.compute import eval_continuum, eval_continuum_regions
-from unite.line.compute import analytic_integrate_lines, evaluate_lines
+from unite.line.compute import evaluate_lines, integrate_lines
 from unite.model import ModelArgs
 from unite.prior import Fixed
 
@@ -199,11 +199,16 @@ def evaluate_model(
             # --- LSF ---
             lsf_fwhm = centers / (_disp.R(centers * _inv_wl_scale) * r_scale)
 
+            # LSF FWHM at pixel centres for continuum convolution.
+            cont_lsf_fwhm = wavelength / (_disp.R(wavelength * _inv_wl_scale) * r_scale)
+
             # Scaled line fluxes for this spectrum.
             scaled_flux = flux_per_line * _line_scale
 
             # --- Continuum (per-region for decomposition) ---
-            cont_regions = eval_continuum_regions(wavelength, args, params, z_sys)
+            cont_regions = eval_continuum_regions(
+                wavelength, args, params, z_sys, cont_lsf_fwhm
+            )
             cont_total = jnp.zeros_like(wavelength)
             for region in cont_regions:
                 cont_total = cont_total + region
@@ -230,7 +235,10 @@ def evaluate_model(
                     phi = evaluate_lines(
                         wav, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
                     )
-                    cont = eval_continuum(wav, args, params, z_sys) * _cont_scale
+                    node_lsf = wav / (_disp.R(wav * _inv_wl_scale) * r_scale)
+                    cont = (
+                        eval_continuum(wav, args, params, z_sys, node_lsf) * _cont_scale
+                    )
                     total, deltas = compose_leave_one_out(
                         phi,
                         scaled_flux,
@@ -250,7 +258,7 @@ def evaluate_model(
                 line_contribs = 0.5 * jnp.einsum('n,nlp->lp', weights, node_deltas)
             else:
                 # Analytic: CDF-based per-line integration, then compose.
-                pixints = analytic_integrate_lines(
+                pixints = integrate_lines(
                     low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
                 ) / (high - low)
                 total, line_contribs = compose_leave_one_out(

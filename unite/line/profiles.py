@@ -614,4 +614,4 @@ _EVALUATE_BRANCHES = [
 
 
 # Re-export from compute module for backward compatibility.
-from unite.line.compute import analytic_integrate_lines, evaluate_lines  # noqa: I001, E402, F401
+from unite.line.compute import integrate_lines, evaluate_lines  # noqa: I001, E402, F401

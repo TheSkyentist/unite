@@ -21,7 +21,7 @@ from unite._compose import compose_from_profiles
 from unite._utils import C_KMS, _get_conversion_factor
 from unite.continuum.compute import eval_continuum, integrate_continuum
 from unite.continuum.config import ContinuumConfiguration
-from unite.line.compute import analytic_integrate_lines, evaluate_lines
+from unite.line.compute import evaluate_lines, integrate_lines
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum import Spectra, Spectrum
@@ -235,6 +235,10 @@ def unite_model(args: ModelArgs) -> None:
         # R() expects disperser-unit wavelengths, result is in canonical unit.
         lsf_fwhm = centers / (disp.R(centers * inv_wl_scale) * r_scale)
 
+        # LSF FWHM at pixel centres for continuum convolution.
+        pix_mid = (low + high) / 2.0
+        cont_lsf_fwhm = pix_mid / (disp.R(pix_mid * inv_wl_scale) * r_scale)
+
         # Scaled line fluxes and continuum for this spectrum.
         scaled_flux = flux_per_line * lfs / norm
         cont_scale_norm = cs / norm
@@ -262,9 +266,14 @@ def unite_model(args: ModelArgs) -> None:
                 _scaled_flux=scaled_flux,
                 _csn=cont_scale_norm,
                 _fs=flux_scale,
+                _inv_wl=inv_wl_scale,
+                _rs=r_scale,
+                _disp=disp,
             ):
                 phi = evaluate_lines(wav, centers, _lsf, p0, p1, p2, cm.profile_codes)
-                cont = eval_continuum(wav, args, context, z_sys) * _csn
+                # LSF FWHM at quadrature node wavelengths for continuum.
+                node_lsf = wav / (_disp.R(wav * _inv_wl) * _rs)
+                cont = eval_continuum(wav, args, context, z_sys, node_lsf) * _csn
                 total = compose_from_profiles(
                     phi,
                     _scaled_flux,
@@ -281,11 +290,12 @@ def unite_model(args: ModelArgs) -> None:
             # Analytic: integrate each line profile individually via CDF,
             # then combine.  Exact for flux-parametrized lines; approximate
             # for tau-parametrized lines (integrates phi before applying exp).
-            pixints = analytic_integrate_lines(
+            pixints = integrate_lines(
                 low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
             ) / (high - low)
             cont = (
-                integrate_continuum(low, high, args, context, z_sys) * cont_scale_norm
+                integrate_continuum(low, high, args, context, z_sys, cont_lsf_fwhm)
+                * cont_scale_norm
             )
             model = flux_scale * compose_from_profiles(
                 pixints,

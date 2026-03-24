@@ -21,7 +21,7 @@ def compose_from_profiles(
     profiles : jnp.ndarray, shape ``(n_lines, n_points)``
         Normalised profile values at wavelength points (from
         :func:`~unite.line.compute.evaluate_lines` or pixel-averaged
-        from :func:`~unite.line.compute.analytic_integrate_lines`).
+        from :func:`~unite.line.compute.integrate_lines`).
     flux_per_line : jnp.ndarray, shape ``(n_lines,)``
         Flux per line (zero for tau-parametrized lines).
     tau_per_line : jnp.ndarray, shape ``(n_lines,)``

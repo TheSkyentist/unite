@@ -50,18 +50,41 @@ LSF is **not** convolved into the Lorentzian width. This means a "Cauchy" profil
 is effectively a Voigt-like profile (Lorentzian convolved with the Gaussian LSF), which is
 physically appropriate since the instrumental broadening is always present.
 
-### Analytical Pixel Integration
+### Pixel Integration
 
-Line profiles are **analytically integrated** over each pixel bin (using the CDF), not
-evaluated at pixel centers or Riemann-summed. This is:
+`unite` provides two integration modes, selectable via `integration_mode` on
+{meth}`~unite.model.ModelBuilder.build`:
 
-- **Exact** — no discretisation error from summing sub-pixel samples
+**Analytic mode** (default) integrates each line profile over pixel bins using its CDF:
+
+- **Exact** for emission lines — no discretisation error from summing sub-pixel samples
 - **Fast** — one CDF evaluation per pixel edge, independent of line width
 - **Robust for undersampled data** — critical for NIRSpec PRISM where lines can be narrower
   than a single pixel
+- **Approximate for absorption lines** — each profile is integrated independently before the
+  nonlinear transmission `exp(-τ·φ)` is applied.  This computes `exp(-τ·∫φ)` rather than
+  `∫F·exp(-τ·φ)`, which is accurate when the absorber is well-resolved but introduces an
+  approximation for unresolved or marginally resolved lines.
 
-The continuum is evaluated at pixel centers (not integrated), since it varies slowly enough
-that the sub-pixel variation is negligible.
+**Quadrature mode** evaluates the full composed model — emission, absorption, and
+continuum together — at Gauss-Legendre sub-pixel nodes and integrates via weighted sum:
+
+- **Exact** for both emission and absorption — properly computes `∫F(λ)·exp(-τ·φ(λ)) dλ`
+  over each pixel
+- **Slower** — requires `n_nodes` (default 7) profile evaluations per pixel instead of one
+- **Recommended when** tau-parametrized lines are unresolved or marginally resolved, or when
+  mixing emission and absorption at similar wavelengths
+
+```python
+# Analytic (default) — fast, exact for emission lines
+model_fn, args = builder.build(integration_mode='analytic')
+
+# Quadrature — exact for all lines, including absorption
+model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
+```
+
+The continuum is evaluated at pixel centers in both modes, since it varies slowly enough
+that sub-pixel variation is negligible.
 
 ---
 

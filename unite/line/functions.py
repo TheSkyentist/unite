@@ -486,7 +486,7 @@ def integrate_gaussHermite(
     return gaussian_cdf - _INV_SQRT2PI * gh_correction
 
 
-# analytic_integrate_lines, quadrature_integrate_lines, and evaluate_lines
+# integrate_lines, quadrature_integrate_lines, and evaluate_lines
 # live in unite.line.profiles, where each Profile subclass owns its JAX
 # branches via integrate_branch() and evaluate_branch().
 

@@ -217,18 +217,29 @@ Forms have two kinds of configuration:
   These receive default priors that can be overridden via
   `ContinuumRegion(params={...})`
 
-Here are the built-in forms, their constructor parameters, and their model parameters:
-| Form | Constructor args | Additional Model parameters |
-|------|------------------|-----------------------------|
-| `Linear` | — | `angle` |
-| `PowerLaw` | — | `beta` |
-| `Polynomial` | `degree` | `c1`…`cN` |
-| `Chebyshev` | `order`, `stretch` | `c1`…`cN` |
-| `BSpline` | `knots`, `degree` | `c1`… |
-| `Bernstein` | `degree`, `stretch` | `c1`…`cN` |
-| `Blackbody` | — | `temperature` |
-| `ModifiedBlackbody` | — | `temperature`, `beta` |
-| `AttenuatedBlackbody` | `lambda_ext` | `temperature`, `tau_ext`, `alpha` |
+Here are the built-in forms, their constructor parameters, and their model parameters.
+The **LSF** column indicates whether analytic LSF convolution is applied when the
+model is evaluated with the instrument's line-spread function:
+
+| Form | Constructor args | Additional Model parameters | LSF |
+|------|------------------|-----------------------------|-----|
+| `Linear` | — | `angle` | Yes (exact) |
+| `Polynomial` | `degree` | `c1`…`cN` | Yes (exact) |
+| `Chebyshev` | `order`, `stretch` | `c1`…`cN` | Yes (exact) |
+| `Bernstein` | `degree`, `stretch` | `c1`…`cN` | Yes (exact) |
+| `PowerLaw` | — | `beta` | No |
+| `BSpline` | `knots`, `degree` | `c1`… | No |
+| `Blackbody` | — | `temperature` | No |
+| `ModifiedBlackbody` | — | `temperature`, `beta` | No |
+| `AttenuatedBlackbody` | `lambda_ext` | `temperature`, `tau_ext`, `alpha` | No |
+
+Forms marked **Yes (exact)** are polynomial-based and have their coefficients
+analytically convolved with the Gaussian LSF before evaluation.  Forms marked
+**No** ignore the LSF — their curvature is assumed to vary slowly enough that
+the unconvolved value is a good approximation at the spectral resolution of
+most instruments.  For `BSpline`, the non-polynomial basis makes analytic
+convolution impractical; for `PowerLaw` and the blackbody family, the nonlinear
+functional forms do not admit closed-form convolution.
 
 
 ### Linear

@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
 from astropy import units as u
 from jax import Array
@@ -21,6 +22,159 @@ from unite.prior import Fixed, Prior, Uniform
 
 if TYPE_CHECKING:
     pass
+
+# FWHM to sigma conversion: sigma = FWHM / (2 * sqrt(2 * ln2))
+_FWHM_TO_SIGMA = 1.0 / (2.0 * jnp.sqrt(2.0 * jnp.log(2.0)))
+
+
+def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
+    """Analytically convolve a polynomial with a Gaussian LSF.
+
+    Given a polynomial ``p(x) = Σ c_i x^(n-i)`` (NumPy descending-order
+    convention, degree *n* = ``len(coeffs) - 1``) and a Gaussian kernel with
+    FWHM ``lsf_fwhm``, return the coefficients of the convolved polynomial
+    ``(p * G)(x)``.
+
+    For a monomial ``x^k`` convolved with ``N(0, s^2)``, the result is::
+
+        sum_{j=0}^{floor(k/2)} C(k, 2j) * (2j-1)!! * s^{2j} * x^{k-2j}
+
+    where ``(2j-1)!!`` is the double factorial
+    (the *j*-th even moment of a standard normal).
+
+    Parameters
+    ----------
+    coeffs : Array, shape ``(n+1,)``
+        Polynomial coefficients in **descending** order
+        (i.e. ``coeffs[0]`` is the leading coefficient for ``x^n``).
+    lsf_fwhm : ArrayLike
+        Scalar (or broadcastable) LSF FWHM in the same unit as *x*.
+
+    Returns
+    -------
+    Array, shape ``(n+1,)``
+        Convolved polynomial coefficients, same descending-order convention.
+    """
+    sigma2 = (jnp.asarray(lsf_fwhm) * _FWHM_TO_SIGMA) ** 2
+    n = coeffs.shape[0] - 1  # polynomial degree
+
+    # Pre-compute even moments of N(0, s^2): M[j] = (2j-1)!! s^{2j}.
+    # M[0] = 1, M[j] = M[j-1] * (2j-1) * s^2.
+    max_half = n // 2 + 1
+    moments = jnp.zeros(max_half)
+    moments = moments.at[0].set(1.0)
+
+    def _moment_step(carry, j):
+        prev = carry
+        cur = prev * (2 * j - 1) * sigma2
+        return cur, cur
+
+    if max_half > 1:
+        _, rest = jax.lax.scan(_moment_step, 1.0, jnp.arange(1, max_half))
+        moments = jnp.concatenate([jnp.array([1.0]), rest])
+
+    # Pre-compute binomial coefficients C(k, 2j) for all k in [0..n].
+    # binom[k, j] = C(k, 2j). We build this with Pascal's rule.
+    binom = jnp.zeros((n + 1, max_half))
+    for k in range(n + 1):
+        for j in range(min(k // 2, max_half - 1) + 1):
+            two_j = 2 * j
+            # C(k, 2j) via explicit formula: use lax-friendly recursion
+            val = 1.0
+            for m in range(two_j):
+                val = val * (k - m) / (m + 1)
+            binom = binom.at[k, j].set(val)
+
+    # Build output coefficients (descending order, same as input).
+    out = jnp.zeros(n + 1)
+    # Input: coeffs[i] is the coefficient for x^(n-i).
+    # For each input monomial c * x^k (k = n - i), the convolved result
+    # adds c * C(k, 2j) * M[j] to the x^(k-2j) = x^(n - (i + 2j)) slot.
+    for i in range(n + 1):
+        k = n - i  # power of this monomial
+        for j in range(min(k // 2, max_half - 1) + 1):
+            out_idx = i + 2 * j  # slot for x^(k - 2j) in descending order
+            out = out.at[out_idx].add(coeffs[i] * binom[k, j] * moments[j])
+
+    return out
+
+
+def _polyint_avg(coeffs: Array, x_low: ArrayLike, x_high: ArrayLike) -> Array:
+    """Exact pixel-averaged value of a polynomial over ``[x_low, x_high]``.
+
+    Given descending-order coefficients ``[a_n, ..., a_0]``, compute::
+
+        (1 / (x_high - x_low)) * integral_{x_low}^{x_high} p(x) dx
+
+    using the analytic antiderivative.
+
+    Parameters
+    ----------
+    coeffs : Array, shape ``(n+1,)``
+        Polynomial coefficients in descending order.
+    x_low, x_high : ArrayLike
+        Pixel bin edges (may be arrays).
+
+    Returns
+    -------
+    Array
+        Pixel-averaged polynomial values.
+    """
+    # Antiderivative: for descending [a_n, ..., a_0], the antiderivative
+    # is [a_n/(n+1), a_{n-1}/n, ..., a_0/1, 0] (also descending).
+    n = coeffs.shape[0]
+    divisors = jnp.arange(n, 0, -1, dtype=coeffs.dtype)
+    anti = jnp.concatenate([coeffs / divisors, jnp.array([0.0])])
+    return (jnp.polyval(anti, x_high) - jnp.polyval(anti, x_low)) / (x_high - x_low)
+
+
+def _cheb_to_mono_matrix(n: int) -> Array:
+    """Build the (n x n) Chebyshev-to-monomial conversion matrix.
+
+    Returns a matrix *M* such that ``M @ cheb_coeffs`` gives monomial
+    coefficients in **ascending** order (``[a0, a1, ..., a_{n-1}]``).
+
+    ``cheb_coeffs = [c0, c1, ..., c_{n-1}]`` represents
+    ``c0*T0(x) + c1*T1(x) + ... + c_{n-1}*T_{n-1}(x)``.
+
+    Built at Python time (not traced), so the matrix is a static constant.
+    """
+    import numpy as np
+    from numpy.polynomial.chebyshev import cheb2poly
+
+    M = np.zeros((n, n))  # noqa: N806
+    for k in range(n):
+        basis = np.zeros(n)
+        basis[k] = 1.0
+        # cheb2poly returns ascending monomial coefficients for T_k
+        poly = cheb2poly(basis)
+        M[: len(poly), k] = poly
+    return jnp.array(M)
+
+
+def _bernstein_to_mono_matrix(n: int) -> Array:
+    """Build the ((n+1) x (n+1)) Bernstein-to-monomial conversion matrix.
+
+    Returns a matrix *M* such that ``M @ bern_coeffs`` gives monomial
+    coefficients in **ascending** order for the polynomial on ``[0, 1]``.
+
+    ``bern_coeffs = [b0, b1, ..., b_n]`` represents
+    ``Σ b_i * C(n,i) * t^i * (1-t)^{n-i}``.
+    """
+    import numpy as np
+    from scipy.special import comb
+
+    M = np.zeros((n + 1, n + 1))  # noqa: N806
+    # Monomial coeff for t^k: Σ_{i=0}^{k} C(n,i) C(n-i, k-i) (-1)^{k-i} b_i
+    for k in range(n + 1):
+        for i in range(k + 1):
+            M[k, i] = (
+                comb(n, i, exact=True)
+                * comb(n - i, k - i, exact=True)
+                * (-1) ** (k - i)
+            )
+    return jnp.array(M)
+
 
 # ---------------------------------------------------------------------------
 # Registry
@@ -98,8 +252,9 @@ class ContinuumForm(ABC):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
-        """Evaluate the continuum model.
+        """Evaluate the (optionally LSF-convolved) continuum model.
 
         All operations must use :mod:`jax.numpy` so the function is
         compatible with JAX tracing / JIT compilation.
@@ -120,12 +275,58 @@ class ContinuumForm(ABC):
             Lower observed-frame wavelength bound of the region.
         obs_high : float
             Upper observed-frame wavelength bound of the region.
+        lsf_fwhm : ArrayLike, optional
+            LSF FWHM at each wavelength point (same unit as
+            *wavelength*).  Default ``0.0`` means no LSF convolution.
 
         Returns
         -------
         Array
             Continuum flux at each wavelength.
         """
+
+    def integrate(
+        self,
+        low: ArrayLike,
+        high: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+    ) -> Array:
+        """Pixel-integrated continuum model.
+
+        Evaluates the (optionally LSF-convolved) continuum averaged over
+        each pixel bin ``[low, high]``.  The default implementation
+        evaluates at pixel centres, which is exact for forms whose
+        variation across a pixel is negligible (e.g. :class:`Linear`).
+
+        Subclasses may override this to provide analytic integration.
+
+        Parameters
+        ----------
+        low, high : ArrayLike, shape ``(n_pixels,)``
+            Pixel bin edges (observed frame, canonical wavelength unit).
+        center : float
+            Region midpoint in observed frame.
+        params : dict of str to ArrayLike
+            Parameter values keyed by :meth:`param_names`.
+        obs_low : float
+            Lower observed-frame wavelength bound of the region.
+        obs_high : float
+            Upper observed-frame wavelength bound of the region.
+        lsf_fwhm : ArrayLike, optional
+            LSF FWHM at each pixel centre (same unit as *low*/*high*).
+            Default ``0.0`` means no LSF convolution.
+
+        Returns
+        -------
+        Array
+            Pixel-averaged continuum flux, shape ``(n_pixels,)``.
+        """
+        wavelength = (low + high) / 2.0
+        return self.evaluate(wavelength, center, params, obs_low, obs_high, lsf_fwhm)
 
     @property
     def is_linear(self) -> bool:
@@ -320,6 +521,7 @@ class Linear(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
         nw = params['norm_wav']
         return params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
@@ -401,14 +603,35 @@ class Polynomial(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
         nw = params['norm_wav']
         x = wavelength - nw
-        coeffs = jnp.array(
+        # Monomial coefficients in descending order: c_n, ..., c_1, scale.
+        mono = jnp.array(
             [params[f'c{i}'] for i in range(self._degree, 0, -1)] + [params['scale']]
         )
-        result = jnp.polyval(coeffs, x)
-        return result
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm)
+        return jnp.polyval(convolved, x)
+
+    def integrate(
+        self,
+        low: ArrayLike,
+        high: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+    ) -> Array:
+        nw = params['norm_wav']
+        x_low = low - nw
+        x_high = high - nw
+        mono = jnp.array(
+            [params[f'c{i}'] for i in range(self._degree, 0, -1)] + [params['scale']]
+        )
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm)
+        return _polyint_avg(convolved, x_low, x_high)
 
     def to_dict(self) -> dict:
         return {'type': 'Polynomial', 'degree': self._degree}
@@ -477,7 +700,8 @@ class Chebyshev(ContinuumForm):
             msg = f'Chebyshev stretch factor must be > 0, got {stretch}'
             raise ValueError(msg)
         self._stretch = stretch
-        # Note: _half_width removed; normalization now derived from obs_low/obs_high
+        # Static Chebyshev-to-monomial conversion matrix.
+        self._cheb2mono = _cheb_to_mono_matrix(order + 1)
 
     @property
     def is_linear(self) -> bool:
@@ -522,17 +746,56 @@ class Chebyshev(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
         half_width = (obs_high - obs_low) / 2
-        x = (wavelength - center) / (half_width * self._stretch)
+        scale_factor = half_width * self._stretch
+        x = (wavelength - center) / scale_factor
         nw = params['norm_wav']
-        x_nw = (nw - center) / (half_width * self._stretch)
-        shape_coeffs = jnp.array(
+        x_nw = (nw - center) / scale_factor
+
+        # Chebyshev coefficients → monomial (ascending) via static matrix,
+        # then convolve with rescaled LSF and evaluate.
+        cheb_coeffs = jnp.array(
             [1.0] + [params[f'c{i}'] for i in range(1, self._order + 1)]
         )
-        shape = chebval(x, shape_coeffs)
-        shape_nw = chebval(x_nw, shape_coeffs)
+        mono_asc = self._cheb2mono @ cheb_coeffs  # ascending order
+        mono = mono_asc[::-1]  # descending for jnp.polyval
+        # Rescale LSF FWHM into the normalised coordinate system.
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
+        shape = jnp.polyval(convolved, x)
+        # norm_wav is a scalar — no LSF convolution needed.
+        shape_nw = chebval(x_nw, cheb_coeffs)
         return params['scale'] * shape / shape_nw
+
+    def integrate(
+        self,
+        low: ArrayLike,
+        high: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+    ) -> Array:
+        half_width = (obs_high - obs_low) / 2
+        scale_factor = half_width * self._stretch
+        x_low = (low - center) / scale_factor
+        x_high = (high - center) / scale_factor
+        nw = params['norm_wav']
+        x_nw = (nw - center) / scale_factor
+
+        cheb_coeffs = jnp.array(
+            [1.0] + [params[f'c{i}'] for i in range(1, self._order + 1)]
+        )
+        mono_asc = self._cheb2mono @ cheb_coeffs
+        mono = mono_asc[::-1]
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
+        shape_avg = _polyint_avg(convolved, x_low, x_high)
+        shape_nw = chebval(x_nw, cheb_coeffs)
+        return params['scale'] * shape_avg / shape_nw
 
     def to_dict(self) -> dict:
         return {'type': 'Chebyshev', 'order': self._order, 'stretch': self._stretch}
@@ -647,7 +910,9 @@ class BSpline(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
+        # LSF convolution is not supported for BSpline (non-polynomial basis).
         # Normalize wavelengths relative to the knot range
         obs_range = obs_high - obs_low
 
@@ -762,6 +1027,8 @@ class Bernstein(ContinuumForm):
         self._binom = jnp.array(
             [comb(degree, i, exact=True) for i in range(degree + 1)], dtype=float
         )
+        # Static Bernstein-to-monomial conversion matrix.
+        self._bern2mono = _bernstein_to_mono_matrix(degree)
 
     @property
     def is_linear(self) -> bool:
@@ -810,6 +1077,7 @@ class Bernstein(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
         # 1. Coordinate Transformation
         half_width = (obs_high - obs_low) / 2
@@ -817,22 +1085,62 @@ class Bernstein(ContinuumForm):
 
         # helper to transform wavelength to [0, 1]
         def to_t(w):
-            u = (w - center) / stretch_factor
-            return (u + 1) / 2
+            uu = (w - center) / stretch_factor
+            return (uu + 1) / 2
 
         t = to_t(wavelength)
         t_nw = to_t(params['norm_wav'])
 
-        # 2. Evaluate Bernstein basis functions and combine with coefficients
+        # 2. Bernstein coefficients → monomial (ascending) via static matrix,
+        # convolve with rescaled LSF, then evaluate.
         coeffs = jnp.concatenate(
             [jnp.array([1.0])]
             + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._degree + 1)]
         )
-        shape = bernstein_eval(t, coeffs, self._binom)
+        mono_asc = self._bern2mono @ coeffs  # ascending monomial in t
+        mono = mono_asc[::-1]  # descending for jnp.polyval
+        # LSF FWHM in t-coordinate: dt/dλ = 1 / (2 * stretch_factor)
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * stretch_factor)
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
+        shape = jnp.polyval(convolved, t)
+        # norm_wav is a scalar — no LSF convolution needed.
         shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
 
         # 3. Normalize so that the continuum equals `scale` at `norm_wav`
         return params['scale'] * shape / shape_nw
+
+    def integrate(
+        self,
+        low: ArrayLike,
+        high: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+    ) -> Array:
+        half_width = (obs_high - obs_low) / 2
+        stretch_factor = half_width * self._stretch
+
+        def to_t(w):
+            uu = (w - center) / stretch_factor
+            return (uu + 1) / 2
+
+        t_low = to_t(low)
+        t_high = to_t(high)
+        t_nw = to_t(params['norm_wav'])
+
+        coeffs = jnp.concatenate(
+            [jnp.array([1.0])]
+            + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._degree + 1)]
+        )
+        mono_asc = self._bern2mono @ coeffs
+        mono = mono_asc[::-1]
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * stretch_factor)
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
+        shape_avg = _polyint_avg(convolved, t_low, t_high)
+        shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
+        return params['scale'] * shape_avg / shape_nw
 
     def to_dict(self) -> dict:
         return {'type': 'Bernstein', 'degree': self._degree, 'stretch': self._stretch}
@@ -905,9 +1213,37 @@ class PowerLaw(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
+        # LSF convolution is not supported for PowerLaw.
         nw = params['norm_wav']
         return params['scale'] * (wavelength / nw) ** params['beta']
+
+    # def integrate(
+    #     self,
+    #     low: ArrayLike,
+    #     high: ArrayLike,
+    #     center: float,
+    #     params: dict[str, ArrayLike],
+    #     obs_low: float,
+    #     obs_high: float,
+    #     lsf_fwhm: ArrayLike = 0.0,
+    # ) -> Array:
+    #     # Exact integral of scale * (wavelength / nw)^beta over [low, high]:
+    #     # = scale / nw^beta * [w^{beta+1} / (beta+1)]_{low}^{high} / (high - low)
+    #     nw = params['norm_wav']
+    #     beta = params['beta']
+    #     bp1 = beta + 1.0
+    #     # For beta != -1 (the common case): use the power-rule antiderivative.
+    #     # beta = -1 gives log, but that is physically unusual; we handle it
+    #     # via jnp.where for safety.
+    #     antideriv_high = high**bp1 / bp1
+    #     antideriv_low = low**bp1 / bp1
+    #     power_avg = (antideriv_high - antideriv_low) / (high - low)
+    #     # beta = -1 fallback: integral of 1/w is ln(w)
+    #     log_avg = (jnp.log(high) - jnp.log(low)) / (high - low)
+    #     avg = jnp.where(jnp.abs(bp1) > 1e-10, power_avg, log_avg)
+    #     return params['scale'] / nw**beta * avg
 
     def to_dict(self) -> dict:
         return {'type': 'PowerLaw'}
@@ -978,7 +1314,9 @@ class Blackbody(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
+        # LSF convolution is not supported for Blackbody.
         wl_um = wavelength * self._micron_factor
         nw_um = params['norm_wav'] * self._micron_factor
         bb = planck_function(wl_um, params['temperature'], nw_um)
@@ -1059,7 +1397,9 @@ class ModifiedBlackbody(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
+        # LSF convolution is not supported for ModifiedBlackbody.
         wl_um = wavelength * self._micron_factor
         nw_um = params['norm_wav'] * self._micron_factor
         bb = planck_function(wl_um, params['temperature'], nw_um)
@@ -1171,7 +1511,9 @@ class AttenuatedBlackbody(ContinuumForm):
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
+        # LSF convolution is not supported for AttenuatedBlackbody.
         wl_um = wavelength * self._micron_factor
         nw_um = params['norm_wav'] * self._micron_factor
         bb = planck_function(wl_um, params['temperature'], nw_um)

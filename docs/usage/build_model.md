@@ -210,24 +210,52 @@ all pre-computed matrices, scales, and data arrays. You can now proceed to infer
 Filtering the configurations and computing scales can be skipped; building the model will automatically call `prepare()` and `compute_scales()` with sensible defaults if they have not been called yet. However, we recommend calling them explicitly to inspect the filtered configurations and diagnostics before committing to the full model build.
 :::
 
-### Absorber Position
+### Integration Mode
+
+`build()` accepts an `integration_mode` parameter that controls how line profiles
+are integrated over pixels.  The choice matters most when your model includes
+tau-parametrized (absorption) lines:
+
+```python
+# Analytic (default) — fast, exact for emission
+model_fn, args = builder.build(integration_mode='analytic')
+
+# Quadrature — exact for emission and absorption
+model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
+```
+
+| Mode | How it works | Speed | Absorption accuracy |
+|---|---|---|---|
+| `'analytic'` | CDF-based integration of each profile over pixel bins | Fast | Approximate — integrates `φ` before applying `exp(-τ·φ)` |
+| `'quadrature'` | Gauss-Legendre quadrature of the full composed model at `n_nodes` sub-pixel points | Slower | Exact — properly integrates `∫F(λ)·exp(-τ·φ(λ)) dλ` |
+
+**When to use each:**
+
+- **Analytic** is the right default for most models, and is exact for emission-only
+  models.  For absorption lines, the approximation is accurate when the absorber
+  is well-resolved (profile varies slowly across a pixel).
+- **Quadrature** should be used when tau-parametrized lines are unresolved or
+  marginally resolved — for example, narrow absorption in low-resolution spectra
+  (NIRSpec PRISM), or when mixing emission and absorption at similar wavelengths
+  across spectrographs with very different resolutions.
 
 :::{warning}
-Due to the impossibility of analytically integrating absorption profiles, 
-absorption lines are evaluated at pixel centers rather than integrated over pixels
-when using integration mode in unite. This is accurate when the absorber changes 
-slowly over the pixel width. This may cause issues when simultaneously modeling 
-absorbers in different spectra where the absorption is unresolved in one or many
-spectra, but resolved in others.
+In analytic mode the model computes `exp(-τ·∫φ)` rather than `∫F·exp(-τ·φ)`.
+For unresolved absorbers (line narrower than a pixel), these differ because
+pixel-averaging the profile before applying the exponential underestimates the
+absorption depth.  If your fit includes absorption lines that are unresolved in
+one or more spectra, use `integration_mode='quadrature'`.
 :::
+
+### Absorber Position
 
 When your line configuration includes absorption lines, the `absorber_position`
 parameter on `build()` controls where the absorbing material sits relative to
-the emission and continuum sources. This affects the model equation:
+the emission and continuum sources.  This affects the model equation:
 
 ```python
 # Default: absorber in front of everything
-model_fn, args = builder.build(absorber_position='foreground') # Default
+model_fn, args = builder.build(absorber_position='foreground')
 
 # Absorber between continuum source and emission region
 model_fn, args = builder.build(absorber_position='behind_lines')
@@ -240,16 +268,21 @@ The three options correspond to different physical geometries:
 
 | Position | Model equation | Physical meaning |
 |---|---|---|
-| `'foreground'` | `T * (emission + continuum)` | Absorber in front of lines and and continua |
-| `'behind_lines'` | `emission + T * continuum` | Absorber between continua and lines |
-| `'behind_continuum'` | `T * emission + continuum` | Absorber between lines and continua |
+| `'foreground'` | `T × (emission + continuum)` | Absorber in front of lines and continua |
+| `'behind_lines'` | `emission + T × continuum` | Absorber between continua and lines |
+| `'behind_continuum'` | `T × emission + continuum` | Absorber between lines and continua |
 
-where `T = exp(-tau * phi(lambda))` is the transmission spectrum.
+where `T = exp(-τ·φ(λ))` is the transmission spectrum.
 
-When no absorption lines are present, `T = 1` everywhere and the model reduces to the standard emission + continuum equation regardless of `absorber_position`.
+When no absorption lines are present, `T = 1` everywhere and the model reduces
+to the standard emission + continuum equation regardless of `absorber_position`.
 
-The `fit()` convenience method also accepts `absorber_position`:
+Both `absorber_position` and `integration_mode` can be passed to the `fit()`
+convenience method:
 
 ```python
-samples, args = builder.fit(absorber_position='foreground')
+samples, args = builder.fit(
+    absorber_position='foreground',
+    integration_mode='quadrature',
+)
 ```

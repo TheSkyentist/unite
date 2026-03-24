@@ -1,14 +1,14 @@
 """Tests for Gauss-Legendre quadrature integration of line profiles.
 
 These tests verify that GL quadrature of ``evaluate_lines`` converges to
-``analytic_integrate_lines`` and that profiles integrate to unity over wide bins.
+``integrate_lines`` and that profiles integrate to unity over wide bins.
 """
 
 import jax
 import jax.numpy as jnp
 import pytest
 
-from unite.line.compute import analytic_integrate_lines, evaluate_lines
+from unite.line.compute import evaluate_lines, integrate_lines
 from unite.line.profiles import (
     SEMG,
     Cauchy,
@@ -133,9 +133,7 @@ class TestQuadratureMatchesAnalytic:
         p2s = jnp.array([p2])
         codes = jnp.array([profile.code])
 
-        analytic = analytic_integrate_lines(lo, hi, centers, lsf, p0s, p1s, p2s, codes)[
-            0
-        ]
+        analytic = integrate_lines(lo, hi, centers, lsf, p0s, p1s, p2s, codes)[0]
 
         # Test convergence: more nodes → smaller error
         prev_err = float('inf')
