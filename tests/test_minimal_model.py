@@ -241,7 +241,7 @@ class TestModelOutputValidation:
 
     def test_model_predictions_shape(self, basic_model):
         """Test that model predictions have the correct shape."""
-        from unite.evaluate import evaluate_model
+        from unite.compute import evaluate_model
 
         unite_model, unite_args, _ = basic_model
         rng_key = random.PRNGKey(3)
@@ -258,7 +258,7 @@ class TestModelOutputValidation:
 
     def test_model_fits_data_range(self, basic_model):
         """Test that model predictions are finite and not all zeros."""
-        from unite.evaluate import evaluate_model
+        from unite.compute import evaluate_model
 
         unite_model, unite_args, _ = basic_model
         rng_key = random.PRNGKey(4)
@@ -849,7 +849,7 @@ class TestPseudoVoigtModel:
         from jax import random as jrandom
         from numpyro.infer import Predictive
 
-        from unite.line.profiles import PseudoVoigt
+        from unite.line.library import PseudoVoigt
 
         wl = np.linspace(6500, 6600, 60) * u.AA
         disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='pv')
@@ -906,7 +906,7 @@ class TestGaussHermiteModel:
         from numpyro.infer import Predictive
 
         from unite.line.config import LineShape
-        from unite.line.profiles import GaussHermite
+        from unite.line.library import GaussHermite
 
         wl = np.linspace(6500, 6600, 60) * u.AA
         disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='gh')
@@ -1107,7 +1107,7 @@ class TestAbsorptionModel:
 
     def test_absorption_model_builds(self):
         """Model with absorption lines builds and runs."""
-        from unite.line.profiles import Gaussian
+        from unite.line.library import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
@@ -1134,7 +1134,7 @@ class TestAbsorptionModel:
 
     def test_tau_zero_no_absorption(self):
         """tau=0 should produce transmission=1 (no absorption)."""
-        from unite.line.profiles import Gaussian
+        from unite.line.library import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
@@ -1154,8 +1154,8 @@ class TestAbsorptionModel:
 
     def test_tau_positive_reduces_flux(self):
         """tau>0 should reduce flux at line center relative to tau=0."""
-        from unite.evaluate import evaluate_model
-        from unite.line.profiles import Gaussian
+        from unite.compute import evaluate_model
+        from unite.line.library import Gaussian
 
         spec = create_simple_spectrum()
 
@@ -1205,7 +1205,7 @@ class TestAbsorptionModel:
 
     def test_absorber_positions(self):
         """All three absorber positions build and run without error."""
-        from unite.line.profiles import Gaussian
+        from unite.line.library import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
@@ -1237,7 +1237,7 @@ class TestAbsorptionModel:
 
     def test_absorption_only_model(self):
         """Model with only absorption lines (no emission) builds and runs."""
-        from unite.line.profiles import Gaussian
+        from unite.line.library import Gaussian
 
         spec = _create_absorption_spectrum()
         lc = line.LineConfiguration()
@@ -1313,7 +1313,7 @@ class TestIntegrationMode:
 
     def test_quadrature_matches_analytic_emission(self):
         """For emission-only models, quadrature should match analytic closely."""
-        from unite.evaluate import evaluate_model
+        from unite.compute import evaluate_model
 
         spec = create_simple_spectrum()
         lc = line.LineConfiguration()
@@ -1383,4 +1383,32 @@ class TestIntegrationMode:
         builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
         model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
         samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
+        assert f'obs_{spec.name}' in samples
+
+    def test_quadrature_with_continuum(self):
+        """Quadrature mode with continuum exercises eval_continuum (non-None cont_config)."""
+        from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
+
+        spec = create_simple_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6450.0 * u.AA, 6650.0 * u.AA, Linear())]
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc, cont)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+        builder = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        )
+        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
         assert f'obs_{spec.name}' in samples

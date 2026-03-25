@@ -8,14 +8,14 @@ Provides two vmapped dispatch functions:
   line profiles over pixel bins (used by the analytic integration path).
 
 Both dispatch to per-profile JAX kernels via ``lax.switch`` keyed on
-:attr:`~unite.line.profiles.Profile.code`.
+:attr:`~unite.line.library.Profile.code`.
 """
 
 from __future__ import annotations
 
 import jax
 
-from unite.line.profiles import _EVALUATE_BRANCHES, _INTEGRATE_BRANCHES
+from unite.line.library import _EVALUATE_BRANCHES, _INTEGRATE_BRANCHES
 
 # -------------------------------------------------------------------
 # Pointwise evaluation

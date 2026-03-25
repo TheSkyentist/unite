@@ -24,7 +24,7 @@ extensions = [
 ]
 
 templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'tutorials/README.rst']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store', 'tutorials/README.rst', 'auto_tutorials/index.rst']
 
 # Suppress cross-reference ambiguity warnings that arise because public classes
 # are registered at both the package level (e.g. unite.line.LineConfiguration)

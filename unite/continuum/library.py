@@ -35,12 +35,21 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
     FWHM ``lsf_fwhm``, return the coefficients of the convolved polynomial
     ``(p * G)(x)``.
 
+    A polynomial convolved with a Gaussian is still a polynomial of the same
+    degree. Only even Gaussian moments contribute (odd moments vanish by
+    symmetry), giving the coefficient update:
+
+    .. code-block:: text
+
+        c_j_new = sum_{k=0,2,4,...}^{N-j}  c_{j+k} * C(j+k, k) * (k-1)!! * sigma^k
+
+    where ``(k-1)!!`` is the double factorial (the *k*-th even moment of
+    a standard normal). See the
+    :doc:`polynomial derivation </derivations/polynomial>` for a full derivation.
+
     For a monomial ``x^k`` convolved with ``N(0, s^2)``, the result is::
 
         sum_{j=0}^{floor(k/2)} C(k, 2j) * (2j-1)!! * s^{2j} * x^{k-2j}
-
-    where ``(2j-1)!!`` is the double factorial
-    (the *j*-th even moment of a standard normal).
 
     Parameters
     ----------

@@ -3,22 +3,15 @@
 import jax.numpy as jnp
 import pytest
 
-from unite.line.functions import (
-    _integrate_cauchy,
-    _integrate_laplace,
-    integrate_gaussHermite,
-    integrate_gaussian,
-    integrate_gaussianLaplace,
-    integrate_split_normal,
-    integrate_voigt,
-)
-from unite.line.profiles import (
+from unite.line import functions
+from unite.line.library import (
     SEMG,
     Cauchy,
     GaussHermite,
     Gaussian,
     Laplace,
     PseudoVoigt,
+    SkewVoigt,
     SplitNormal,
 )
 
@@ -36,31 +29,31 @@ class TestIntegrationNormalization:
     lsf_fwhm = jnp.array([10.0])
 
     def test_gaussian(self):
-        result = integrate_gaussian(
+        result = functions.integrate_gaussian(
             self.low, self.high, self.center, self.lsf_fwhm, jnp.array([100.0])
         )
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
 
     def test_cauchy(self):
-        result = _integrate_cauchy(
-            self.low, self.high, self.center, self.lsf_fwhm, self.lsf_fwhm
+        result = functions._cauchy_cdf_diff(
+            self.low - self.center, self.high - self.center, self.lsf_fwhm
         )
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=5e-3)
 
     def test_voigt_pure_lorentzian(self):
-        result = integrate_voigt(
+        result = functions.integrate_voigt(
             self.low, self.high, self.center, 0.0, 0.0, jnp.array([100.0])
         )
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=5e-2)
 
     def test_laplace(self):
-        result = _integrate_laplace(
-            self.low, self.high, self.center, self.lsf_fwhm, jnp.array([100.0])
+        result = functions._laplace_cdf_diff(
+            self.low - self.center, self.high - self.center, jnp.array([100.0])
         )
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-4)
 
     def test_voigt(self):
-        result = integrate_voigt(
+        result = functions.integrate_voigt(
             self.low,
             self.high,
             self.center,
@@ -71,7 +64,7 @@ class TestIntegrationNormalization:
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=5e-3)
 
     def test_gaussianLaplace(self):
-        result = integrate_gaussianLaplace(
+        result = functions.integrate_gaussianLaplace(
             self.low,
             self.high,
             self.center,
@@ -82,7 +75,7 @@ class TestIntegrationNormalization:
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-4)
 
     def test_gaussHermite(self):
-        result = integrate_gaussHermite(
+        result = functions.integrate_gaussHermite(
             self.low,
             self.high,
             self.center,
@@ -94,7 +87,7 @@ class TestIntegrationNormalization:
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
 
     def test_split_normal(self):
-        result = integrate_split_normal(
+        result = functions.integrate_split_normal(
             self.low,
             self.high,
             self.center,
@@ -117,11 +110,12 @@ _PROFILE_PARAMS = [
     (SEMG(), {'fwhm_gauss': 80.0, 'fwhm_exp': 50.0}),
     (GaussHermite(), {'fwhm_gauss': 80.0, 'h3': 0.1, 'h4': 0.05}),
     (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
+    (SkewVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0, 'alpha': 2.0}),
 ]
 
 
 class TestProfileIntegrateMethod:
-    """Test Profile.integrate() dispatches correctly via integrate_branch()."""
+    """Test Profile.integrate() dispatches correctly via functions.integrate_branch()."""
 
     @pytest.mark.parametrize('profile,extra_kwargs', _PROFILE_PARAMS)
     def test_integrate_sums_to_near_unity(self, profile, extra_kwargs):

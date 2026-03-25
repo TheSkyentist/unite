@@ -546,6 +546,75 @@ class SplitNormal(Profile):
         return hash(type(self))
 
 
+@_register
+class SkewVoigt(Profile):
+    r"""Skew pseudo-Voigt line profile.
+
+    A pseudo-Voigt profile multiplied by a skew factor
+    ``[1 + erf(alpha * (x - c) / (sqrt(2) * sigma_g))]``, where
+    ``sigma_g`` is the standard deviation of the Gaussian component.
+    The profile integrates to 1 for any value of ``alpha`` because the
+    skew factor is odd and the pseudo-Voigt is even.
+
+    Convolution with the Gaussian LSF rescales the skewness parameter to
+
+    .. math::
+
+        \\alpha_\\text{eff} = \\frac{\\alpha\\,\\sigma_g}
+            {\\sqrt{\\sigma_\\text{tot}^2 + \\alpha^2\\sigma_\\text{lsf}^2}}
+
+    where :math:`\\sigma_\\text{tot} = \\sqrt{\\sigma_g^2 + \\sigma_\\text{lsf}^2}`.
+    The skewness is reduced by the LSF and vanishes entirely when
+    ``fwhm_gauss = 0`` (no intrinsic Gaussian component).
+
+    Requires three parameters: ``fwhm_gauss`` for the Gaussian component,
+    ``fwhm_lorentz`` for the Lorentzian component, and ``alpha`` for the
+    skewness (positive values shift flux redward).
+    """
+
+    code = 7
+
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm_gauss', 'fwhm_lorentz', 'alpha')
+
+    def default_priors(self) -> dict[str, Prior]:
+        return {
+            'fwhm_gauss': Uniform(0, 1000),
+            'fwhm_lorentz': Uniform(0, 1000),
+            'alpha': TruncatedNormal(loc=0, scale=100, low=-300, high=300),
+        }
+
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss, p1 = fwhm_lorentz, p2 = alpha
+            mid = (hi + lo) / 2
+            return functions.evaluate_skewVoigt(mid, c, lsf, p0, p1, p2) * (hi - lo)
+
+        return _fn
+
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return functions.evaluate_skewVoigt(wavelength, c, lsf, p0, p1, p2)
+
+        return _fn
+
+    def to_dict(self) -> dict:
+        return {'type': 'SkewVoigt'}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SkewVoigt:
+        return cls()
+
+    def __repr__(self) -> str:
+        return 'SkewVoigt()'
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SkewVoigt)
+
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
 _PROFILE_ALIASES: dict[str, Profile] = {
     'gaussian': Gaussian(),
     'normal': Gaussian(),
@@ -561,6 +630,8 @@ _PROFILE_ALIASES: dict[str, Profile] = {
     'gauss-hermite': GaussHermite(),
     'split-normal': SplitNormal(),
     'two-sided': SplitNormal(),
+    'skew-voigt': SkewVoigt(),
+    'skewvoigt': SkewVoigt(),
 }
 
 

@@ -62,6 +62,16 @@ usage/results
 api/index
 ```
 
+```{toctree}
+:maxdepth: 1
+:caption: Derivations
+
+derivations/gauss-hermite
+derivations/semg
+derivations/polynomial
+derivations/skew-voigt
+```
+
 ## Indices and Tables
 
 - {ref}`genindex`

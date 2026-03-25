@@ -258,10 +258,10 @@ print(param_table['Ha_flux'])
 ## Evaluating the Model at Arbitrary Samples
 
 For more advanced use (e.g., plotting individual draws or computing derived quantities),
-use {func}`~unite.evaluate.evaluate_model` directly:
+use {func}`~unite.compute.evaluate_model` directly:
 
 ```python
-from unite.evaluate import evaluate_model
+from unite.compute import evaluate_model
 
 predictions = evaluate_model(samples, model_args)
 
@@ -273,7 +273,7 @@ for pred, spectrum in zip(predictions, model_args.spectra):
     print(pred.wavelength.shape, pred.total.shape)
 ```
 
-{class}`~unite.evaluate.SpectrumPrediction` is a simple dataclass; use standard NumPy
+{class}`~unite.compute.SpectrumPrediction` is a simple dataclass; use standard NumPy
 operations to compute any derived quantity you need.
 
 ---

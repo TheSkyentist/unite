@@ -1,4 +1,4 @@
-"""Tests for the model evaluator (unite.evaluate)."""
+"""Tests for the model evaluator (unite.compute)."""
 
 import astropy.units as u
 import numpy as np
@@ -7,9 +7,9 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import line, model, prior
+from unite.compute import SpectrumPrediction, evaluate_model
 from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
 from unite.continuum.library import Linear
-from unite.evaluate import SpectrumPrediction, evaluate_model
 from unite.instrument.base import PixOffset
 from unite.instrument.generic import GenericDisperser, SimpleDisperser
 from unite.spectrum import Spectra, Spectrum
@@ -215,7 +215,7 @@ class TestEvaluateAbsorption:
     def test_absorption_delta_flux_negative(self):
         """Absorption line entry in pred.lines is negative (flux removed)."""
         from unite.line.config import Tau
-        from unite.line.profiles import Gaussian
+        from unite.line.library import Gaussian
 
         spec = _make_spectrum(name='abs_eval')
         lc = line.LineConfiguration()
@@ -249,7 +249,7 @@ class TestEvaluateAbsorption:
     def test_absorption_tau_zero_delta_zero(self):
         """tau=0 → absorption delta is zero everywhere."""
         from unite.line.config import Tau
-        from unite.line.profiles import Gaussian
+        from unite.line.library import Gaussian
 
         spec = _make_spectrum(name='abs_t0')
         lc = line.LineConfiguration()

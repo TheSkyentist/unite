@@ -69,8 +69,8 @@ physically appropriate since the instrumental broadening is always present.
 **Quadrature mode** evaluates the full composed model — emission, absorption, and
 continuum together — at Gauss-Legendre sub-pixel nodes and integrates via weighted sum:
 
-- **Exact** for both emission and absorption — properly computes `∫F(λ)·exp(-τ·φ(λ)) dλ`
-  over each pixel
+- **Exact pixel integration** for both emission and absorption — properly computes
+  `∫F(λ)·exp(-τ·φ(λ)) dλ` over each pixel, avoiding the analytic-mode approximation
 - **Slower** — requires `n_nodes` (default 7) profile evaluations per pixel instead of one
 - **Recommended when** tau-parametrized lines are unresolved or marginally resolved, or when
   mixing emission and absorption at similar wavelengths
@@ -79,12 +79,48 @@ continuum together — at Gauss-Legendre sub-pixel nodes and integrates via weig
 # Analytic (default) — fast, exact for emission lines
 model_fn, args = builder.build(integration_mode='analytic')
 
-# Quadrature — exact for all lines, including absorption
+# Quadrature — correct pixel integration for absorption lines
 model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
 ```
 
 The continuum is evaluated at pixel centers in both modes, since it varies slowly enough
 that sub-pixel variation is negligible.
+
+(lsf-pre-convolution-of-absorption-profiles)=
+### LSF Pre-Convolution of Absorption Profiles
+
+:::{warning}
+**This approximation applies in both integration modes.**
+
+In both analytic and quadrature modes, the absorption profile `φ(λ)` used in
+`exp(-τ·φ)` is the **LSF-convolved** profile, not the intrinsic one. The physically correct
+observable is:
+
+$$\mathrm{obs}(\lambda) = \mathrm{LSF} \otimes \bigl[F(\lambda) \cdot e^{-\tau\,\phi_\mathrm{intrinsic}(\lambda)}\bigr]$$
+
+Computing this requires convolving the nonlinear product over the full multi-pixel LSF kernel,
+which is not currently supported. Instead, the code evaluates:
+
+$$\mathrm{obs}(\lambda) \approx F(\lambda) \cdot e^{-\tau\,\phi_\mathrm{LSF}(\lambda)}$$
+
+**When the approximation is accurate:**
+
+- **Resolved absorbers** (intrinsic FWHM ≫ LSF FWHM): `φ_LSF ≈ φ_intrinsic`, so the
+  two expressions agree regardless of optical depth.
+- **Optically thin lines** (τ ≪ 1): the integrand is linear in `φ`, convolution distributes,
+  and both approaches give identical first-order results. Errors are O(τ²).
+
+**When it matters:**
+
+For **unresolved, optically thick absorbers** — e.g. narrow ISM absorbers or stellar
+Balmer absorption observed at moderate spectral resolution — the LSF-broadened profile has a
+lower peak than the intrinsic profile. The code therefore underestimates the absorption depth
+for a given τ, so inferred τ values will be biased high and the curve of growth will be
+misrepresented.
+
+Quadrature mode fixes only the pixel-integration approximation (analytic mode's
+`exp(-τ·∫φ)` vs. `∫exp(-τ·φ)`); it does **not** address this LSF pre-convolution issue.
+:::
 
 ---
 

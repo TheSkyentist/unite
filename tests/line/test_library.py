@@ -2,13 +2,14 @@
 
 import pytest
 
-from unite.line.profiles import (
+from unite.line.library import (
     SEMG,
     Cauchy,
     GaussHermite,
     Gaussian,
     Laplace,
     PseudoVoigt,
+    SkewVoigt,
     SplitNormal,
     profile_from_dict,
     resolve_profile,
@@ -26,6 +27,7 @@ _ALL_PROFILES = [
     SEMG(),
     GaussHermite(),
     SplitNormal(),
+    SkewVoigt(),
 ]
 
 
@@ -53,6 +55,7 @@ _ALL_PROFILE_CLASSES = [
     SEMG,
     GaussHermite,
     SplitNormal,
+    SkewVoigt,
 ]
 
 

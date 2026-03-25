@@ -13,7 +13,7 @@ import yaml
 from astropy import units as u
 
 from unite._utils import _alpha_name, _broadcast, _ensure_wavelength
-from unite.line.profiles import Profile, profile_from_dict, resolve_profile
+from unite.line.library import Profile, profile_from_dict, resolve_profile
 from unite.prior import Parameter, Prior, TruncatedNormal, Uniform, prior_from_dict
 
 # ------------------------------------------------------------------

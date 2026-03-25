@@ -4,7 +4,7 @@ import pytest
 from astropy import units as u
 
 from unite.line.config import FWHM, Flux, LineConfiguration, LineShape, Redshift, Tau
-from unite.line.profiles import Cauchy, GaussHermite, Gaussian, PseudoVoigt
+from unite.line.library import Cauchy, GaussHermite, Gaussian, PseudoVoigt
 from unite.prior import Fixed, TruncatedNormal, Uniform
 
 # ---------------------------------------------------------------------------

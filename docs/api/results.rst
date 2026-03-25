@@ -6,7 +6,7 @@ Results
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: unite.evaluate
+.. automodule:: unite.compute
    :members:
    :undoc-members:
    :show-inheritance:

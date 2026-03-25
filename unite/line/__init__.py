@@ -1,13 +1,14 @@
 """Emission and absorption line fitting framework — profiles and configuration."""
 
 from unite.line.config import FWHM, Flux, LineConfiguration, LineShape, Redshift, Tau
-from unite.line.profiles import (
+from unite.line.library import (
     SEMG,
     Cauchy,
     GaussHermite,
     Gaussian,
     Laplace,
     PseudoVoigt,
+    SkewVoigt,
     SplitNormal,
 )
 
@@ -23,6 +24,7 @@ __all__ = [
     'LineShape',
     'PseudoVoigt',
     'Redshift',
+    'SkewVoigt',
     'SplitNormal',
     'Tau',
 ]

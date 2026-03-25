@@ -248,19 +248,21 @@ This ensures the broad component is always at least 150 km/s wider than the narr
 ## Line Profiles
 
 Here we list all currently supported profiles in `unite`.
-All profiles are **analytically integrated** over pixels (not Riemann-summed) and convolved
-with the instrumental LSF. See {doc}`/concepts` for the LSF convolution convention.
+Most profiles are **analytically integrated** over pixels (exact CDF differences) and convolved
+with the instrumental LSF. The exception is `SkewVoigt`, which uses a midpoint-rule
+approximation (see below). See {doc}`/concepts` for the LSF convolution convention.
 Profiles are set via the `profile` argument (case-insensitive strings or class instances):
 
-| String | Profile | FWHM Parameter(s) | Shape Parameter(s) |
-|--------|---------|-------------------|--------------------|
-| `'gaussian'`, `'normal'` | `Gaussian` | `fwhm_gauss` |
-| `'cauchy'`, `'lorentzian'` | `Cauchy` | `fwhm_lorentz` |
-| `'pseudovoigt'`, `'voigt'` | `PseudoVoigt` | `fwhm_gauss`, `fwhm_lorentz` |
-| `'laplace'`, `'exponential'` | `Laplace` | `fwhm_exp` |
-| `'semg'`, `'exp-gaussian'` | `SEMG` | `fwhm_gauss`, `fwhm_exp |
-| `'hermite'`, `'gauss-hermite'` | `GaussHermite` | `fwhm_gauss`, `h3`, `h4` |
-| `'split-normal'`, `'two-sided'` | `SplitNormal` | `fwhm_blue`, `fwhm_red` |
+| String | Profile | FWHM Parameter(s) | Shape Parameter(s) | Pixel integration |
+|--------|---------|-------------------|--------------------|-------------------|
+| `'gaussian'`, `'normal'` | `Gaussian` | `fwhm_gauss` | | analytic |
+| `'cauchy'`, `'lorentzian'` | `Cauchy` | `fwhm_lorentz` | | analytic |
+| `'pseudovoigt'`, `'voigt'` | `PseudoVoigt` | `fwhm_gauss`, `fwhm_lorentz` | | analytic |
+| `'laplace'`, `'exponential'` | `Laplace` | `fwhm_exp` | | analytic |
+| `'semg'`, `'exp-gaussian'` | `SEMG` | `fwhm_gauss`, `fwhm_exp` | | analytic |
+| `'hermite'`, `'gauss-hermite'` | `GaussHermite` | `fwhm_gauss` | `h3`, `h4` | analytic |
+| `'split-normal'`, `'two-sided'` | `SplitNormal` | `fwhm_blue`, `fwhm_red` | | analytic |
+| `'skew-voigt'`, `'skewvoigt'` | `SkewVoigt` | `fwhm_gauss`, `fwhm_lorentz` | `alpha` | midpoint rule |
 
 ### Gaussian (default)
 
@@ -277,7 +279,20 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='Gaussian',
 
 ### PseudoVoigt
 
-An accurate numerical approximation to the Voigt profile, which is the convolution of a Gaussian and a Lorentzian. 
+The Voigt profile — the convolution of a Gaussian and a Lorentzian — computed via two
+different approximations depending on integration mode:
+
+- **Analytic mode** (CDF-based pixel integration): uses the extended pseudo-Voigt
+  approximation of Ida, Ando & Toraya (2000), which decomposes the profile into four
+  components (Gaussian, Lorentzian, intermediate, and Pearson-VII) with sixth-order
+  polynomial mixing coefficients. Achieves < 0.12% peak-height deviation from the true
+  Voigt profile. The Gaussian LSF is added in quadrature to `fwhm_gauss` before computing
+  the approximation parameters.
+
+- **Quadrature mode** (PDF evaluation at nodes): uses the exact Voigt profile computed
+  via the Faddeeva function $w(z) = e^{-z^2}\operatorname{erfc}(-iz)$, approximated
+  with the Humlicek (1982) W4 rational scheme (~$10^{-4}$ relative error across the
+  upper half-plane).
 
 **Parameters:** `fwhm_gauss` (km/s), `fwhm_lorentz` (km/s)
 
@@ -310,14 +325,20 @@ A double-exponential (Laplace) profile convolved with the Gaussian LSF.
 
 ### SEMG — Symmetric Exponentially Modified Gaussian
 
-A Gaussian convolved with a Laplace distribution.
+A Gaussian convolved with a Laplace distribution. The Gaussian
+component (including LSF) contributes exponential wings that are
+symmetric about the centre. See {doc}`/derivations/semg` for the
+closed-form CDF derivation.
 
 **Parameters:** `fwhm_gauss` (km/s), `fwhm_exp` (km/s)
 
 ### GaussHermite
 
-A Gaussian modified by Hermite polynomial corrections. `h3` controls
-skewness; `h4` controls kurtosis.
+A Gaussian modified by Hermite polynomial corrections using the
+probabilists' convention. `h3` controls skewness; `h4` controls
+kurtosis. Convolution with the Gaussian LSF rescales the shape
+parameters as $h_m' = h_m\,(\sigma_g/\sigma_\text{tot})^m$. See
+{doc}`/derivations/gauss-hermite` for the full derivation.
 
 **Parameters:** `fwhm_gauss` (km/s), `h3` (dimensionless), `h4` (dimensionless)
 
@@ -341,6 +362,35 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='SplitNormal',
             redshift=z,
             fwhm_blue=line.FWHM('b', prior=prior.Uniform(50, 500)),
             fwhm_red=line.FWHM('r',  prior=prior.Uniform(50, 500)),
+            flux=flux)
+```
+
+### SkewVoigt
+
+A pseudo-Voigt profile multiplied by a skew factor
+$[1 + \text{erf}(\alpha(x-c)/(\sqrt{2}\,\sigma_g))]$. The profile integrates to 1 for
+any `alpha` because the skew factor is odd and the pseudo-Voigt is even. Convolution
+with the Gaussian LSF rescales the skewness to an effective $\alpha_\text{eff}$
+(see {doc}`/derivations/skew-voigt`).
+
+:::{warning}
+`SkewVoigt` is **not** analytically integrated over pixels. The pixel integral of the
+skew correction requires Owen's T function (Gaussian part) and a separate quadrature
+(Lorentzian part) — neither reduces to standard functions. Instead, `unite` evaluates
+the profile at each pixel midpoint and multiplies by the pixel width. This is accurate
+when the profile is well-resolved (intrinsic FWHM several times the pixel width), but
+introduces sub-pixel quadrature error for marginally resolved lines. Consider using
+`integration_mode='quadrature'` as an alternative integration mode.
+:::
+
+**Parameters:** `fwhm_gauss` (km/s), `fwhm_lorentz` (km/s), `alpha` (dimensionless)
+
+```python
+lc.add_line('H_alpha', 6563.0 * u.AA, profile='SkewVoigt',
+            redshift=z,
+            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
+            fwhm_lorentz=line.FWHM('l', prior=prior.Uniform(0, 500)),
+            alpha=line.LineShape('alpha', prior=prior.TruncatedNormal(0, 2, -10, 10)),
             flux=flux)
 ```
 
@@ -378,15 +428,20 @@ emission lines is that absorption lines use a {class}`~unite.line.Tau` (optical
 depth) token instead of a {class}`~unite.line.Flux` token.
 
 :::{warning}
-In analytic integration mode, each line profile is integrated over pixels
-individually before the nonlinear transmission is applied. This means the model
-computes `exp(-tau * ∫phi)` rather than `∫F * exp(-tau * phi)` — the integral
-should be over the flux multiplied by the transmission, not the profile alone.
-This is accurate when the tau-parametrized line is well-resolved (profile varies
-slowly across a pixel), but introduces an approximation for unresolved or
-marginally resolved absorbers. Use quadrature integration mode
-(`integration_mode='quadrature'`) for proper pixel integration of the full
-composed model at the cost of speed.
+**Two distinct approximations apply to absorption lines — one mode-dependent, one universal.**
+
+**Analytic mode only:** each profile is integrated over pixels independently before the
+nonlinear transmission is applied, computing `exp(-τ·∫φ)` rather than `∫F·exp(-τ·φ)`.
+This is accurate when the absorber is well-resolved but introduces an approximation for
+unresolved or marginally resolved lines. Use `integration_mode='quadrature'` to avoid this.
+
+**Both modes:** the absorption profile `φ(λ)` passed to `exp(-τ·φ)` is the LSF-convolved
+profile, not the intrinsic one. The correct observable requires convolving the nonlinear
+product `F·exp(-τ·φ_intrinsic)` with the LSF over its full multi-pixel support, which is not
+currently supported. This approximation is accurate when the absorber is **resolved**
+(intrinsic FWHM ≫ LSF FWHM) or **optically thin** (τ ≪ 1). For **unresolved, optically thick
+absorbers** the inferred τ will be biased high and the curve of growth misrepresented.
+See {ref}`lsf-pre-convolution-of-absorption-profiles` for a full discussion.
 :::
 
 ### Adding Tau-Parametrized Lines

@@ -82,6 +82,7 @@ ruff = ">=0.15.2,<0.16"
 matplotlib = ">=3.10.8,<4"
 vulture = ">=2.14,<3"
 ipython = ">=9.10.0,<10"
+basedpyright = ">=1.38.3,<2"
 
 [tool.pixi.pypi-dependencies]
 unite = { path = ".", editable = true }

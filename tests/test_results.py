@@ -445,7 +445,7 @@ def emission_rew_setup():
 def absorption_rew_setup():
     """Deterministic absorption model: known tau on flat continuum, z=0."""
     from unite.line.config import Tau
-    from unite.line.profiles import Gaussian
+    from unite.line.library import Gaussian
 
     lc = line.LineConfiguration()
     # Need an emission line for compute_scales to work.
@@ -545,3 +545,11 @@ class TestREWAccuracy:
         delta_vals = np.asarray(t['HI_abs'])
         # Should be non-positive (flux removed).
         assert np.all(delta_vals <= 0)
+
+    def test_absorption_rew_in_percentile_mode(self, absorption_rew_setup):
+        """Absorption REW column appears in parameter table in percentile mode."""
+        args = absorption_rew_setup
+        table = make_parameter_table({}, args, percentiles=np.array([0.16, 0.5, 0.84]))
+        assert 'rew_HI_abs' in table.colnames
+        assert len(table['rew_HI_abs']) == 3
+        assert np.all(np.isfinite(np.asarray(table['rew_HI_abs'])))

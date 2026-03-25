@@ -234,12 +234,16 @@ model is evaluated with the instrument's line-spread function:
 | `AttenuatedBlackbody` | `lambda_ext` | `temperature`, `tau_ext`, `alpha` | No |
 
 Forms marked **Yes (exact)** are polynomial-based and have their coefficients
-analytically convolved with the Gaussian LSF before evaluation.  Forms marked
-**No** ignore the LSF — their curvature is assumed to vary slowly enough that
-the unconvolved value is a good approximation at the spectral resolution of
-most instruments.  For `BSpline`, the non-polynomial basis makes analytic
-convolution impractical; for `PowerLaw` and the blackbody family, the nonlinear
-functional forms do not admit closed-form convolution.
+analytically convolved with the Gaussian LSF before evaluation — a
+polynomial convolved with a Gaussian is still a polynomial of the same
+degree, so no extra basis functions are needed. See
+{doc}`/derivations/polynomial` for the derivation of the coefficient
+transform. Forms marked **No** ignore the LSF — their curvature is assumed
+to vary slowly enough that the unconvolved value is a good approximation at
+the spectral resolution of most instruments. For `BSpline`, the
+non-polynomial basis makes analytic convolution impractical; for `PowerLaw`
+and the blackbody family, the nonlinear functional forms do not admit
+closed-form convolution.
 
 
 ### Linear

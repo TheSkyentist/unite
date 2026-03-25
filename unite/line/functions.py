@@ -1,12 +1,12 @@
 """JAX-jitted line profile integration and evaluation kernels.
 
 Integration kernels (``integrate_*``) compute the fraction of a normalized
-profile that falls within each wavelength bin ``[low, high]``.  Evaluation
+profile that falls wi_absthin each wavelength bin ``[low, high]``.  Evaluation
 kernels (``evaluate_*``) compute the normalized profile value (probability
 density) at arbitrary wavelength points.
 
-All functions are pure JAX with no numpyro dependency and are designed to be
-called from within :func:`jax.jit`-compiled model code.
+All functions are pure JAX wi_absth no numpyro dependency and are designed to be
+called from wi_absthin :func:`jax.jit`-compiled model code.
 """
 
 from __future__ import annotations
@@ -22,14 +22,6 @@ from jax.typing import ArrayLike
 # sigma = FWHM / (2 sqrt(2 ln 2)); erf uses sqrt(2)*sigma, so the factor is:
 _HALFVAR_SIGMA_TO_FWHM: Final[Array] = 2 * jnp.sqrt(jnp.log(2))
 
-# Pseudo-Voigt polynomial coefficients from Thompson et al. (1987)
-# DOI: 10.1107/S0021889887087090
-_VOIGT_FWHM_CS: Final[Array] = jnp.array([1, 2.69268, 2.42843, 4.47163, 0.07842, 1])
-_VOIGT_ETA_CS: Final[Array] = jnp.array([1.33603, -0.47719, 0.11116])
-
-# Threshold for when exp(x*x) overflows
-_OVERFLOW_THRESHOLD: Final[float] = 26.0 if config.jax_enable_x64 else 9.0
-
 # Conversion factor from exponential (Laplace) scale to FWHM
 # pdf = (1/(2*b)) * exp(-|x - μ|/b)
 # max(pdf) = 1/(2*b), half max = 1/(4*b)
@@ -38,9 +30,68 @@ _OVERFLOW_THRESHOLD: Final[float] = 26.0 if config.jax_enable_x64 else 9.0
 _EXP_SCALE_TO_FWHM: Final[Array] = 2 * jnp.log(2)
 
 # Precompute constants
-_INV_SQRT2PI: Final[Array] = 1.0 / jnp.sqrt(2 * jnp.pi)
+_INV_SQRt2PI: Final[Array] = 1.0 / jnp.sqrt(2.0 * jnp.pi)
+_SQRT2: Final[Array] = jnp.sqrt(2.0)
 _SQRT6: Final[Array] = jnp.sqrt(6.0)
-_SQRT24: Final[Array] = jnp.sqrt(24.0)
+_SQRt24: Final[Array] = jnp.sqrt(24.0)
+
+# -------------------------------------------------------------------
+# Private helpers
+# -------------------------------------------------------------------
+
+
+def _combine_fwhm(fwhm1: ArrayLike, fwhm2: ArrayLike) -> Array:
+    """Combine two FWHM values in quadrature: ``sqrt(fwhm1**2 + fwhm2**2)``."""
+    return jnp.sqrt(fwhm1 * fwhm1 + fwhm2 * fwhm2)
+
+
+def _fwhm_to_sigma(fwhm: ArrayLike) -> Array:
+    """Gaussian sigma from FWHM: ``sigma = FWHM / (2 sqrt(2 ln 2))``."""
+    return fwhm / (_HALFVAR_SIGMA_TO_FWHM * _SQRT2)
+
+
+def _gaussian_pdf(dx: ArrayLike, sigma: ArrayLike) -> Array:
+    """Normalised Gaussian PDF at displacement *dx* wi_absth standard deviation *sigma*."""
+    return jnp.exp(-0.5 * (dx * dx / (sigma * sigma))) * _INV_SQRt2PI / sigma
+
+
+def _gaussian_cdf_diff(low: ArrayLike, high: ArrayLike, total_fwhm: ArrayLike) -> Array:
+    """Gaussian CDF difference ``Φ(high) - Φ(low)`` via the erf halfvar parametrization."""
+    inv_erf_scale = _HALFVAR_SIGMA_TO_FWHM / total_fwhm
+    return 0.5 * (erf(high * inv_erf_scale) - erf(low * inv_erf_scale))
+
+
+def _cauchy_pdf(dx: ArrayLike, hwhm: ArrayLike) -> Array:
+    """Normalised Cauchy (Lorentzian) PDF at displacement *dx* wi_absth half-wi_absdth *hwhm*."""
+    return (hwhm / jnp.pi) / (dx * dx + hwhm * hwhm)
+
+
+def _cauchy_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
+    """Cauchy (Lorentzian) CDF difference ``F(high) - F(low)``."""
+    inv_hwhm = 2 / fwhm
+    t_low = low * inv_hwhm
+    t_high = high * inv_hwhm
+    return (jnp.arctan(t_high) - jnp.arctan(t_low)) / jnp.pi
+
+
+# Don't need this but keeping anyways just in case
+def _laplace_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
+    """Laplace (double exponential) CDF difference ``F(high) - F(low)``."""
+    b = fwhm / _EXP_SCALE_TO_FWHM
+
+    t_high = high / b
+    t_low = low / b
+
+    # Explot symmetry and parts that cancel out.
+    int_high = jnp.sign(t_high) * (1.0 - jnp.exp(-jnp.abs(t_high)))
+    int_low = jnp.sign(t_low) * (1.0 - jnp.exp(-jnp.abs(t_low)))
+
+    return 0.5 * (int_high - int_low)
+
+
+# -------------------------------------------------------------------
+# Gaussian kernel
+# -------------------------------------------------------------------
 
 
 @jit
@@ -71,50 +122,390 @@ def integrate_gaussian(
     jnp.ndarray
         Integrated fraction per bin.
     """
-    # Add LSF in quadrature
-    total_fwhm = jnp.sqrt(lsf_fwhm**2 + fwhm**2)
-    inv_sigma = _HALFVAR_SIGMA_TO_FWHM / total_fwhm
-    t_low = (low - center) * inv_sigma
-    t_high = (high - center) * inv_sigma
-    return (erf(t_high) - erf(t_low)) / 2
+    total_fwhm = _combine_fwhm(lsf_fwhm, fwhm)
+    return _gaussian_cdf_diff(low - center, high - center, total_fwhm)
 
 
-def _integrate_cauchy(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
-    lsf_fwhm: ArrayLike,
-    fwhm: ArrayLike,
+@jit
+def evaluate_gaussian(
+    wavelength: ArrayLike, center: ArrayLike, lsf_fwhm: ArrayLike, fwhm: ArrayLike
 ) -> Array:
-    """Private: Integrate a pure Cauchy (Lorentzian) profile over wavelength bins.
-
-    This function is kept for reference but is no longer used directly.
-    Cauchy profiles are now implemented as PseudoVoigt with LSF=0.
+    """Evaluate a normalised Gaussian profile at wavelength points.
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
     center : ArrayLike
         Line center wavelength.
     lsf_fwhm : ArrayLike
         Instrumental line spread function FWHM at the line center.
     fwhm : ArrayLike
-        Intrinsic Lorentzian FWHM.
+        Intrinsic Gaussian FWHM.
 
     Returns
     -------
     jnp.ndarray
-        Integrated fraction per bin.
+        Normalised profile value at each wavelength point.
     """
-    # For Cauchy, we don't convolve with LSF - it's a pure Lorentzian
-    # This function is kept for reference but no longer used
-    inv_hwhm = 2 / fwhm
-    t_low = (low - center) * inv_hwhm
-    t_high = (high - center) * inv_hwhm
-    return (jnp.arctan(t_high) - jnp.arctan(t_low)) / jnp.pi
+    total_fwhm = _combine_fwhm(lsf_fwhm, fwhm)
+    return _gaussian_pdf(wavelength - center, _fwhm_to_sigma(total_fwhm))
+
+
+# -------------------------------------------------------------------
+# Pseudo Voigt
+# Thompson, Cox & Hastings (1987), J. Appl. Cryst. 20, 79-83.
+# DOI: 10.1107/S0021889887087090
+# -------------------------------------------------------------------
+
+# Pseudo-Voigt polynomial coefficients — Thompson, Cox & Hastings (1987)
+_VOIGT_FWHM_CS: Final[Array] = jnp.array([1, 2.69268, 2.42843, 4.47163, 0.07842, 1])
+_VOIGT_ETA_CS: Final[Array] = jnp.array([1.33603, -0.47719, 0.11116])
+
+
+def _voigt_params_thompson(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> tuple[Array, Array]:
+    pows = jnp.arange(_VOIGT_FWHM_CS.size)
+    fwhm_eff = jnp.sum(_VOIGT_FWHM_CS * (fwhm_g**pows) * (fwhm_l ** pows[::-1])) ** (
+        0.2
+    )
+    fwhm_ratio = fwhm_l / fwhm_eff
+    eta = jnp.sum(_VOIGT_ETA_CS * (fwhm_ratio ** jnp.arange(1, len(_VOIGT_ETA_CS) + 1)))
+    return fwhm_eff, eta
+
+
+def _voigt_thompson_cdf_diff(
+    low: ArrayLike, high: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike
+) -> Array:
+    fwhm_eff, eta = _voigt_params_thompson(fwhm_g, fwhm_l)
+    lorentzian = eta * _cauchy_cdf_diff(low, high, fwhm_eff)
+    gaussian = (1 - eta) * _gaussian_cdf_diff(low, high, fwhm_eff)
+    return lorentzian + gaussian
+
+
+def _voigt_thompson_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
+    fwhm_eff, eta = _voigt_params_thompson(fwhm_g, fwhm_l)
+    sigma_eff = _fwhm_to_sigma(fwhm_eff)
+    return (1 - eta) * _gaussian_pdf(x, sigma_eff) + eta * _cauchy_pdf(
+        x, 0.5 * fwhm_eff
+    )
+
+
+# -------------------------------------------------------------------
+# Extended Pseudo-Voigt
+# Ida, Ando & Toraya (2000), J. Appl. Cryst. 33, 1311-1316
+# DOI: 10.1107/S0021889800010219
+# -------------------------------------------------------------------
+
+
+# Extended pseudo-Voigt polynomial coefficients — Ida, Ando & Toraya (2000), Table 1.
+# Coefficients ordered i = 0 ... 6 (lowest to highest power of rho).
+# wG = 1 - rho * sum(A * rho^i)
+_IDA_A: Final[Array] = jnp.array(
+    [0.66000, 0.15021, -1.24984, 4.74052, -9.48291, 8.48252, -2.95553]
+)
+# wL = 1 - (1-rho) * sum(B * rho^i)
+_IDA_B: Final[Array] = jnp.array(
+    [-0.42179, -1.25693, 10.30003, -23.45651, 29.14158, -16.50453, 3.19974]
+)
+# wI = sum(C * rho^i)
+_IDA_C: Final[Array] = jnp.array(
+    [1.19913, 1.43021, -15.36331, 47.06071, -73.61822, 57.92559, -17.80614]
+)
+# wP = sum(D * rho^i)
+_IDA_D: Final[Array] = jnp.array(
+    [1.10186, -0.47745, -0.68688, 2.76622, -4.55466, 4.05475, -1.26571]
+)
+# eta_L = rho * [1 + (1-rho) * sum(F * rho^i)]
+_IDA_F: Final[Array] = jnp.array(
+    [-0.30165, -1.38927, 9.31550, -24.10743, 34.96491, -21.18862, 3.70290]
+)
+# eta_I = rho * (1-rho) * sum(G * rho^i)
+_IDA_G: Final[Array] = jnp.array(
+    [0.25437, -0.14107, 3.23653, -11.09215, 22.10544, -24.12407, 9.76947]
+)
+# eta_P = rho * (1-rho) * sum(H * rho^i)
+_IDA_H: Final[Array] = jnp.array(
+    [1.01579, 1.50429, -9.21815, 23.59717, -39.71134, 32.83023, -10.02142]
+)
+
+# Conversion: irrational-function gamma_I to FWHM: W_I = 2*(2^(2/3) - 1)^(1/2) * gamma_I
+# So gamma_I = W_I / (2*(2^(2/3) - 1)^(1/2))
+_IRRAT_FWHM_TO_GAMMA: Final[Array] = 0.5 / jnp.sqrt(2.0 ** (2.0 / 3.0) - 1.0)
+
+# Conversion: hyperbolic-function gamma_P to FWHM: W_P = 2*ln(sqrt(2) + 1) * gamma_P
+# So gamma_P = W_P / (2*ln(sqrt(2) + 1))
+_HYPER_FWHM_TO_GAMMA: Final[Array] = 0.5 / jnp.log(jnp.sqrt(2.0) + 1.0)
+
+
+# Intermediate function fl
+def _f_l_pdf(x, hwhm):
+    inv_hwhm = 1 / hwhm
+    t = x * inv_hwhm
+    return (0.5 * inv_hwhm) * (1 + t * t) ** (-3 / 2)
+
+
+def _f_l_cdf_diff(low, high, hwhm):
+    inv_hwhm = 1 / hwhm
+    t_low = low * inv_hwhm
+    t_high = high * inv_hwhm
+    return (
+        t_high / jnp.sqrt(1 + t_high * t_high) - t_low / jnp.sqrt(1 + t_low * t_low)
+    ) / 2
+
+
+# Intermediate function fp: squared-sech hyperbolic
+def _sech2(x):
+    coshx = jnp.cosh(x)
+    return 1 / (coshx * coshx)
+
+
+def _f_p_pdf(x, gamma):
+    """Normalised hyperbolic-sech² PDF: fP(x; gammaP) = (1/(2gammaP)) * sech²(x/gammaP).
+
+    Integrates to 1. FWHM = 2*ln(sqrt(2)+1)*gammaP.
+    """
+    inv_gamma = 1 / gamma
+    return (0.5 * inv_gamma) * _sech2(x * inv_gamma)
+
+
+def _f_p_cdf_diff(low, high, gamma):
+    """CDF difference for the hyperbolic-sech² function.
+
+    FP(x) = (1/2) * tanh(x/gammaP), so FP(∞) - FP(-∞) = 1.
+    *low* and *high* must be center-relative displacements.
+    """
+    inv_gamma = 1 / gamma
+    return 0.5 * (jnp.tanh(high * inv_gamma) - jnp.tanh(low * inv_gamma))
+
+
+def _voigt_ida_params(
+    fwhm_g_total: ArrayLike, fwhm_l: ArrayLike
+) -> tuple[Array, Array, Array, Array, Array, Array, Array, Array]:
+    """Compute extended pseudo-Voigt component wi_absdths and mixing fractions.
+
+    Uses the sixth-order polynomial fits of Ida, Ando & Toraya (2000), Table 1.
+    The Gaussian FWHM passed in should already include the LSF combined in
+    quadrature; this function only uses ``rho = fwhm_l / (fwhm_g_total + fwhm_l)``.
+
+    Parameters
+    ----------
+    fwhm_g_total : ArrayLike
+        Total Gaussian FWHM (intrinsic + LSF in quadrature).
+    fwhm_l : ArrayLike
+        Lorentzian FWHM.
+
+    Returns
+    -------
+    wg_abs, wl_abs, wi_abs, wp_abs : Array
+        Effective FWHM values of the Gaussian, Lorentzian, irrational, and
+        hyperbolic components.
+    eta_g, eta_l, eta_i, eta_p : Array
+        Mixing fractions (sum to 1).
+    """
+    fwhm_total = fwhm_g_total + fwhm_l
+    rho = fwhm_l / fwhm_total
+    one_minus_rho = 1.0 - rho
+
+    # Powers [rho^0, ..., rho^6] for polynomial evaluation
+    rho_pows = rho ** jnp.arange(7)
+
+    # Effective FWHM scaling parameters (eqs. 20-23)
+    wg = 1.0 - rho * jnp.dot(_IDA_A, rho_pows)
+    wl = 1.0 - one_minus_rho * jnp.dot(_IDA_B, rho_pows)
+    wi = jnp.dot(_IDA_C, rho_pows)
+    wp = jnp.dot(_IDA_D, rho_pows)
+
+    # Mixing fractions (eqs. 24-26)
+    eta_l = rho * (1.0 + one_minus_rho * jnp.dot(_IDA_F, rho_pows))
+    eta_i = rho * one_minus_rho * jnp.dot(_IDA_G, rho_pows)
+    eta_p = rho * one_minus_rho * jnp.dot(_IDA_H, rho_pows)
+    eta_g = 1.0 - eta_l - eta_i - eta_p
+
+    # Absolute FWHM values for each component
+    wg_abs = fwhm_total * wg
+    wl_abs = fwhm_total * wl
+    wi_abs = fwhm_total * wi
+    wp_abs = fwhm_total * wp
+
+    return wg_abs, wl_abs, wi_abs, wp_abs, eta_g, eta_l, eta_i, eta_p
+
+
+def _voigt_ida_cdf_diff(
+    low: ArrayLike, high: ArrayLike, fwhm_g_total: ArrayLike, fwhm_l: ArrayLike
+) -> Array:
+    """CDF difference of the extended pseudo-Voigt approximation (Ida et al. 2000).
+
+    Parameters
+    ----------
+    low, high : ArrayLike
+        Absolute bin edges.
+    center : ArrayLike
+        Line center.
+    fwhm_g_total : ArrayLike
+        Total Gaussian FWHM (intrinsic + LSF in quadrature).
+    fwhm_l : ArrayLike
+        Lorentzian FWHM.
+    """
+    wg_abs, wl_abs, wi_abs, wp_abs, eta_g, eta_l, eta_i, eta_p = _voigt_ida_params(
+        fwhm_g_total, fwhm_l
+    )
+    # Center-relative displacements needed by the non-standard CDFs
+
+    gauss = eta_g * _gaussian_cdf_diff(low, high, wg_abs)
+    lorentz = eta_l * _cauchy_cdf_diff(low, high, wl_abs)
+    irrat = eta_i * _f_l_cdf_diff(low, high, wi_abs * _IRRAT_FWHM_TO_GAMMA)
+    hyper = eta_p * _f_p_cdf_diff(low, high, wp_abs * _HYPER_FWHM_TO_GAMMA)
+    return gauss + lorentz + irrat + hyper
+
+
+def _voigt_ida_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
+    """PDF of the extended pseudo-Voigt approximation (Ida et al. 2000).
+
+    Parameters
+    ----------
+    wavelength : ArrayLike
+        Wavelength points.
+    center : ArrayLike
+        Line center.
+    fwhm_g_total : ArrayLike
+        Total Gaussian FWHM (intrinsic + LSF in quadrature).
+    fwhm_l : ArrayLike
+        Lorentzian FWHM.
+    """
+    wg_abs, wl_abs, wi_abs, wp_abs, eta_g, eta_l, eta_i, eta_p = _voigt_ida_params(
+        fwhm_g, fwhm_l
+    )
+    dx = x
+
+    gauss = eta_g * _gaussian_pdf(dx, _fwhm_to_sigma(wg_abs))
+    lorentz = eta_l * _cauchy_pdf(dx, 0.5 * wl_abs)
+    irrat = eta_i * _f_l_pdf(dx, wi_abs * _IRRAT_FWHM_TO_GAMMA)
+    hyper = eta_p * _f_p_pdf(dx, wp_abs * _HYPER_FWHM_TO_GAMMA)
+    return gauss + lorentz + irrat + hyper
+
+
+# -------------------------------------------------------------------
+# Rational Faddeeva Approximation
+# Humlíck (1982), JQSRT, 27, 4, 437-444
+# DOI: 10.1016/0022-4073(82)90078-4
+# -------------------------------------------------------------------
+
+
+def _horner(x, *coeffs):
+    """Evaluate polynomial p(x) via Horner's method.
+
+    Coefficients are ordered from highest to lowest degree,
+    i.e. ``coeffs = [a_n, a_{n-1}, ..., a_1, a_0]`` evaluates
+    ``p(x) = a_n x^n + ... + a_1 x + a_0``.
+    """
+    result = coeffs[0]
+    for c in coeffs[1:]:
+        result = result * x + c
+    return result
+
+
+def _faddeeva_humlicek(z: Array) -> Array:
+    """Humlicek (1982) W4 rational approximation to the Faddeeva function w(z).
+
+    Computes w(z) = exp(-z²) erfc(-iz) for complex z wi_absth Im(z) >= 0.
+    Accurate to ~1e-4 relative error across the upper half-plane.
+
+    The four regions are selected on S = |Re(z)| + Im(z) and a near-axis
+    condition, matching Humlicek's original partitioning.
+
+    Parameters
+    ----------
+    z : Array
+        Complex array wi_absth Im(z) >= 0.
+
+    Returns
+    -------
+    Array
+        w(z) (complex).
+
+    References
+    ----------
+    Humlicek (1982), J. Quant. Spectrosc. Radiat. Transfer 27, 437-444.
+    """
+    x = jnp.real(z)
+    y = jnp.imag(z)
+    s = jnp.abs(x) + y
+
+    t = y - 1j * x  # T = -iz
+    t2 = t * t  # T² = -z²
+    u = -t2  # u = z²; substituting u = -t2 makes all region-4 coefficients positive
+
+    # Region 1: S >= 15 — single-term asymptotic
+    w1 = t * 0.5641896 / (t2 + 0.5)
+
+    # Region 2: S >= 5.5
+    w2 = t * _horner(t2, 0.5641896, 1.410474) / _horner(t2, 1.0, 3.0, 0.75)
+
+    # Region 3: Y >= 0.195|X| - 0.176 (and S < 5.5)
+    w3 = _horner(t, 0.5642236, 3.778987, 11.96482, 20.20933, 16.4955) / _horner(
+        t, 1.0, 6.699398, 21.69274, 39.27121, 38.82363, 16.4955
+    )
+
+    # Region 4: small S, near real axis
+    w4_num = _horner(
+        u, 0.56419, 1.320522, 35.7668, 219.031, 1540.787, 3321.99, 36183.31
+    )
+    w4_den = _horner(
+        u, 1.0, 1.841439, 61.57037, 364.2191, 2186.181, 9022.228, 24322.84, 32066.6
+    )
+    w4 = jnp.exp(t2) - t * w4_num / w4_den  # exp(T²) = exp(-z²)
+
+    reg3_cond = (0.195 * jnp.abs(x) - 0.176) <= y
+    return jnp.where(s >= 15, w1, jnp.where(s >= 5.5, w2, jnp.where(reg3_cond, w3, w4)))
+
+
+def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
+    """Evaluate a normalised Voigt profile at wavelength points via the Faddeeva function.
+
+    Computes the exact Voigt profile (convolution of Gaussian and Lorentzian)
+    using Re[w(z)] where w is the Faddeeva function approximated by the
+    Humlicek (1982) W4 rational scheme (~1e-4 relative error). The LSF
+    Gaussian is added in quadrature to the intrinsic Gaussian wi_absdth before
+    computing the Voigt parameters.
+
+    Parameters
+    ----------
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm_g : ArrayLike
+        Intrinsic Gaussian component FWHM.
+    fwhm_l : ArrayLike
+        Lorentzian component FWHM (= 2 * Lorentzian HWHM).
+
+    Returns
+    -------
+    Array
+        Normalised profile value at each wavelength point.
+
+    References
+    ----------
+    Humlicek (1982), J. Quant. Spectrosc. Radiat. Transfer 27, 437-444.
+    """
+    # Gaussian sigma (standard deviation) from total Gaussian FWHM
+    sigma_g = _fwhm_to_sigma(fwhm_g)
+    # Lorentzian HWHM
+    gamma_l = 0.5 * fwhm_l
+
+    # Voigt complex argument: z = (dx + i*gamma) / (sigma * sqrt(2))
+    denom = sigma_g * _SQRT2
+    z = (x + 1j * gamma_l) / denom
+
+    # Voigt profile: V(x) = Re[w(z)] / (sigma * sqrt(2*pi))
+    return jnp.real(_faddeeva_humlicek(z)) * _INV_SQRt2PI / sigma_g
+
+
+# -------------------------------------------------------------------
+# Voigt Kernel
+# -------------------------------------------------------------------
 
 
 @jit
@@ -126,11 +517,13 @@ def integrate_voigt(
     fwhm_g: ArrayLike,
     fwhm_l: ArrayLike,
 ) -> Array:
-    """Integrate a pseudo-Voigt profile over wavelength bins.
+    """Integrate a Voigt profile over wavelength bins via the extended pseudo-Voigt.
 
-    Uses the Thompson et al. (1987) approximation: a weighted sum of
-    Gaussian and Lorentzian components with an effective FWHM computed
-    from the individual Gaussian and Lorentzian fwhms.
+    Uses the Ida, Ando & Toraya (2000) extended pseudo-Voigt approximation, which
+    achieves < 0.12% peak-height deviation from the true Voigt profile using a
+    four-component mixture: Gaussian, Lorentzian, irrational, and hyperbolic-sech².
+    The LSF Gaussian FWHM is added in quadrature to the intrinsic Gaussian FWHM
+    before computing the extended-pseudo-Voigt parameters.
 
     Parameters
     ----------
@@ -151,79 +544,58 @@ def integrate_voigt(
     -------
     jnp.ndarray
         Integrated fraction per bin.
-
-    References
-    ----------
-    Thompson, Cox & Hastings (1987), J. Appl. Cryst. 20, 79-83.
-    DOI: 10.1107/S0021889887087090
     """
-    # Add LSF in quadrature to Gaussian component only
-    fwhm_g_tot = jnp.sqrt(lsf_fwhm**2 + fwhm_g**2)
-
-    # Effective FWHM from the 5th-order polynomial
-    pows = jnp.arange(_VOIGT_FWHM_CS.size)
-    fwhm = jnp.sum(_VOIGT_FWHM_CS * (fwhm_g_tot**pows) * (fwhm_l ** pows[::-1])) ** (
-        1 / 5
-    )
-
-    # Lorentzian mixing fraction η
-    fwhm_ratio = fwhm_l / fwhm
-    eta = jnp.sum(_VOIGT_ETA_CS * (fwhm_ratio ** jnp.arange(1, len(_VOIGT_ETA_CS) + 1)))
-
-    # Use effective FWHM directly — LSF is already incorporated via fwhm_g_tot.
-    # Pass lsf_fwhm=0 to avoid double-counting in integrate_gaussian.
-    lorentzian = eta * _integrate_cauchy(low, high, center, lsf_fwhm, fwhm)
-    gaussian = (1 - eta) * integrate_gaussian(low, high, center, 0.0, fwhm)
-    return lorentzian + gaussian
+    fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
+    return _voigt_ida_cdf_diff(low - center, high - center, fwhm_g_total, fwhm_l)
 
 
-# Don't need this since we always convolve with LSF
-# But keeping anyways just in case
 @jit
-def _integrate_laplace(
-    low: ArrayLike,
-    high: ArrayLike,
+def evaluate_voigt(
+    wavelength: ArrayLike,
     center: ArrayLike,
     lsf_fwhm: ArrayLike,
-    fwhm: ArrayLike,
+    fwhm_g: ArrayLike,
+    fwhm_l: ArrayLike,
 ) -> Array:
-    """Integrate a Laplace (double-exponential) profile over wavelength bins.
+    """Evaluate a normalised Voigt profile at wavelength points via the Faddeeva function.
 
-    The LSF is **not** convolved --- this profile is a pure Laplace
-    distribution.
+    Computes the exact Voigt profile using the Humlicek (1982) W4 rational approximation
+    to the Faddeeva function, which is accurate to ~1e-4 relative error across the upper
+    half-plane.
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
     center : ArrayLike
         Line center wavelength.
     lsf_fwhm : ArrayLike
         Instrumental line spread function FWHM at the line center.
-    fwhm : ArrayLike
-        Laplace FWHM (related to scale parameter *b* by
-        ``FWHM = 2 b ln 2``).
+    fwhm_g : ArrayLike
+        Intrinsic Gaussian component FWHM.
+    fwhm_l : ArrayLike
+        Lorentzian component FWHM.
 
     Returns
     -------
     jnp.ndarray
-        Integrated fraction per bin.
+        Normalised profile value at each wavelength point.
     """
-    # For Laplace, we don't convolve with LSF - it's a pure Laplace distribution
-    b = fwhm / _EXP_SCALE_TO_FWHM
+    fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
+    return _voigt_faddeeva_pdf(wavelength - center, fwhm_g_total, fwhm_l)
 
-    def _cdf(x):
-        t = (x - center) / b
-        return 0.5 + 0.5 * jnp.sign(t) * (1.0 - jnp.exp(-jnp.abs(t)))
 
-    return _cdf(high) - _cdf(low)
+# -------------------------------------------------------------------
+# Gaussian-Laplace (symmetric EMG) kernel
+# -------------------------------------------------------------------
+
+# Threshold for when exp(x*x) overflows
+_OVERFLOW_THRESHOLD: Final[float] = 26.0 if config.jax_enable_x64 else 9.0
 
 
 def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:
     """
-    Compute exponential correction integrand for Gaussian-Laplace convolution.
+    Antiderivative of the Gaussian-Laplace exponential correction.
 
     Evaluates exp(-a²) * [exp(2ta) * erfcx(a+t) - exp(-2ta) * erfcx(a-t)].
     Exploits odd symmetry to cover overflow at large a + t.
@@ -238,19 +610,13 @@ def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:
     Returns
     -------
     jnp.ndarray
-        Integrand value with numerical stability
+        Integrand value wi_absth numerical stability
     """
     # Exploit odd symmetry: I(-t,a) = -I(t,a)
-    # Then we only need one overflow protection
     t_abs = jnp.abs(t)
-
-    # Shorthand terms
     ta = t_abs + a
     twota = 2 * t_abs * a
-
-    # Overflow protection
     posterm = jnp.where(ta > _OVERFLOW_THRESHOLD, 0, jnp.exp(twota) * erfc(ta))
-
     return jnp.sign(t) * jnp.exp(a * a) * (posterm - jnp.exp(-twota) * erfc(-t_abs + a))
 
 
@@ -263,89 +629,112 @@ def integrate_gaussianLaplace(
     fwhm_g: ArrayLike,
     fwhm_l: ArrayLike,
 ) -> Array:
-    """
-    Integrate exponentially modified Gaussian (EMG) emission lines over wavelength bins.
+    """Integrate a symmetric EMG (Gaussian convolved wi_absth Laplace) over wavelength bins.
 
-    Computes the integral of Gaussian convolved with symmetric double exponential
-    (Laplace distribution). This profile combines instrumental broadening (Gaussian)
-    with natural broadening (Laplacian). Uses asymptotic approximations for
-    numerical stability.
+    The LSF is added in quadrature to the Gaussian component, then the
+    symmetric EMG CDF is evaluated analytically using a numerically stable
+    erfcx form. See the :doc:`SEMG derivation </derivations/semg>` for details.
 
     Parameters
     ----------
     low : jnp.ndarray
-        Low wavelength edges of bins
+        Low wavelength edges of bins.
     high : jnp.ndarray
-        High wavelength edges of bins
+        High wavelength edges of bins.
     center : jnp.ndarray
-        Line centers
+        Line centers.
     lsf_fwhm : jnp.ndarray
-        Instrumental LSF FWHM
+        Instrumental LSF FWHM.
     fwhm_g : jnp.ndarray
-        Intrinsic Gaussian component FWHM
+        Intrinsic Gaussian component FWHM.
     fwhm_l : jnp.ndarray
-        Laplacian component FWHM (natural broadening)
+        Laplace component FWHM (related to scale *b* by ``FWHM = 2 b ln 2``).
 
     Returns
     -------
     jnp.ndarray
-        Integrated flux in each bin for each line
+        Integrated fraction per bin (sums to 1 over all bins).
     """
     # This function breaks for pure Laplace, does that matter? lsf is never zero?
 
-    # Add LSF in quadrature to Gaussian component
-    fwhm_g_total = jnp.sqrt(lsf_fwhm**2 + fwhm_g**2)
+    fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
 
-    # Convert FWHM to distribution parameters
+    # sigma here is the halfvar-parametrised sigma (= sqrt(2) * standard sigma)
     σ = fwhm_g_total / _HALFVAR_SIGMA_TO_FWHM
     λ = _EXP_SCALE_TO_FWHM / fwhm_l
 
-    # Normalized distance from center
+    # Convolution parameter
+    a = 0.5 * σ * λ
+
+    # Gaussian component (via error function CDF)
+    gaussian_cdf = _gaussian_cdf_diff(low - center, high - center, fwhm_g_total)
+
+    # Exponential correction
     scale = 1 / σ
     t_low = (low - center) * scale
     t_high = (high - center) * scale
-
-    # Convolution parameter
-    a = σ * λ / 2
-
-    # Gaussian component (via error function CDF)
-    gaussian_cdf = (erf(t_high) - erf(t_low)) / 2
-
-    # Exponential correction
     exp_correction = _integrandGL(t_high, a) - _integrandGL(t_low, a)
 
     # Guard against large a, the Gaussian limit
-    return gaussian_cdf + jnp.where(a > _OVERFLOW_THRESHOLD, 0, exp_correction / 4)
+    return gaussian_cdf + jnp.where(a > _OVERFLOW_THRESHOLD, 0, 0.25 * exp_correction)
 
 
-def _integrandGH(t_halfvar: ArrayLike, h3_eff: ArrayLike, h4_eff: ArrayLike) -> Array:
-    """
-    Antiderivative of the Gauss-Hermite correction at halfvar coordinate t_halfvar.
-
-    Converts to the standard coordinate ``y = t_halfvar * sqrt(2)``, then evaluates
-    ``-g(y) * [h3_eff * He_2(y) + h4_eff * He_3(y)]``, the analytic antiderivative
-    of ``g(y) * [h3_eff * He_3(y) + h4_eff * He_4(y)]`` w.r.t. x, where
-    g(y) = exp(-y²/2) is the standard normal kernel and He_n are the probabilists'
-    Hermite polynomials: He_2(y) = y²-1, He_3(y) = y(y²-3).
+@jit
+def evaluate_gaussianLaplace(
+    wavelength: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_g: ArrayLike,
+    fwhm_l: ArrayLike,
+) -> Array:
+    """Evaluate a normalised Gaussian-Laplace (EMG) profile at wavelength points.
 
     Parameters
     ----------
-    t_halfvar : ArrayLike
-        Halfvar-normalized coordinate ``(x - center) / sigma_tot_halfvar``.
-    h3_eff : ArrayLike
-        Effective h3 coefficient: ``h3 * (sigma_g / sigma_tot)**3 / sqrt(6)``.
-    h4_eff : ArrayLike
-        Effective h4 coefficient: ``h4 * (sigma_g / sigma_tot)**4 / sqrt(24)``.
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm_g : ArrayLike
+        Intrinsic Gaussian component FWHM.
+    fwhm_l : ArrayLike
+        Laplacian component FWHM.
 
     Returns
     -------
     jnp.ndarray
-        Antiderivative value.
+        Normalised profile value at each wavelength point.
     """
-    t = t_halfvar * jnp.sqrt(2.0)
-    g = jnp.exp(-t * t / 2)
-    # He_2(y) = y²-1,  He_3(y) = y(y²-3)
-    return g * (h3_eff * (t * t - 1) + h4_eff * t * (t * t - 3))
+    fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
+    sigma = _fwhm_to_sigma(fwhm_g_total)
+    lam = _EXP_SCALE_TO_FWHM / fwhm_l
+
+    # Symmetric EMG PDF: Gaussian convolved wi_absth symmetric Laplace.
+    # f(x) = (lam/4) * exp(a^2) * [exp(2|u|a)*erfc(|u|+a) + exp(-2|u|a)*erfc(a-|u|)]
+    # where u = (x - center) / (sigma * sqrt(2)), a = lam * sigma / sqrt(2).
+    # Uses the same overflow-protection pattern as _integrandGL.
+    t = (wavelength - center) / sigma
+    a = lam * sigma / jnp.sqrt(2.0)
+    u_abs = jnp.abs(t) / jnp.sqrt(2.0)
+    ua = u_abs + a
+    two_ua = 2 * u_abs * a
+
+    # Overflow-protected positive term: exp(2|u|a) * erfc(|u| + a)
+    posterm = jnp.where(ua > _OVERFLOW_THRESHOLD, 0.0, jnp.exp(two_ua) * erfc(ua))
+    negterm = jnp.exp(-two_ua) * erfc(a - u_abs)
+    result = (0.25 * lam) * jnp.exp(a * a) * (posterm + negterm)
+
+    # Pure Gaussian limit when exponential component is negligible
+    return jnp.where(
+        a > _OVERFLOW_THRESHOLD, _gaussian_pdf(wavelength - center, sigma), result
+    )
+
+
+# -------------------------------------------------------------------
+# Split-normal kernel
+# -------------------------------------------------------------------
 
 
 @jit
@@ -384,20 +773,11 @@ def integrate_split_normal(
     jnp.ndarray
         Integrated fraction per bin.
     """
-    # Add LSF in quadrature to both components
-    total_fwhm_blue = jnp.sqrt(lsf_fwhm**2 + fwhm_blue**2)
-    total_fwhm_red = jnp.sqrt(lsf_fwhm**2 + fwhm_red**2)
+    total_fwhm_blue = _combine_fwhm(lsf_fwhm, fwhm_blue)
+    total_fwhm_red = _combine_fwhm(lsf_fwhm, fwhm_red)
 
-    # Convert FWHM to sigma for the half-variance parametrization of erf
     inv_sigma_blue = _HALFVAR_SIGMA_TO_FWHM / total_fwhm_blue
     inv_sigma_red = _HALFVAR_SIGMA_TO_FWHM / total_fwhm_red
-
-    # Calculate normalization factor to ensure the total integral is 1
-    # The split-normal PDF is proportional to:
-    #   exp(-(x-center)^2/(2*sigma_blue^2)) for x <= center
-    #   exp(-(x-center)^2/(2*sigma_red^2)) for x > center
-    # The normalization constant is: 1 / [sqrt(2*pi) * (sigma_blue + sigma_red) / 2]
-    # But since we're working with CDFs, we need a different approach
 
     # Probability mass on each side: proportional to sigma (not inv_sigma)
     total_weight = inv_sigma_blue + inv_sigma_red
@@ -407,240 +787,18 @@ def integrate_split_normal(
     def _split_normal_cdf(x, center, inv_sigma_blue, inv_sigma_red, w_blue, w_red):
         t_blue = (x - center) * inv_sigma_blue
         t_red = (x - center) * inv_sigma_red
-
         # CDF continuous at center: both branches give w_blue when x = center
         return jnp.where(
             x <= center, w_blue * (1 + erf(t_blue)), w_blue + w_red * erf(t_red)
         )
 
-    # Calculate CDF at high and low edges
     cdf_high = _split_normal_cdf(
         high, center, inv_sigma_blue, inv_sigma_red, w_blue, w_red
     )
     cdf_low = _split_normal_cdf(
         low, center, inv_sigma_blue, inv_sigma_red, w_blue, w_red
     )
-
     return cdf_high - cdf_low
-
-
-@jit
-def integrate_gaussHermite(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
-    fwhm_lsf: ArrayLike,
-    fwhm_g: ArrayLike,
-    h3: ArrayLike,
-    h4: ArrayLike,
-) -> Array:
-    """
-    Integrate Gauss-Hermite emission lines over wavelength bins.
-
-    Parameters
-    ----------
-    low : jnp.ndarray
-        Low wavelength edges of bins
-    high : jnp.ndarray
-        High wavelength edges of bins
-    center : jnp.ndarray
-        Line centers
-    fwhm_lsf : jnp.ndarray
-        Instrumental LSF FWHM
-    fwhm_g : jnp.ndarray
-        Gaussian component FWHM
-    h3 : jnp.ndarray
-        Gauss-Hermite h3 coefficient
-    h4 : jnp.ndarray
-        Gauss-Hermite h4 coefficient
-
-    Returns
-    -------
-    jnp.ndarray
-        Integrated flux in each bin for each line
-    """
-    # Effective FWHM from convolution of LSF and Gaussian component
-    fwhm_tot = jnp.sqrt(fwhm_lsf**2 + fwhm_g**2)
-
-    # Convert FWHM to sigma
-    inv_sigma_tot = _HALFVAR_SIGMA_TO_FWHM / fwhm_tot
-
-    # Sigma ratio: GH moments scale as r^n under convolution with a Gaussian LSF
-    r = fwhm_g / fwhm_tot
-    r3 = r * r * r
-
-    # Normalized bin edges
-    t_low = (low - center) * inv_sigma_tot
-    t_high = (high - center) * inv_sigma_tot
-
-    # Gaussian CDF contribution
-    gaussian_cdf = (erf(t_high) - erf(t_low)) / 2
-
-    # GH coefficients scaled by sigma ratio (moment theorem for Gaussian convolution)
-    c3 = h3 * r3 / _SQRT6
-    c4 = h4 * r3 * r / _SQRT24
-
-    # GH correction via analytic antiderivative
-    gh_correction = _integrandGH(t_high, c3, c4) - _integrandGH(t_low, c3, c4)
-
-    return gaussian_cdf - _INV_SQRT2PI * gh_correction
-
-
-# integrate_lines, quadrature_integrate_lines, and evaluate_lines
-# live in unite.line.profiles, where each Profile subclass owns its JAX
-# branches via integrate_branch() and evaluate_branch().
-
-
-# -------------------------------------------------------------------
-# Pointwise evaluation kernels
-# -------------------------------------------------------------------
-#
-# Each evaluate_* function returns the normalised profile value
-# (probability density in 1/wavelength units) at arbitrary wavelength
-# points.  Integrating over all wavelength recovers unity.
-
-
-@jit
-def evaluate_gaussian(
-    wavelength: ArrayLike, center: ArrayLike, lsf_fwhm: ArrayLike, fwhm: ArrayLike
-) -> Array:
-    """Evaluate a normalised Gaussian profile at wavelength points.
-
-    Parameters
-    ----------
-    wavelength : ArrayLike
-        Wavelength points at which to evaluate the profile.
-    center : ArrayLike
-        Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
-    fwhm : ArrayLike
-        Intrinsic Gaussian FWHM.
-
-    Returns
-    -------
-    jnp.ndarray
-        Normalised profile value at each wavelength point.
-    """
-    total_fwhm = jnp.sqrt(lsf_fwhm**2 + fwhm**2)
-    sigma = total_fwhm / (_HALFVAR_SIGMA_TO_FWHM * jnp.sqrt(2.0))
-    t = (wavelength - center) / sigma
-    return jnp.exp(-0.5 * t**2) / (sigma * jnp.sqrt(2.0 * jnp.pi))
-
-
-@jit
-def evaluate_voigt(
-    wavelength: ArrayLike,
-    center: ArrayLike,
-    lsf_fwhm: ArrayLike,
-    fwhm_g: ArrayLike,
-    fwhm_l: ArrayLike,
-) -> Array:
-    """Evaluate a normalised pseudo-Voigt profile at wavelength points.
-
-    Uses the Thompson et al. (1987) approximation: a weighted sum of
-    Gaussian and Lorentzian components with an effective FWHM.
-
-    Parameters
-    ----------
-    wavelength : ArrayLike
-        Wavelength points at which to evaluate the profile.
-    center : ArrayLike
-        Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
-    fwhm_g : ArrayLike
-        Intrinsic Gaussian component FWHM.
-    fwhm_l : ArrayLike
-        Lorentzian component FWHM.
-
-    Returns
-    -------
-    jnp.ndarray
-        Normalised profile value at each wavelength point.
-    """
-    # Add LSF in quadrature to Gaussian component only
-    fwhm_g_tot = jnp.sqrt(lsf_fwhm**2 + fwhm_g**2)
-
-    # Effective FWHM from the 5th-order polynomial
-    pows = jnp.arange(_VOIGT_FWHM_CS.size)
-    fwhm = jnp.sum(_VOIGT_FWHM_CS * (fwhm_g_tot**pows) * (fwhm_l ** pows[::-1])) ** (
-        1 / 5
-    )
-
-    # Lorentzian mixing fraction η
-    fwhm_ratio = fwhm_l / fwhm
-    eta = jnp.sum(_VOIGT_ETA_CS * (fwhm_ratio ** jnp.arange(1, len(_VOIGT_ETA_CS) + 1)))
-
-    # Gaussian PDF with effective FWHM
-    sigma_eff = fwhm / (_HALFVAR_SIGMA_TO_FWHM * jnp.sqrt(2.0))
-    t = (wavelength - center) / sigma_eff
-    gauss_pdf = jnp.exp(-0.5 * t**2) / (sigma_eff * jnp.sqrt(2.0 * jnp.pi))
-
-    # Lorentzian (Cauchy) PDF with effective FWHM
-    hwhm = fwhm / 2.0
-    lorentz_pdf = (hwhm / jnp.pi) / ((wavelength - center) ** 2 + hwhm**2)
-
-    return (1 - eta) * gauss_pdf + eta * lorentz_pdf
-
-
-@jit
-def evaluate_gaussianLaplace(
-    wavelength: ArrayLike,
-    center: ArrayLike,
-    lsf_fwhm: ArrayLike,
-    fwhm_g: ArrayLike,
-    fwhm_l: ArrayLike,
-) -> Array:
-    """Evaluate a normalised Gaussian-Laplace (EMG) profile at wavelength points.
-
-    Parameters
-    ----------
-    wavelength : ArrayLike
-        Wavelength points at which to evaluate the profile.
-    center : ArrayLike
-        Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
-    fwhm_g : ArrayLike
-        Intrinsic Gaussian component FWHM.
-    fwhm_l : ArrayLike
-        Laplacian component FWHM.
-
-    Returns
-    -------
-    jnp.ndarray
-        Normalised profile value at each wavelength point.
-    """
-    # Add LSF in quadrature to Gaussian component
-    fwhm_g_total = jnp.sqrt(lsf_fwhm**2 + fwhm_g**2)
-
-    # Convert FWHM to distribution parameters
-    sigma = fwhm_g_total / (_HALFVAR_SIGMA_TO_FWHM * jnp.sqrt(2.0))
-    lam = _EXP_SCALE_TO_FWHM / fwhm_l
-
-    # Symmetric EMG PDF: Gaussian convolved with symmetric Laplace.
-    # f(x) = (lam/4) * exp(a^2) * [exp(2|u|a)*erfc(|u|+a) + exp(-2|u|a)*erfc(a-|u|)]
-    # where u = (x - center) / (sigma * sqrt(2)), a = lam * sigma / sqrt(2).
-    # Uses the same overflow-protection pattern as _integrandGL.
-    t = (wavelength - center) / sigma
-    a = lam * sigma / jnp.sqrt(2.0)
-
-    u_abs = jnp.abs(t) / jnp.sqrt(2.0)
-    ua = u_abs + a
-    two_ua = 2 * u_abs * a
-
-    # Overflow-protected positive term: exp(2|u|a) * erfc(|u| + a)
-    posterm = jnp.where(ua > _OVERFLOW_THRESHOLD, 0.0, jnp.exp(two_ua) * erfc(ua))
-
-    # Negative term (always numerically safe)
-    negterm = jnp.exp(-two_ua) * erfc(a - u_abs)
-
-    result = (lam / 4.0) * jnp.exp(a * a) * (posterm + negterm)
-
-    # Pure Gaussian limit when exponential component is negligible
-    gauss_pdf = jnp.exp(-0.5 * t**2) / (sigma * jnp.sqrt(2.0 * jnp.pi))
-    return jnp.where(a > _OVERFLOW_THRESHOLD, gauss_pdf, result)
 
 
 @jit
@@ -671,21 +829,113 @@ def evaluate_split_normal(
     jnp.ndarray
         Normalised profile value at each wavelength point.
     """
-    # Add LSF in quadrature to both components
-    total_fwhm_blue = jnp.sqrt(lsf_fwhm**2 + fwhm_blue**2)
-    total_fwhm_red = jnp.sqrt(lsf_fwhm**2 + fwhm_red**2)
-
-    sigma_blue = total_fwhm_blue / (_HALFVAR_SIGMA_TO_FWHM * jnp.sqrt(2.0))
-    sigma_red = total_fwhm_red / (_HALFVAR_SIGMA_TO_FWHM * jnp.sqrt(2.0))
+    total_fwhm_blue = _combine_fwhm(lsf_fwhm, fwhm_blue)
+    total_fwhm_red = _combine_fwhm(lsf_fwhm, fwhm_red)
+    sigma_blue = _fwhm_to_sigma(total_fwhm_blue)
+    sigma_red = _fwhm_to_sigma(total_fwhm_red)
 
     # Normalisation: integral = sqrt(pi/2) * (sigma_blue + sigma_red)
-    norm = jnp.sqrt(jnp.pi / 2.0) * (sigma_blue + sigma_red)
-
+    norm = (sigma_blue + sigma_red) * jnp.sqrt(jnp.pi / 2.0)
     dx = wavelength - center
-    val_blue = jnp.exp(-0.5 * (dx / sigma_blue) ** 2)
-    val_red = jnp.exp(-0.5 * (dx / sigma_red) ** 2)
-
+    dx2 = dx * dx
+    val_blue = jnp.exp(-0.5 * dx2 / (sigma_blue * sigma_blue))
+    val_red = jnp.exp(-0.5 * dx2 / (sigma_red * sigma_red))
     return jnp.where(wavelength <= center, val_blue, val_red) / norm
+
+
+# -------------------------------------------------------------------
+# Gauss-Hermite kernel
+# -------------------------------------------------------------------
+
+
+def _integrandGH(t_halfvar: ArrayLike, h3_eff: ArrayLike, h4_eff: ArrayLike) -> Array:
+    """
+    Antiderivative of the Gauss-Hermite correction at halfvar coordinate t_halfvar.
+
+    Converts to the standard coordinate ``y = t_halfvar * sqrt(2)``, then evaluates
+    ``-g(y) * [h3_eff * He_2(y) + h4_eff * He_3(y)]``, the analytic antiderivative
+    of ``g(y) * [h3_eff * He_3(y) + h4_eff * He_4(y)]`` w.r.t. x, where
+    g(y) = exp(-y²/2) is the standard normal kernel and He_n are the probabilists'
+    Hermite polynomials: He_2(y) = y²-1, He_3(y) = y(y²-3).
+
+    Parameters
+    ----------
+    t_halfvar : ArrayLike
+        Halfvar-normalized coordinate ``(x - center) / sigma_tot_halfvar``.
+    h3_eff : ArrayLike
+        Effective h3 coefficient: ``h3 * (sigma_g / sigma_tot)**3 / sqrt(6)``.
+    h4_eff : ArrayLike
+        Effective h4 coefficient: ``h4 * (sigma_g / sigma_tot)**4 / sqrt(24)``.
+
+    Returns
+    -------
+    jnp.ndarray
+        Antiderivative value.
+    """
+    t = t_halfvar * _SQRT2
+    t2 = t * t
+    g = jnp.exp(-0.5 * t2)
+    # He_2(y) = y²-1,  He_3(y) = y(y²-3)
+    return g * (h3_eff * (t2 - 1) + h4_eff * t * (t2 - 3))
+
+
+@jit
+def integrate_gaussHermite(
+    low: ArrayLike,
+    high: ArrayLike,
+    center: ArrayLike,
+    fwhm_lsf: ArrayLike,
+    fwhm_g: ArrayLike,
+    h3: ArrayLike,
+    h4: ArrayLike,
+) -> Array:
+    """Integrate a Gauss-Hermite profile over wavelength bins.
+
+    Uses the closed-form CDF derived from the orthonormal probabilists'
+    Hermite expansion. Convolving wi_absth the Gaussian LSF rescales the shape
+    parameters as ``h_m' = h_m * (sigma_g / sigma_tot)^m``. See the
+    :doc:`Gauss-Hermite derivation </derivations/gauss-hermite>` for details.
+
+    Parameters
+    ----------
+    low : jnp.ndarray
+        Low wavelength edges of bins.
+    high : jnp.ndarray
+        High wavelength edges of bins.
+    center : jnp.ndarray
+        Line centers.
+    fwhm_lsf : jnp.ndarray
+        Instrumental LSF FWHM.
+    fwhm_g : jnp.ndarray
+        Gaussian component FWHM.
+    h3 : jnp.ndarray
+        Gauss-Hermite h3 (skewness) coefficient.
+    h4 : jnp.ndarray
+        Gauss-Hermite h4 (kurtosis) coefficient.
+
+    Returns
+    -------
+    jnp.ndarray
+        Integrated fraction per bin (sums to 1 over all bins).
+    """
+    fwhm_tot = _combine_fwhm(fwhm_lsf, fwhm_g)
+
+    # Sigma ratio: GH moments scale as r^n under convolution wi_absth a Gaussian LSF
+    r = fwhm_g / fwhm_tot
+    r3 = r * r * r
+
+    # GH coefficients scaled by sigma ratio (moment theorem for Gaussian convolution)
+    c3 = h3 * r3 / _SQRT6
+    c4 = h4 * r3 * r / _SQRt24
+
+    # Normalized bin edges (halfvar parametrisation for consistency wi_absth erf CDF)
+    inv_sigma_tot = _HALFVAR_SIGMA_TO_FWHM / fwhm_tot
+    t_low = (low - center) * inv_sigma_tot
+    t_high = (high - center) * inv_sigma_tot
+
+    gaussian_cdf = 0.5 * (erf(t_high) - erf(t_low))
+    gh_correction = _integrandGH(t_high, c3, c4) - _integrandGH(t_low, c3, c4)
+    return gaussian_cdf - _INV_SQRt2PI * gh_correction
 
 
 @jit
@@ -719,27 +969,127 @@ def evaluate_gaussHermite(
     jnp.ndarray
         Normalised profile value at each wavelength point.
     """
-    # Effective FWHM from convolution
-    fwhm_tot = jnp.sqrt(fwhm_lsf**2 + fwhm_g**2)
-    sigma_tot = fwhm_tot / (_HALFVAR_SIGMA_TO_FWHM * jnp.sqrt(2.0))
+    fwhm_tot = _combine_fwhm(fwhm_lsf, fwhm_g)
+    sigma_tot = _fwhm_to_sigma(fwhm_tot)
 
     # Sigma ratio: GH moments scale as r^n under convolution
     r = fwhm_g / fwhm_tot
     r3 = r * r * r
 
+    # GH coefficients scaled by sigma ratio
+    c3 = h3 * r3 / _SQRT6
+    c4 = h4 * r3 * r / _SQRt24
+
     # Standard coordinate
     y = (wavelength - center) / sigma_tot
-
-    # Base Gaussian PDF
-    gauss_pdf = jnp.exp(-0.5 * y**2) / (sigma_tot * jnp.sqrt(2.0 * jnp.pi))
+    gauss_pdf = _gaussian_pdf(wavelength - center, sigma_tot)
 
     # Hermite polynomial corrections (probabilists' convention)
     # He_3(y) = y^3 - 3y,  He_4(y) = y^4 - 6y^2 + 3
-    he3 = y**3 - 3 * y
-    he4 = y**4 - 6 * y**2 + 3
-
-    # Scale by sigma ratio
-    c3 = h3 * r3 / _SQRT6
-    c4 = h4 * r3 * r / _SQRT24
-
+    y3 = y * y * y
+    he3 = y3 - 3 * y
+    he4 = y * y3 - 6 * y * y + 3
     return gauss_pdf * (1.0 + c3 * he3 + c4 * he4)
+
+
+# -------------------------------------------------------------------
+# Skew Voigt kernel  (evaluate only — no analytic integrate)
+# -------------------------------------------------------------------
+
+
+def _skew(
+    x: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_g: ArrayLike,
+    fwhm_l: ArrayLike,
+    alpha: ArrayLike,
+) -> Array:
+    w0 = _combine_fwhm(fwhm_l, fwhm_g)
+    scale = w0 / lsf_fwhm
+    alpha_eff = alpha * (1 + scale * scale * scale)
+
+    return 1 + erf(alpha_eff * x / w0)
+
+
+@jit
+def integrate_skewVoigt(
+    low: ArrayLike,
+    high: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_g: ArrayLike,
+    fwhm_l: ArrayLike,
+    alpha: ArrayLike,
+) -> Array:
+    """Integrate a skew pseudo-Voigt profile over wavelength bins.
+
+    Currently uses the same extended pseudo-Voigt approximation as integrate_voigt,
+    multiplied by the skew correction integrated via the error function. The skewness
+    parameter is rescaled after convolution wi_absth the LSF as ``alpha_eff``.
+
+    Parameters
+    ----------
+    low : ArrayLike
+        Lower bin edges.
+    high : ArrayLike
+        Upper bin edges.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm_g : ArrayLike
+        Intrinsic Gaussian component FWHM.
+    fwhm_l : ArrayLike
+        Lorentzian component FWHM.
+    alpha : ArrayLike
+        Skewness parameter relative to sqrt(fwhm_g**2 + fwhm_l**2).
+
+    Returns
+    -------
+    Array
+        Integrated fraction per bin.
+    """
+    voigt_cdf = integrate_voigt(low, high, center, lsf_fwhm, fwhm_g, fwhm_l)
+    x = 0.5 * (low + high) - center
+    skew = _skew(x, lsf_fwhm, fwhm_g, fwhm_l, alpha)
+    return voigt_cdf * skew
+
+
+@jit
+def evaluate_skewVoigt(
+    wavelength: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_g: ArrayLike,
+    fwhm_l: ArrayLike,
+    alpha: ArrayLike,
+) -> Array:
+    """Evaluate a normalised skew pseudo-Voigt profile at wavelength points.
+
+    Evaluates ``V_pV'(x) * [1 + erf(alpha_eff * (x-c) / (sqrt(2) * sigma_tot))]``
+    where ``V_pV'`` is the LSF-convolved pseudo-Voigt (Thompson et al.) and
+    ``alpha_eff`` is the rescaled skewness parameter after convolution.
+
+    Parameters
+    ----------
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM.
+    fwhm_g : ArrayLike
+        Intrinsic Gaussian component FWHM.
+    fwhm_l : ArrayLike
+        Lorentzian component FWHM.
+    alpha : ArrayLike
+        Skewness parameter relative to sqrt(fwhm_g**2 + fwhm_l**2).
+
+    Returns
+    -------
+    Array
+        Normalised profile value at each wavelength point (1/wavelength units).
+    """
+    voigt_pdf = evaluate_voigt(wavelength, center, lsf_fwhm, fwhm_g, fwhm_l)
+    skew = _skew(wavelength - center, lsf_fwhm, fwhm_g, fwhm_l, alpha)
+    return voigt_pdf * skew

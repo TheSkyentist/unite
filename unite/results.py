@@ -11,7 +11,7 @@ from astropy import units as u
 from astropy.io import fits
 from astropy.table import QTable, Table
 
-from unite.evaluate import evaluate_model
+from unite.compute import evaluate_model
 from unite.model import ModelArgs
 from unite.prior import Fixed
 

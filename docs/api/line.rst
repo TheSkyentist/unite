@@ -12,7 +12,7 @@ Line Configuration
 Line Profiles
 -------------
 
-.. automodule:: unite.line.profiles
+.. automodule:: unite.line.library
    :members:
    :undoc-members:
    :show-inheritance:

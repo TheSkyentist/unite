@@ -3,7 +3,7 @@
 Private module providing pure JAX functions that combine pre-evaluated
 emission profiles, absorption profiles, and continuum into a total model
 prediction.  Used by both :mod:`unite.model` (likelihood) and
-:mod:`unite.evaluate` (posterior decomposition).
+:mod:`unite.compute` (posterior decomposition).
 """
 
 from __future__ import annotations
