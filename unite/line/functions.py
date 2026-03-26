@@ -1013,22 +1013,144 @@ def evaluate_gaussHermite(
 
 
 # -------------------------------------------------------------------
+# Skew Gaussian
+# -------------------------------------------------------------------
+
+
+# def _owens_t(h, a):
+#     """
+#     Owen's T function T(h, a) implemented in JAX.
+
+#     Parameters
+#     ----------
+#     h : array_like
+#         Real-valued input.
+#     a : array_like
+#         Real-valued input.
+
+#     Returns
+#     -------
+#     T : array_like
+#         Value of Owen's T function.
+#     """
+#     h = jnp.asarray(h)
+#     a = jnp.asarray(a)
+
+#     # Constants
+#     inv_2pi = 1.0 / (2.0 * jnp.pi)
+
+#     # Handle special cases
+#     def case_a_zero(_):
+#         return jnp.zeros_like(h)
+
+#     def case_h_zero(_):
+#         return jnp.arctan(a) * inv_2pi
+
+#     def general_case(_):
+#         abs_h = jnp.abs(h)
+#         abs_a = jnp.abs(a)
+
+#         # Use symmetry: T(-h, a) = T(h, a)
+#         h0 = abs_h
+#         a0 = abs_a
+
+#         # Series expansion for small a
+#         def series_small_a(h, a):
+#             # Power series expansion
+#             max_iter = 50
+
+#             def body_fun(i, val):
+#                 term, summation = val
+#                 new_term = term * (-a * a * h * h) / (2 * i + 1)
+#                 summation = summation + new_term / (2 * i + 1)
+#                 return (new_term, summation)
+
+#             term0 = a * jnp.exp(-0.5 * h * h)
+#             sum0 = term0
+
+#             _, summation = lax.fori_loop(1, max_iter, body_fun, (term0, sum0))
+
+#             return summation * inv_2pi
+
+#         # Approximation using Gaussian CDF relation
+#         def asymptotic_large_a(h, a):
+#             # T(h, a) ≈ 0.5 * Φ(h) * (1 - Φ(a h))
+#             phi_h = 0.5 * (1.0 + erf(h / jnp.sqrt(2.0)))
+#             phi_ah = 0.5 * (1.0 + erf(a * h / jnp.sqrt(2.0)))
+#             return 0.5 * phi_h * (1.0 - phi_ah)
+
+#         # Switch strategy
+#         use_series = a0 <= 1.0
+
+#         result = jnp.where(
+#             use_series, series_small_a(h0, a0), asymptotic_large_a(h0, a0)
+#         )
+
+#         # Restore sign symmetry: T(h, -a) = -T(h, a)
+#         result = jnp.where(a < 0, -result, result)
+
+#         return result
+
+#     return lax.cond(
+#         jnp.all(a == 0),
+#         case_a_zero,
+#         lambda _: lax.cond(jnp.all(h == 0), case_h_zero, general_case, operand=None),
+#         operand=None,
+#     )
+
+
+def _skew(x: ArrayLike, alpha: ArrayLike, scale: ArrayLike) -> Array:
+    return 1 + erf(alpha * x / scale)
+
+
+# -------------------------------------------------------------------
 # Skew Voigt kernel  (evaluate only — no analytic integrate)
 # -------------------------------------------------------------------
 
 
-def _skew(
-    x: ArrayLike,
-    lsf_fwhm: ArrayLike,
-    fwhm_g: ArrayLike,
-    fwhm_l: ArrayLike,
-    alpha: ArrayLike,
-) -> Array:
-    w0 = _combine_fwhm(fwhm_l, fwhm_g)
-    scale = w0 / lsf_fwhm
-    alpha_eff = alpha * (1 + scale * scale * scale)
+# FXIG boost-correction parameters from numerical fit over (lor, alpha, eta) grid.
+# log_boost = k * xi^a * eta^b / (1 + q*xi^c) / (1 + r*|alpha|^d)
+# where xi = gamma/sigma_lsf, eta = sigma_lsf/sigma_g, gamma = fwhm_l/2.
+_FXIG_K: Final[float] = 9.9126
+_FXIG_A: Final[float] = 0.43576
+_FXIG_B: Final[float] = 0.97281
+_FXIG_C: Final[float] = 2.1469
+_FXIG_Q: Final[float] = 2.3396
+_FXIG_R: Final[float] = 26.449
+_FXIG_D: Final[float] = 0.36404
 
-    return 1 + erf(alpha_eff * x / w0)
+
+def _alpha_eff(
+    lsf_fwhm: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike, alpha: ArrayLike
+) -> Array:
+    """Effective skewness after convolving a skew Voigt with a Gaussian LSF.
+
+    Applies the Gaussian-body exact formula as a base, then multiplies by the
+    FXIG boost correction that accounts for the Lorentzian component.
+    """
+    sigma_g = _fwhm_to_sigma(fwhm_g)
+    sigma_lsf = _fwhm_to_sigma(lsf_fwhm)
+    gamma = fwhm_l / 2
+
+    w0 = _combine_fwhm(fwhm_g, fwhm_l)
+    w0p = _combine_fwhm(_combine_fwhm(fwhm_g, lsf_fwhm), fwhm_l)
+
+    # Gaussian-body exact formula
+    a_gauss = alpha * w0 / jnp.sqrt(w0p**2 + 2 * alpha**2 * sigma_lsf**2)
+
+    # FXIG boost correction for Lorentzian component
+    lor = gamma / (sigma_g + 1e-30)
+    eta = sigma_lsf / (sigma_g + 1e-30)
+    xi = lor / (eta + 1e-30)
+    log_boost = (
+        _FXIG_K
+        * xi**_FXIG_A
+        * eta**_FXIG_B
+        / (1 + _FXIG_Q * xi**_FXIG_C)
+        / (1 + _FXIG_R * jnp.abs(alpha) ** _FXIG_D)
+    )
+
+    return cast(Array, a_gauss * jnp.exp(log_boost))
 
 
 @jit
@@ -1043,9 +1165,10 @@ def integrate_skewVoigt(
 ) -> Array:
     """Integrate a skew pseudo-Voigt profile over wavelength bins.
 
-    Currently uses the same extended pseudo-Voigt approximation as integrate_voigt,
+    Uses the same extended pseudo-Voigt approximation as integrate_voigt,
     multiplied by the skew correction integrated via the error function. The skewness
-    parameter is rescaled after convolution wi_absth the LSF as ``alpha_eff``.
+    parameter is rescaled after convolution with the LSF via the Gaussian-body exact
+    formula with an FXIG boost correction for the Lorentzian component.
 
     Parameters
     ----------
@@ -1069,9 +1192,17 @@ def integrate_skewVoigt(
     Array
         Integrated fraction per bin.
     """
+    # Compute Voigt CDF
     voigt_cdf = integrate_voigt(low, high, center, lsf_fwhm, fwhm_g, fwhm_l)
+
+    # Get effective skew
+    fwhm_g_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
+    w0 = _combine_fwhm(fwhm_g_tot, fwhm_l)
+    a_eff = _alpha_eff(lsf_fwhm, fwhm_g, fwhm_l, alpha)
+
+    # Evaluate skew correction at bin center (midpoint of low and high)
     x = 0.5 * (low + high) - center
-    skew = _skew(x, lsf_fwhm, fwhm_g, fwhm_l, alpha)
+    skew = _skew(x, a_eff, w0)
     return voigt_cdf * skew
 
 
@@ -1086,9 +1217,10 @@ def evaluate_skewVoigt(
 ) -> Array:
     """Evaluate a normalised skew pseudo-Voigt profile at wavelength points.
 
-    Evaluates ``V_pV'(x) * [1 + erf(alpha_eff * (x-c) / (sqrt(2) * sigma_tot))]``
-    where ``V_pV'`` is the LSF-convolved pseudo-Voigt (Thompson et al.) and
-    ``alpha_eff`` is the rescaled skewness parameter after convolution.
+    Evaluates ``V_pV(x) * [1 + erf(alpha_eff * (x-c) / w0)]`` where ``V_pV``
+    is the LSF-convolved pseudo-Voigt (Thompson et al.) and ``alpha_eff`` is
+    the effective skewness after convolution, computed via the Gaussian-body
+    exact formula with an FXIG boost correction for the Lorentzian component.
 
     Parameters
     ----------
@@ -1111,5 +1243,12 @@ def evaluate_skewVoigt(
         Normalised profile value at each wavelength point (1/wavelength units).
     """
     voigt_pdf = evaluate_voigt(wavelength, center, lsf_fwhm, fwhm_g, fwhm_l)
-    skew = _skew(wavelength - center, lsf_fwhm, fwhm_g, fwhm_l, alpha)
+
+    # Get effective skew
+    fwhm_g_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
+    w0 = _combine_fwhm(fwhm_g_tot, fwhm_l)
+    a_eff = _alpha_eff(lsf_fwhm, fwhm_g, fwhm_l, alpha)
+
+    # Evaluate skew correction at bin center (midpoint of low and high)
+    skew = _skew(wavelength - center, _alpha_eff(lsf_fwhm, fwhm_g, fwhm_l, a_eff), w0)
     return voigt_pdf * skew

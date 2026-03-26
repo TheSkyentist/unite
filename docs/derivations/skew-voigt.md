@@ -1,170 +1,124 @@
 # Skew Voigt
-## Convolution and Integration Attempt
+## Convolution with a Gaussian LSF
 
 The skew Voigt profile extends the pseudo-Voigt with a skewness parameter
 $\alpha$ that shifts flux toward the red or blue wing while preserving
-normalisation. This document derives the effect of Gaussian LSF convolution
-on the skewness parameter and demonstrates there is no closed form indefinite integral.
+normalisation.
 
 ---
 
 ## Definition
 
 Given a pseudo-Voigt profile $V(x)$ (centred at zero, normalised to 1,
-even in $x$) with Gaussian component standard deviation $\sigma_g$, define
+even in $x$) with Gaussian component FWHM $\Gamma_g$ and Lorentzian component
+FWHM $\Gamma_l$, define $w_0 = \sqrt{\Gamma_g^2 + \Gamma_l^2}$ and
 
 $$
-V_\text{skew}(x) = V(x)\,\bigl[1 + \text{erf}\!\left(\tfrac{\alpha x}{\sqrt{2}\,\sigma_g}\right)\bigr].
+V_\text{skew}(x) = V(x)\,\bigl[1 + \text{erf}\!\left(\tfrac{\alpha x}{w_0}\right)\bigr].
 $$
 
-**Normalisation.** Since $V(x)$ is even and $\text{erf}(\alpha x/(\sqrt{2}\sigma_g))$
-is odd, their product is odd, and
-
-$$
-\int_{-\infty}^{\infty} V(x)\,\text{erf}\!\left(\tfrac{\alpha x}{\sqrt{2}\,\sigma_g}\right)\,dx = 0.
-$$
-
-Therefore $\int V_\text{skew}\,dx = \int V\,dx = 1$ for **any** value of $\alpha$,
-without requiring an explicit normalisation factor. The profile values are
-non-negative everywhere since $V \geq 0$ and $[1 + \text{erf}(\cdot)] \in [0, 2]$.
+**Normalisation.** Since $V(x)$ is even and $\text{erf}(\alpha x / w_0)$
+is odd, their product is odd and integrates to zero, so
+$\int V_\text{skew}\,dx = \int V\,dx = 1$ for any $\alpha$.
 
 ---
 
-## Convolution with a Gaussian LSF
+## Approximation after LSF convolution
 
-Let the LSF be $G_\text{lsf}(x) = \mathcal{N}(0, \sigma_\text{lsf}^2)$. The
-convolution splits into an even (symmetric) part and an odd (skew) correction:
+Let the LSF be $G_\text{lsf}(x) = \mathcal{N}(0, \sigma_\text{lsf}^2)$.  The
+convolution splits into a symmetric part and a skew correction:
 
 $$
 (V_\text{skew} * G_\text{lsf})(x)
 = \underbrace{(V * G_\text{lsf})(x)}_{V'(x)}
-+ \int_{-\infty}^{\infty} V(t)\,\text{erf}\!\left(\tfrac{\alpha t}{\sqrt{2}\,\sigma_g}\right)
++ \int_{-\infty}^{\infty} V(t)\,\text{erf}\!\left(\tfrac{\alpha t}{w_0}\right)
   G_\text{lsf}(x - t)\,dt.
 $$
 
-The symmetric part $(V * G_\text{lsf}) = V'$ is the standard LSF-convolved
-pseudo-Voigt, with effective parameters from the Thompson et al. (1987)
-approximation.
-
-### Gaussian component of $V$
-
-For the Gaussian component $G_{\sigma_g}$ of the pseudo-Voigt, the skew
-correction integral factors via the Gaussian product identity:
+The symmetric part $V' = V * G_\text{lsf}$ is the standard LSF-convolved
+pseudo-Voigt (Thompson et al. 1987 approximation with Gaussian width
+$\Gamma_{cg} = \sqrt{\Gamma_g^2 + \Gamma_\text{lsf}^2}$).  The skew
+correction does not have a closed form for the mixed Voigt case, so the
+convolved profile is approximated as
 
 $$
-G_{\sigma_g}(t)\,G_{\sigma_\text{lsf}}(x - t)
-= G_{\sigma_\text{tot}}(x)\cdot G_{\sigma_*}(t - \mu_*),
+(V_\text{skew} * G_\text{lsf})(x)
+\;\approx\;
+V'(x)\,\Bigl[1 + \text{erf}\!\Bigl(\frac{\alpha_\text{eff}\,x}{w_0'}\Bigr)\Bigr],
 $$
 
-where $\sigma_\text{tot} = \sqrt{\sigma_g^2 + \sigma_\text{lsf}^2}$,
-$\sigma_*^2 = \sigma_g^2\sigma_\text{lsf}^2/\sigma_\text{tot}^2$, and
-$\mu_* = \sigma_g^2 x/\sigma_\text{tot}^2$.
+where $w_0' = \sqrt{\Gamma_g^2 + \Gamma_\text{lsf}^2 + \Gamma_l^2}$ is the
+post-convolution total width and $\alpha_\text{eff}$ is the effective skewness
+derived below.
 
-The skew correction becomes an expectation over the conditional normal
-$T \sim \mathcal{N}(\mu_*, \sigma_*^2)$:
+### Gaussian-body exact formula
 
-$$
-\int G_{\sigma_g}(t)\,\text{erf}\!\left(\tfrac{\alpha t}{\sqrt{2}\sigma_g}\right)
-G_{\sigma_\text{lsf}}(x-t)\,dt
-= G_{\sigma_\text{tot}}(x)\cdot E_{T}\!\left[\text{erf}\!\left(\tfrac{\alpha T}{\sqrt{2}\sigma_g}\right)\right].
-$$
-
-Using the identity $E[\text{erf}(bT)] = \text{erf}(b\mu_*/\sqrt{1 + 2b^2\sigma_*^2})$
-for $T \sim \mathcal{N}(\mu_*, \sigma_*^2)$, with $b = \alpha/(\sqrt{2}\sigma_g)$:
+For the pure-Gaussian component ($\Gamma_l = 0$) the skew correction integral
+factors exactly via the Gaussian product identity.  With
+$\sigma_g = \Gamma_g / (2\sqrt{2\ln 2})$,
+$\sigma_\text{lsf} = \Gamma_\text{lsf} / (2\sqrt{2\ln 2})$, the result is:
 
 $$
-E\!\left[\text{erf}\!\left(\tfrac{\alpha T}{\sqrt{2}\sigma_g}\right)\right]
-= \text{erf}\!\left(\frac{\alpha_\text{eff}\,x}{\sqrt{2}\,\sigma_\text{tot}}\right),
-\qquad
-\alpha_\text{eff} = \frac{\alpha\,\sigma_g}{\sqrt{\sigma_\text{tot}^2 + \alpha^2\sigma_\text{lsf}^2}}.
-$$
-
-The Gaussian component of the convolved skew Voigt is therefore:
-
-$$
-(G_{\sigma_g}\cdot[1+\text{erf}(\tfrac{\alpha\cdot}{\sqrt{2}\sigma_g})]
-* G_{\sigma_\text{lsf}})(x)
-= G_{\sigma_\text{tot}}(x)\,\Bigl[1 + \text{erf}\!\Bigl(\frac{\alpha_\text{eff}\,x}{\sqrt{2}\,\sigma_\text{tot}}\Bigr)\Bigr].
-$$
-
-This is a **skew-normal distribution** (Azzalini 1985) with scale $\sigma_\text{tot}$
-and skewness $\alpha_\text{eff}$.
-
-### Lorentzian component of $V$
-
-The analogous integral for the Lorentzian component $L_\gamma(t)$ does not
-yield a closed form, because $L_\gamma G_\text{lsf}$ does not factorise as
-cleanly as $G_{\sigma_g} G_\text{lsf}$. In the implementation, this
-contribution is computed with a 5-node Gauss-Legendre quadrature per pixel.
-
-### Effective skewness after LSF convolution
-
-The key result is:
-
-$$
-\boxed{
-\alpha_\text{eff} = \frac{\alpha\,\sigma_g}{\sqrt{\sigma_\text{tot}^2 + \alpha^2\sigma_\text{lsf}^2}}
-= \frac{\alpha\,\sigma_g}{\sqrt{\sigma_g^2 + (1+\alpha^2)\sigma_\text{lsf}^2}}
-}
+\alpha_\text{gauss} =
+\frac{\alpha\, w_0}{\sqrt{w_0'^{\,2} + 2\,\alpha^2\,\sigma_\text{lsf}^2}}.
 $$
 
 Properties:
-- $\alpha_\text{eff} \to \alpha$ as $\sigma_\text{lsf} \to 0$ (no LSF, skewness preserved)
-- $\alpha_\text{eff} \to 0$ as $\sigma_\text{lsf} \to \infty$ (wide LSF washes out the skew)
-- $\alpha_\text{eff} \to 0$ when $\sigma_g \to 0$ (no intrinsic Gaussian component — the skewness is carried by the Gaussian envelope and cannot survive an infinitely narrow intrinsic Gaussian)
-- $|\alpha_\text{eff}| < |\alpha|$ always (convolution reduces skewness)
+- $\alpha_\text{gauss} \to \alpha$ as $\sigma_\text{lsf} \to 0$ (no LSF)
+- $\alpha_\text{gauss} \to 0$ as $\sigma_\text{lsf} \to \infty$ (LSF washes out skew)
+- $|\alpha_\text{gauss}| < |\alpha|$ always (convolution reduces skewness)
+
+### FXIG boost correction for the Lorentzian component
+
+When $\Gamma_l > 0$, the Lorentzian contribution causes $\alpha_\text{eff}$ to
+exceed $\alpha_\text{gauss}$.  A multiplicative boost $B \geq 1$ was fit
+numerically over a grid of
+$(\textrm{lor}, \alpha, \eta) \in [0, 8] \times [0.3, 10] \times [0.1, 3]$,
+where:
+
+$$
+\textrm{lor} = \frac{\Gamma_l/2}{\sigma_g}, \qquad
+\eta = \frac{\sigma_\text{lsf}}{\sigma_g}, \qquad
+\xi = \frac{\textrm{lor}}{\eta} = \frac{\Gamma_l/2}{\sigma_\text{lsf}}.
+$$
+
+$\xi$ is the ratio of Lorentzian half-width to LSF sigma; when $\xi$ is large
+the Lorentzian wings are resolved by the LSF and carry more skew.  The boost
+is modelled as:
+
+$$
+\ln B = \frac{k\,\xi^a\,\eta^b}{(1 + q\,\xi^c)(1 + r\,|\alpha|^d)},
+$$
+
+with fitted parameters $(k, a, b, c, q, r, d) = (9.9126,\;0.43576,\;0.97281,\;2.1469,\;2.3396,\;26.449,\;0.36404)$.
+
+Boundary conditions satisfied:
+- $\ln B = 0$ at $\textrm{lor} = 0$ (Lorentzian absent, Gaussian formula exact)
+- $\ln B = 0$ at $\eta = 0$ (no LSF, $\alpha_\text{eff} = \alpha$ trivially)
+
+### Final formula
+
+$$
+\boxed{
+\alpha_\text{eff} = \alpha_\text{gauss} \cdot \exp(\ln B)
+= \frac{\alpha\,w_0}{\sqrt{w_0'^{\,2} + 2\,\alpha^2\,\sigma_\text{lsf}^2}}
+  \cdot \exp\!\left(\frac{k\,\xi^a\,\eta^b}{(1+q\,\xi^c)(1+r\,|\alpha|^d)}\right)
+}
+$$
+
+**Accuracy** (numerical validation, $\Gamma_l \in [0,8\sigma_g]$, $\eta \in [0.1, 3]$,
+$\alpha \in [0.3, 10]$): median profile error 0.57%, 95th-percentile 1.67%,
+maximum 2.44%, versus 5.43% / 7.65% for $\alpha_\text{gauss}$ alone.
 
 ---
 
-## Pixel Integration
+## Pixel integration
 
-The pixel integral splits as:
+The skew Voigt is **not analytically integrated** over pixels.  Both the
+Gaussian skew correction (expressible via Owen's T function) and the
+Lorentzian skew correction require numerical work that would add two further
+approximation layers on top of the Thompson pseudo-Voigt.
 
-$$
-\int_{\lambda_l}^{\lambda_h} V_\text{skew}'(x)\,dx
-= \underbrace{\int_{\lambda_l}^{\lambda_h} V'(x)\,dx}_{\text{standard Voigt integral}}
-+ \underbrace{\int_{\lambda_l}^{\lambda_h} V'(x)\,\text{erf}\!\left(\frac{\alpha_\text{eff}(x-c)}{\sqrt{2}\,\sigma_\text{tot}}\right)dx}_{\text{skew correction}}
-$$
-
-The standard Voigt integral is analytic (Thompson et al. Gaussian + Cauchy CDFs). The
-skew correction does not reduce to standard functions.
-
-### Gaussian skew correction
-
-Writing $V' = (1-\eta')G' + \eta'L'$ (Thompson et al. decomposition), the
-Gaussian part of the skew correction can be expressed in terms of Owen's T function:
-
-$$
-(1-\eta')\int_{\lambda_l}^{\lambda_h} G(x-c;\sigma_\text{tot})\,
-\text{erf}\!\left(\frac{\alpha_\text{eff}(x-c)}{\sqrt{2}\,\sigma_\text{tot}}\right)dx
-= -2(1-\eta')\bigl[T(y_h,\,\alpha_\text{eff}) - T(y_l,\,\alpha_\text{eff})\bigr],
-$$
-
-where $y = (x-c)/\sigma_\text{tot}$ and $T(h,a) = \frac{1}{2\pi}\int_0^a \frac{e^{-h^2(1+t^2)/2}}{1+t^2}\,dt$
-is Owen's T function.  Owen's T has no closed form and requires its own numerical
-evaluation (series expansion or dedicated quadrature).
-
-### Lorentzian skew correction
-
-The Lorentzian part
-
-$$
-\eta'\int_{\lambda_l}^{\lambda_h}
-L(x-c;\gamma')\,\text{erf}\!\left(\frac{\alpha_\text{eff}(x-c)}{\sqrt{2}\,\sigma_\text{tot}}\right)dx
-$$
-
-has no closed form.
-
-### No analytic pixel integral
-
-Both components of the skew correction require non-trivial numerical work: Owen's T
-for the Gaussian part and a separate quadrature for the Lorentzian part. Because the
-profile is already the result of a Gauss-Legendre quadrature approximation in the
-Lorentzian wing, adding two further layers of numerical integration would undermine the
-accuracy advantage that motivates analytic integration elsewhere.
-
-**The skew Voigt profile is therefore not analytically integrated over pixels.**
-Instead, `unite` evaluates the LSF-convolved profile pointwise at the pixel midpoint
-and multiplies by the pixel width (a midpoint-rule approximation). This is adequate
-when pixels are small relative to the profile width, which is the common case for
-well-resolved spectral lines.
+Instead, `unite` evaluates the approximation pointwise at the pixel midpoint
+and multiplies by the pixel width (midpoint-rule approximation), which is
+adequate when pixels are small relative to the profile width.

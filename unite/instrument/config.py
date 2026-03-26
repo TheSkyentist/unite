@@ -145,8 +145,6 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
     if isinstance(disperser, NIRSpecDisperser):
         d['grating'] = disperser.grating
         d['r_source'] = disperser.r_source
-    elif hasattr(disperser, 'r_source'):
-        d['r_source'] = getattr(disperser, 'r_source')
 
     # CalibParam references by token name (or null for fixed).
     for attr in ('r_scale', 'flux_scale', 'pix_offset'):
