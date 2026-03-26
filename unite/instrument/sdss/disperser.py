@@ -72,6 +72,10 @@ class SDSSDisperser(Disperser):
             flux_scale=flux_scale,
             pix_offset=pix_offset,
         )
+        # Placeholder grids — overwritten by from_sdss_fits() at load time.
+        self._wavelength_grid: jnp.ndarray = jnp.array([3800.0, 9200.0], dtype=float)
+        self._R_grid: jnp.ndarray = jnp.array([2000.0, 2000.0], dtype=float)
+        self._dlam_dpix_grid: jnp.ndarray = jnp.array([1.0, 1.0], dtype=float)
 
     def R(self, wavelength: ArrayLike) -> ArrayLike:
         """Return the resolving power at the given wavelengths (Angstrom).

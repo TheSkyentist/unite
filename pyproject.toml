@@ -75,6 +75,7 @@ JAX_LOGGING_LEVEL = "ERROR"
 format = "ruff format unite tests docs/tutorials"
 lint = "ruff check unite tests docs/tutorials"
 lint-fix = "ruff check --fix unite tests docs/tutorials"
+type-check = "basedpyright unite"
 
 [tool.pixi.dependencies]
 python = ">=3.12.0,<3.15"
@@ -116,6 +117,20 @@ docs = {features = ["docs"], solve-group = "default"}
 # ---------------------------------------------------------------------------
 # ruff
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# basedpyright
+# ---------------------------------------------------------------------------
+
+[tool.basedpyright]
+typeCheckingMode = "standard"
+# numpyro has no type stubs; suppress the noise globally
+reportMissingTypeStubs = "none"
+# ArrayLike arithmetic is idiomatic in JAX codebases; operator type-checking
+# on ArrayLike unions produces hundreds of false-positive errors
+reportOperatorIssue = "none"
+# Only check the package itself; validation scripts and docs are not shipped
+include = ["unite"]
 
 [tool.ruff]
 target-version = "py314"

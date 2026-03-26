@@ -14,7 +14,9 @@ from __future__ import annotations
 import jax.numpy as jnp
 
 
-def eval_continuum(wavelength, args, context, z_sys, lsf_fwhm=0.0):
+def eval_continuum(
+    wavelength, args, context, z_sys, lsf_fwhm: float | jnp.ndarray = 0.0
+):
     """Evaluate the total continuum at arbitrary wavelength points.
 
     Parameters
@@ -46,7 +48,9 @@ def eval_continuum(wavelength, args, context, z_sys, lsf_fwhm=0.0):
     return continuum
 
 
-def eval_continuum_regions(wavelength, args, context, z_sys, lsf_fwhm=0.0):
+def eval_continuum_regions(
+    wavelength, args, context, z_sys, lsf_fwhm: float | jnp.ndarray = 0.0
+):
     """Evaluate each continuum region independently at arbitrary wavelength points.
 
     Parameters
@@ -93,7 +97,9 @@ def eval_continuum_regions(wavelength, args, context, z_sys, lsf_fwhm=0.0):
     return regions
 
 
-def integrate_continuum(low, high, args, context, z_sys, lsf_fwhm=0.0):
+def integrate_continuum(
+    low, high, args, context, z_sys, lsf_fwhm: float | jnp.ndarray = 0.0
+):
     """Pixel-integrated continuum via each form's integrate method.
 
     Parameters

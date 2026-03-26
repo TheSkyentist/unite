@@ -12,6 +12,7 @@ The :class:`~unite.spectrum.Spectrum` class lives in :mod:`unite.spectrum`.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 import jax.numpy as jnp
 from astropy import units as u
@@ -157,7 +158,7 @@ class SimpleDisperser(Disperser):
     ) -> None:
         wavelength = _ensure_wavelength(wavelength, 'wavelength', ndim=1)
         super().__init__(
-            wavelength.unit,
+            cast(u.UnitBase, wavelength.unit),
             name=name,
             r_scale=r_scale,
             flux_scale=flux_scale,
@@ -172,7 +173,10 @@ class SimpleDisperser(Disperser):
         self._wavelength = jnp.asarray(wavelength.value, dtype=float)
 
         # Compute dlam_dpix from the pixel grid.
-        self._dlam_dpix_grid = jnp.gradient(self._wavelength)
+        # jnp.gradient returns Array | list[Array]; cast to Array for type checker.
+        self._dlam_dpix_grid: jnp.ndarray = cast(
+            jnp.ndarray, jnp.gradient(self._wavelength)
+        )
 
         # Compute resolving power on the grid.
         if R is not None:

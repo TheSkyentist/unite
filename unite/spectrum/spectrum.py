@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import jax.numpy as jnp
 from astropy import units as u
 
@@ -67,10 +69,11 @@ class Spectrum:
         # -- flux unit --------------------------------------------------------
         flux = _ensure_flux_density(flux, 'flux', ndim=1)
         error = _ensure_flux_density(error, 'error', ndim=1)
-        if not flux.unit.is_equivalent(error.unit):
+        _flux_unit = cast(u.UnitBase, flux.unit)
+        if not _flux_unit.is_equivalent(error.unit):
             msg = f'flux and error must have compatible units, got {flux.unit!r} and {error.unit!r}.'
             raise ValueError(msg)
-        self._flux_unit: u.UnitBase = flux.unit
+        self._flux_unit: u.UnitBase = _flux_unit
 
         # -- disperser --------------------------------------------------------
         if not isinstance(disperser, Disperser):
@@ -105,7 +108,7 @@ class Spectrum:
         self._flux = flux_arr
         self._error = error_arr
         self._error_scale: jnp.ndarray | float = 1.0
-        self._scale_diagnostic = None
+        self._scale_diagnostic: object = None
 
         # -- metadata ---------------------------------------------------------
         self.name = name or disperser.name

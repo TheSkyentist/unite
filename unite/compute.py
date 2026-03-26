@@ -226,6 +226,8 @@ def evaluate_model(
                 half_width = (high - low) / 2.0
                 nodes = args.quadrature_nodes  # (n_nodes,)
                 weights = args.quadrature_weights  # (n_nodes,)
+                assert nodes is not None
+                assert weights is not None
 
                 # Sub-pixel wavelengths: (n_nodes, n_pix)
                 x = mid[None, :] + half_width[None, :] * nodes[:, None]

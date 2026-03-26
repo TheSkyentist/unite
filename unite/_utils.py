@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from typing import TypeVar
 
 from astropy import units as u
-from astropy.constants import c
+from astropy.constants import c  # pyright: ignore[reportAttributeAccessIssue]
 
 _T = TypeVar('_T')
 
@@ -137,7 +137,7 @@ def _ensure_quantity(
             )
 
     # 2. Unit equivalence validation
-    if not value.unit.is_equivalent(ref_unit):
+    if value.unit is None or not value.unit.is_equivalent(ref_unit):
         raise u.UnitConversionError(
             f'{name} must have units equivalent to {ref_unit}, got {value.unit}.'
         )
@@ -179,6 +179,12 @@ def _ensure_flux(value, name, ndim):
 # ---------------------------------------------------------------------------
 
 
-def _get_conversion_factor(from_unit: u.UnitBase, to_unit: u.UnitBase) -> float:
+def _get_conversion_factor(
+    from_unit: u.UnitBase | u.StructuredUnit | None, to_unit: u.UnitBase
+) -> float:
     """Return generic scalar multiplier to convert between equivalent units."""
-    return float((1.0 * from_unit).to(to_unit).value)
+    assert from_unit is not None, 'from_unit must not be None'
+    assert isinstance(from_unit, u.UnitBase), (
+        f'from_unit must be a UnitBase, got {type(from_unit)}'
+    )
+    return float(from_unit.to(to_unit))  # pyright: ignore[reportArgumentType]

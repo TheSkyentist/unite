@@ -26,7 +26,7 @@ token kwargs.
 from __future__ import annotations
 
 from importlib import resources
-from typing import Literal
+from typing import Literal, cast
 
 import jax.numpy as jnp
 from astropy import units as u
@@ -115,7 +115,7 @@ def _load_uniform_disp(grating: str) -> dict[str, jnp.ndarray]:
     filename = f'jwst_nirspec_{grating}_disp.fits'
     ref = resources.files('unite.instrument.nirspec.data').joinpath(filename)
     with resources.as_file(ref) as path, fits.open(path) as hdul:
-        data = hdul[1].data
+        data = hdul[1].data  # type: ignore[index]
         return {
             'wavelength': jnp.asarray(data['WAVELENGTH'], dtype=float),
             'dlds': jnp.asarray(data['DLDS'], dtype=float),
@@ -187,14 +187,14 @@ class NIRSpecDisperser(Disperser):
             raise ValueError(msg)
 
         # Normalize r_source to 'uniform' or 'point'
-        r_source = r_source.lower()
-        if r_source in ('uniformly-illuminated', 'uniformly_illuminated'):
-            r_source = 'uniform'
-        elif r_source in ('point-source', 'point_source'):
-            r_source = 'point'
+        _r_source_str: str = r_source.lower()
+        if _r_source_str in ('uniformly-illuminated', 'uniformly_illuminated'):
+            _r_source_str = 'uniform'
+        elif _r_source_str in ('point-source', 'point_source'):
+            _r_source_str = 'point'
 
-        if r_source not in ('uniform', 'point'):
-            msg = f"Unknown r_source {r_source!r}. Must be 'uniform'(ly-illuminated), or 'point'(-source)."
+        if _r_source_str not in ('uniform', 'point'):
+            msg = f"Unknown r_source {_r_source_str!r}. Must be 'uniform'(ly-illuminated), or 'point'(-source)."
             raise ValueError(msg)
 
         super().__init__(
@@ -206,7 +206,7 @@ class NIRSpecDisperser(Disperser):
         )
 
         self.grating: str = grating
-        self.r_source: RSource = r_source
+        self.r_source: RSource = cast('RSource', _r_source_str)
 
         # Load JDOX dispersion table (shared by both R sources).
         uniform = _load_uniform_disp(grating)
@@ -214,16 +214,18 @@ class NIRSpecDisperser(Disperser):
         self._dlds_grid = uniform['dlds']
 
         # Build the R source.
-        if r_source == 'uniform':
-            self._R_grid = uniform['R']
-            self._R_poly = None
+        if _r_source_str == 'uniform':
+            self._R_grid: jnp.ndarray | None = uniform['R']
+            self._R_poly: jnp.ndarray | None = None
+            _r_grid = uniform['R']
             self.R = lambda wavelength: jnp.interp(
-                wavelength, self._wavelength_grid, self._R_grid
+                wavelength, self._wavelength_grid, _r_grid
             )
         else:
             self._R_grid = None
             self._R_poly = jnp.asarray(_DEGRAAFF25_R_COEFFS[grating], dtype=float)
-            self.R = lambda wavelength: jnp.polyval(self._R_poly, wavelength)
+            _r_poly = self._R_poly
+            self.R = lambda wavelength: jnp.polyval(_r_poly, wavelength)
 
     # -- Disperser interface -------------------------------------------------
 
@@ -323,11 +325,27 @@ def _make_grating_class(grating: str, class_name: str) -> type[NIRSpecDisperser]
 for _grating, _class_name in _GRATING_CLASS_NAMES.items():
     globals()[_class_name] = _make_grating_class(_grating, _class_name)
 
+# Explicit type-visible references to dynamically generated classes.
+# These are set by the loop above; re-declared here for type checkers.
+G140H: type[NIRSpecDisperser] = globals()['G140H']
+G140M: type[NIRSpecDisperser] = globals()['G140M']
+G235H: type[NIRSpecDisperser] = globals()['G235H']
+G235M: type[NIRSpecDisperser] = globals()['G235M']
+G395H: type[NIRSpecDisperser] = globals()['G395H']
+G395M: type[NIRSpecDisperser] = globals()['G395M']
+PRISM: type[NIRSpecDisperser] = globals()['PRISM']
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-# Collect the generated class names for __all__.
-_GRATING_CLASS_LIST: list[str] = list(_GRATING_CLASS_NAMES.values())
-
-__all__ = ['NIRSpecDisperser', *sorted(_GRATING_CLASS_LIST)]
+__all__ = [
+    'G140H',
+    'G140M',
+    'G235H',
+    'G235M',
+    'G395H',
+    'G395M',
+    'PRISM',
+    'NIRSpecDisperser',
+]

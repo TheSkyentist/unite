@@ -6,6 +6,7 @@ import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import yaml
@@ -167,8 +168,8 @@ class ContinuumRegion:
         If ``low >= high``.
     """
 
-    low: u.Quantity
-    high: u.Quantity
+    low: u.Quantity | float
+    high: u.Quantity | float
     form: ContinuumForm | str = field(default_factory=Linear)
     params: dict[str, Parameter] = field(default_factory=dict)
     name: str | None = None
@@ -187,17 +188,18 @@ class ContinuumRegion:
         high_q = high_q.to(low_q.unit)
 
         # Convert to region wavelengths
-        self._unit: u.UnitBase = low_q.unit
-        self.low: float = float(low_q.value)
-        self.high: float = float(high_q.value)
+        self._unit: u.UnitBase = cast(u.UnitBase, low_q.unit)
+        self.low = float(low_q.value)
+        self.high = float(high_q.value)
 
         # Prepare the form (e.g. for forms that need to know the wavelength range)
+        assert isinstance(self.form, ContinuumForm)
         self.form._prepare(low_q, high_q)
 
     @property
     def center(self) -> float:
         """Midpoint wavelength of the region."""
-        return (self.low + self.high) / 2.0
+        return float((self.low + self.high) / 2.0)
 
 
 # ------------------------------------------------------------------
@@ -391,12 +393,17 @@ class ContinuumConfiguration:
         counters: dict[str, int] = {}  # param_name → next alpha index
 
         for region in self._regions:
+            assert isinstance(region.form, ContinuumForm), (
+                f'Expected ContinuumForm but got {type(region.form).__name__}. '
+                'String form names should have been resolved in __post_init__.'
+            )
+            region_form: ContinuumForm = region.form
             # Validate that all param keys match the form's param_names.
-            valid_names = set(region.form.param_names())
+            valid_names = set(region_form.param_names())
             invalid = set(region.params) - valid_names
             if invalid:
                 msg = (
-                    f'{type(region.form).__name__} does not have parameter(s) '
+                    f'{type(region_form).__name__} does not have parameter(s) '
                     f'{invalid}. Valid parameters: {sorted(valid_names)}'
                 )
                 raise ValueError(msg)
@@ -408,10 +415,10 @@ class ContinuumConfiguration:
                     msg = f"Parameter '{pn}' must be a {expected.__name__}, got {type(tok).__name__}."
                     raise TypeError(msg)
 
-            default_priors = region.form.default_priors(region_center=region.center)
+            default_priors = region_form.default_priors(region_center=region.center)
             resolved: dict[str, Parameter] = {}
 
-            for pn in region.form.param_names():
+            for pn in region_form.param_names():
                 if pn in region.params:
                     tok = region.params[pn]
                     if id(tok) not in seen:
@@ -546,14 +553,16 @@ class ContinuumConfiguration:
         type_counts: dict[str, int] = {}
         forms_section: dict[str, dict] = {}
         for region in self._regions:
-            fid = id(region.form)
+            assert isinstance(region.form, ContinuumForm)
+            region_form_to_dict: ContinuumForm = region.form
+            fid = id(region_form_to_dict)
             if fid not in form_names:
-                type_key = type(region.form).__name__.lower()
+                type_key = type(region_form_to_dict).__name__.lower()
                 idx = type_counts.get(type_key, 0)
                 name = f'{type_key}_{idx}'
                 type_counts[type_key] = idx + 1
                 form_names[fid] = name
-                forms_section[name] = region.form.to_dict()
+                forms_section[name] = region_form_to_dict.to_dict()
 
         # 2. Collect unique Parameter tokens in first-appearance order.
         #    Build param_namer first so dependent priors can reference other tokens.
@@ -564,8 +573,9 @@ class ContinuumConfiguration:
             for tok in resolved.values():
                 if id(tok) not in seen_tok_ids:
                     seen_tok_ids.add(id(tok))
-                    param_namer[tok] = tok.name
-                    params_order.append((tok.name, tok))
+                    tok_name = cast(str, tok.name)
+                    param_namer[tok] = tok_name
+                    params_order.append((tok_name, tok))
 
         params_section: dict[str, dict] = {
             name: tok.prior.to_dict(param_namer) for name, tok in params_order
@@ -755,8 +765,18 @@ class ContinuumConfiguration:
 
         # Collect user-provided token names from each config (region.params only;
         # auto-created tokens are re-indexed on construction and never collide).
-        self_names = {tok.name for r in self._regions for tok in r.params.values()}
-        other_names = {tok.name for r in other._regions for tok in r.params.values()}
+        self_names = {
+            cast(str, tok.name)
+            for r in self._regions
+            for tok in r.params.values()
+            if tok.name is not None
+        }
+        other_names = {
+            cast(str, tok.name)
+            for r in other._regions
+            for tok in r.params.values()
+            if tok.name is not None
+        }
         collisions = sorted(self_names & other_names)
         if collisions:
             msg = (
@@ -785,7 +805,7 @@ class ContinuumConfiguration:
             range_str = f'[{region.low}, {region.high}]'
             unit_str = str(region._unit)
             form_str = repr(region.form)
-            params_str = ', '.join(tok.name for tok in resolved.values())
+            params_str = ', '.join(cast(str, tok.name) for tok in resolved.values())
             rows.append((range_str, unit_str, form_str, params_str))
 
         col_headers = ('Range', 'Unit', 'Form', 'Parameters')
@@ -807,7 +827,7 @@ class ContinuumConfiguration:
             for tok in resolved.values():
                 if id(tok) not in seen_tok_ids2:
                     seen_tok_ids2.add(id(tok))
-                    unique_toks.append((tok.name, tok))
+                    unique_toks.append((cast(str, tok.name), tok))
 
         if unique_toks:
             lines.append('')

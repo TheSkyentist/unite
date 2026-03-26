@@ -7,10 +7,15 @@ be called from within :func:`jax.jit`-compiled model code.
 from __future__ import annotations
 
 from functools import partial
-from typing import Final
+from typing import Final, cast
 
 import jax.numpy as jnp
-from astropy import constants as const, units as u
+from astropy import units as u
+from astropy.constants import (
+    c as _c,  # pyright: ignore[reportAttributeAccessIssue]
+    h as _h,  # pyright: ignore[reportAttributeAccessIssue]
+    k_B as _k_B,  # pyright: ignore[reportAttributeAccessIssue]
+)
 from jax import Array, jit
 from jax.typing import ArrayLike
 
@@ -18,7 +23,7 @@ from jax.typing import ArrayLike
 # Physical constants
 # ---------------------------------------------------------------------------
 
-_HC_KB: Final[float] = ((const.c * const.h) / const.k_B).to(u.um * u.K).value
+_HC_KB: Final[float] = ((_c * _h) / _k_B).to(u.um * u.K).value
 
 # ---------------------------------------------------------------------------
 # Planck blackbody
@@ -58,7 +63,10 @@ def planck_function(
     x = hc_kbt / wavelength_micron
     x_p = hc_kbt / pivot_micron
 
-    return ((pivot_micron / wavelength_micron) ** 5) * (jnp.expm1(x_p) / jnp.expm1(x))
+    return cast(
+        Array,
+        ((pivot_micron / wavelength_micron) ** 5) * (jnp.expm1(x_p) / jnp.expm1(x)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +74,7 @@ def planck_function(
 # ---------------------------------------------------------------------------
 
 
-def chebval(x: ArrayLike, coeffs: list) -> Array:
+def chebval(x: ArrayLike, coeffs: ArrayLike) -> Array:
     """Evaluate a Chebyshev series using the trigonometric identity.
 
     Parameters
@@ -82,6 +90,7 @@ def chebval(x: ArrayLike, coeffs: list) -> Array:
         Series value at each point in *x*.
     """
     x = jnp.atleast_1d(x)
+    coeffs = jnp.asarray(coeffs)
     # Create an array of degrees: [0, 1, 2, ..., n]
     degrees = jnp.arange(len(coeffs), dtype=x.dtype)
 

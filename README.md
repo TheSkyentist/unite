@@ -13,10 +13,11 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 
 ## What it does
 
-- **Exact pixel integration** of line profiles — fast, memory-efficient, and correct even for undersampled data
+- **Two pixel-integration modes**: analytic (exact CDF-based, default) and Gauss-Legendre quadrature (configurable node count) — fast, memory-efficient, and correct even for undersampled data
 - **Simultaneous multi-spectrum fitting** across gratings and instruments with shared kinematic parameters (redshift, FWHM)
-- **Multiple line profiles**: Gaussian, Voigt, Cauchy, Pseudo-Voigt, Laplace, Gauss-Hermite, Split-Normal
-- **Flexible continuum models**: Linear, Power-Law, Polynomial — auto-generated from line configurations
+- **Multiple line profiles**: Gaussian, Cauchy, Pseudo-Voigt, Laplace, SEMG, Gauss-Hermite, Split-Normal, Skew-Voigt
+- **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)`, with configurable absorber position (`foreground`, `behind_lines`, `behind_continuum`)
+- **Flexible continuum models**: Linear, Polynomial, Chebyshev, Bernstein, B-Spline, Power-Law, Blackbody, Modified Blackbody, Attenuated Blackbody — auto-generated from line configurations
 - **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
 - **YAML serialization** for reproducible, human-editable configurations
 - **User-controlled sampler** — `ModelBuilder` returns `(model_fn, model_args)` for use with any NumPyro backend (NUTS, SVI, nested sampling, ...)
@@ -53,21 +54,29 @@ fwhm = line.FWHM('narrow', prior=prior.Uniform(100, 1000))
 
 lc = line.LineConfiguration()
 lc.add_line(
-    'H_alpha',  
-    6563.0 * u.AA, 
-    redshift=z, 
+    'H_alpha',
+    6563.0 * u.AA,
+    redshift=z,
     fwhm_gauss=fwhm,
     flux=line.Flux(prior=prior.Uniform(0, 10))
 )
 lc.add_line(
-    'NII_6585', 
-    6585.0 * u.AA, 
-    redshift=z, 
+    'NII_6585',
+    6585.0 * u.AA,
+    redshift=z,
     fwhm_gauss=fwhm,
     flux=line.Flux(prior=prior.Uniform(0, 10))
 )
+# Tau-parametrized absorption line: transmission = exp(-tau * phi)
+lc.add_line(
+    'HI_abs',
+    6563.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=line.FWHM('abs', prior=prior.Uniform(50, 500)),
+    tau=line.Tau(prior=prior.Uniform(0, 5))
+)
 
-cc = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
+cc = ContinuumConfiguration.from_lines(lc.centers, width=15_000*u.km/u.s, form=Linear())
 
 # 2. Load spectra (NIRSpec example; any instrument works)
 g395m = nirspec.G395M()
@@ -78,15 +87,19 @@ filtered_lines, filtered_cont = spectra.prepare(lc, cc)
 spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 
 # 3. Build and run with any NumPyro sampler
+# integration_mode='analytic' (default) uses exact CDF integration;
+# integration_mode='quadrature' uses Gauss-Legendre quadrature (n_nodes per pixel)
 builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
-model_fn, model_args = builder.build()
+model_fn, model_args = builder.build(integration_mode='analytic')
 
 mcmc = infer.MCMC(infer.NUTS(model_fn), num_warmup=500, num_samples=1000)
 mcmc.run(jax.random.PRNGKey(0), model_args)
 
 # 4. Extract results
-param_table = make_parameter_table(mcmc.get_samples(), model_args)
-spectra_tables = make_spectra_tables(mcmc.get_samples(), model_args)
+# Get summary statistics at specific percentiles
+samples = mcmc.get_samples()
+param_table = make_parameter_table(samples, model_args, percentiles=[0.16, 0.5, 0.84])
+spectra_tables = make_spectra_tables(samples, model_args, percentiles=[0.16, 0.5, 0.84])
 ```
 
 ## Contributing

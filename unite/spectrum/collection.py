@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import jax.numpy as jnp
 from astropy import units as u
@@ -16,6 +16,7 @@ from unite._utils import (
     _ensure_velocity,
     _get_conversion_factor,
 )
+from unite.instrument.base import Disperser
 from unite.spectrum.spectrum import Spectrum
 
 if TYPE_CHECKING:
@@ -173,19 +174,19 @@ class Spectra:
         # Local import avoids circular dependency at module load time.
         from unite.instrument.config import InstrumentConfig
 
-        seen_ids: dict[int, object] = {}
+        seen_dispersers: dict[int, Disperser] = {}
         for s in self._spectra:
-            if id(s.disperser) not in seen_ids:
-                seen_ids[id(s.disperser)] = s.disperser
-        InstrumentConfig(list(seen_ids.values()))
+            if id(s.disperser) not in seen_dispersers:
+                seen_dispersers[id(s.disperser)] = s.disperser
+        InstrumentConfig(list(seen_dispersers.values()))
 
         # Canonical wavelength unit: default to the first spectrum's unit.
         if canonical_unit is not None:
-            canonical_unit = u.Unit(canonical_unit)
-            if not canonical_unit.is_equivalent(u.m):
-                msg = f'canonical_unit must have wavelength dimensions, got {canonical_unit!r}.'
+            _cu = cast(u.UnitBase, u.Unit(str(canonical_unit)))
+            if not _cu.is_equivalent(u.m):
+                msg = f'canonical_unit must have wavelength dimensions, got {_cu!r}.'
                 raise u.UnitConversionError(msg)
-            self._canonical_unit: u.UnitBase = canonical_unit
+            self._canonical_unit: u.UnitBase = _cu
         else:
             self._canonical_unit = self._spectra[0].unit
 
@@ -434,7 +435,7 @@ class Spectra:
             baseline = jnp.where(jnp.isnan(continuum_model), 0.0, continuum_model)
             for lam_rest in line_config.wavelengths:
                 lam_obs = float(lam_rest.to(spectrum.unit).value) * (1.0 + z)
-                lsf_fwhm = lam_obs / float(spectrum.disperser.R(lam_obs))
+                lsf_fwhm = lam_obs / float(jnp.asarray(spectrum.disperser.R(lam_obs)))
                 mask_width_lam = lam_obs * mask_width_kms / C_KMS
                 half_width = float(jnp.sqrt(mask_width_lam**2 + lsf_fwhm**2)) / 2
                 in_window = (wl >= lam_obs - half_width) & (wl <= lam_obs + half_width)
@@ -615,7 +616,7 @@ class Spectra:
         mask = []
         for wavelength in line_config.wavelengths:
             # wavelength is a Quantity; convert to each spectrum's disperser unit
-            lam_obs = wavelength * (1.0 + z)
+            lam_obs = cast(u.Quantity, wavelength * (1.0 + z))
             covered = any(
                 s.covers(
                     float(lam_obs.to(s.unit).value) * (1.0 - eps),

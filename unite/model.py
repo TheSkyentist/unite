@@ -11,10 +11,12 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import cast
 
 import jax
 import jax.numpy as jnp
 import numpyro
+from astropy import units as u
 from numpyro import distributions as dist
 
 from unite._compose import compose_from_profiles
@@ -75,8 +77,8 @@ class ModelArgs:
     #: Per-spectrum flux density units.
     flux_units: list
     #: The Quantity line_scale and continuum_scale from Spectra (for results output).
-    line_scale_quantity: object
-    continuum_scale_quantity: object
+    line_scale_quantity: u.Quantity | None
+    continuum_scale_quantity: u.Quantity | None
     #: Human-readable column labels for each line, parallel to ``matrices.wavelengths``.
     #: Derived from user-supplied line names and rest-frame wavelengths.
     line_labels: list[str]
@@ -93,10 +95,10 @@ class ModelArgs:
     integration_mode: str = 'analytic'
     #: Gauss-Legendre quadrature nodes on ``[-1, 1]``.
     #: ``None`` when ``integration_mode='analytic'``.
-    quadrature_nodes: object = None
+    quadrature_nodes: jnp.ndarray | None = None
     #: Gauss-Legendre quadrature weights.
     #: ``None`` when ``integration_mode='analytic'``.
-    quadrature_weights: object = None
+    quadrature_weights: jnp.ndarray | None = None
 
     def __len__(self) -> int:
         """Return the number of spectra in the model."""
@@ -144,9 +146,11 @@ def unite_model(args: ModelArgs) -> None:
     for pname in args.dependency_order:
         prior = args.all_priors[pname]
         if isinstance(prior, Fixed):
-            val = jnp.asarray(prior.resolved_value(obj_ctx))
+            val: jnp.ndarray = jnp.asarray(prior.resolved_value(obj_ctx))
         else:
-            val = numpyro.sample(pname, prior.to_dist(obj_ctx))
+            distribution = prior.to_dist(obj_ctx)
+            assert distribution is not None
+            val = cast(jnp.ndarray, numpyro.sample(pname, distribution))
         context[pname] = val
         tok = args.name_to_token.get(pname)
         if tok is not None:
@@ -214,12 +218,18 @@ def unite_model(args: ModelArgs) -> None:
         cs = args.continuum_scales[i]
 
         # Calibration values (fall back to identity when no token is attached).
-        r_scale = context[disp.r_scale.name] if disp.r_scale is not None else 1.0
+        r_scale = (
+            context[cast(str, disp.r_scale.name)] if disp.r_scale is not None else 1.0
+        )
         flux_scale = (
-            context[disp.flux_scale.name] if disp.flux_scale is not None else 1.0
+            context[cast(str, disp.flux_scale.name)]
+            if disp.flux_scale is not None
+            else 1.0
         )
         pix_offset = (
-            context[disp.pix_offset.name] if disp.pix_offset is not None else 0.0
+            context[cast(str, disp.pix_offset.name)]
+            if disp.pix_offset is not None
+            else 0.0
         )
 
         # Pixel edges in canonical wavelength unit.
@@ -252,6 +262,8 @@ def unite_model(args: ModelArgs) -> None:
             half_width = (high - low) / 2.0
             nodes = args.quadrature_nodes  # (n_nodes,)
             weights = args.quadrature_weights  # (n_nodes,)
+            assert nodes is not None
+            assert weights is not None
 
             # Map GL nodes to pixel sub-points: (n_nodes, n_pixels)
             x = mid[None, :] + half_width[None, :] * nodes[:, None]
@@ -365,7 +377,11 @@ class ModelBuilder:
             )
         else:
             # Use the prepared configs.
-            line_config = spectra.prepared_line_config
+            prepared_lc = spectra.prepared_line_config
+            assert prepared_lc is not None, (
+                'prepared_line_config is None despite is_prepared=True'
+            )
+            line_config = prepared_lc
             continuum_config = spectra.prepared_cont_config
 
         # --- Auto-compute scales if needed ---
@@ -403,7 +419,7 @@ class ModelBuilder:
         param_to_name: dict[object, str] = {
             # We can reconstruct token→name from the matrices' name lists and
             # the original entries since tokens carry their .name attribute.
-            tok: tok.name
+            tok: cast(str, tok.name)
             for entry in line_config._entries
             for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values())
             if tok is not None
@@ -418,9 +434,10 @@ class ModelBuilder:
                 seen_dispersers.add(id(disp))
                 for tok in (disp.r_scale, disp.flux_scale, disp.pix_offset):
                     if tok is not None and id(tok) not in seen_tok_ids:
+                        tok_name = cast(str, tok.name)
                         seen_tok_ids.add(id(tok))
-                        all_priors[tok.name] = tok.prior
-                        param_to_name[tok] = tok.name
+                        all_priors[tok_name] = tok.prior
+                        param_to_name[tok] = tok_name
 
         # Continuum parameters: collect unique ContinuumParam tokens by identity.
         # Shared tokens (same object in multiple regions) produce one numpyro site.
@@ -429,9 +446,10 @@ class ModelBuilder:
             for resolved in continuum_config.resolved_params:
                 for tok in resolved.values():
                     if id(tok) not in seen_cont_ids:
+                        tok_name = cast(str, tok.name)
                         seen_cont_ids.add(id(tok))
-                        all_priors[tok.name] = tok.prior
-                        param_to_name[tok] = tok.name
+                        all_priors[tok_name] = tok.prior
+                        param_to_name[tok] = tok_name
 
         self._all_priors = all_priors
         self._dep_order = (
@@ -588,6 +606,9 @@ class ModelBuilder:
         canonical_unit = self._canonical_unit
         line_flux_scales: list[float] = []
         continuum_scales: list[float] = []
+        assert line_scale_qty is not None, (
+            'line_scale must be set before building the model'
+        )
         for s in trimmed_spectra:
             target_line_unit = s.flux_unit * canonical_unit
             lfs = float(line_scale_qty.to(target_line_unit).value)
@@ -674,7 +695,7 @@ class ModelBuilder:
         absorber_position: str = 'foreground',
         integration_mode: str = 'analytic',
         n_nodes: int = 7,
-    ) -> dict:
+    ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
 
         This method builds the model, runs MCMC with the NUTS kernel, and
@@ -707,13 +728,14 @@ class ModelBuilder:
 
         Returns
         -------
-        dict
-            Posterior samples as a dictionary with parameter names as keys.
-            Shape is ``(num_chains, num_samples)`` per parameter.
+        tuple
+            ``(samples, model_args)`` where ``samples`` is a dictionary with
+            parameter names as keys and shape ``(num_chains, num_samples)`` per
+            parameter, and ``model_args`` is the :class:`ModelArgs` bundle.
 
         Examples
         --------
-        >>> samples = builder.fit(num_warmup=200, num_samples=500, num_chains=4)
+        >>> samples, model_args = builder.fit(num_warmup=200, num_samples=500, num_chains=4)
         """
         import jax
         from numpyro import infer

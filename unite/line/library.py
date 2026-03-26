@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import override
 
 from jax import Array
 from jax.typing import ArrayLike
@@ -129,7 +131,7 @@ class Profile(ABC):
         return self.evaluate_branch()(wavelength, center, lsf_fwhm, p0, p1, p2)
 
     @abstractmethod
-    def integrate_branch(self):
+    def integrate_branch(self) -> Callable[..., Array]:
         """Return a JAX-compatible branch callable for ``lax.switch`` dispatch.
 
         The returned function must have the fixed signature::
@@ -148,7 +150,7 @@ class Profile(ABC):
         """
 
     @abstractmethod
-    def evaluate_branch(self):
+    def evaluate_branch(self) -> Callable[..., Array]:
         """Return a JAX-compatible branch callable for pointwise evaluation.
 
         The returned function must have the fixed signature::
@@ -217,12 +219,15 @@ class Gaussian(Profile):
 
     code = 0
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_gauss',)
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000)}
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss
@@ -230,25 +235,31 @@ class Gaussian(Profile):
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_gaussian(wavelength, c, lsf, p0)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Gaussian'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Gaussian:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'Gaussian()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Gaussian)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 
@@ -267,12 +278,15 @@ class Cauchy(Profile):
 
     code = 1
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_lorentz',)
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_lorentz': Uniform(0, 1000)}
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_lorentz; pure Cauchy via PseudoVoigt with zero Gaussian width
@@ -280,25 +294,31 @@ class Cauchy(Profile):
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_voigt(wavelength, c, lsf, 0.0, p0)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Cauchy'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Cauchy:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'Cauchy()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Cauchy)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 
@@ -314,12 +334,15 @@ class PseudoVoigt(Profile):
 
     code = 2
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_gauss', 'fwhm_lorentz')
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_lorentz': Uniform(0, 1000)}
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz
@@ -327,25 +350,31 @@ class PseudoVoigt(Profile):
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_voigt(wavelength, c, lsf, p0, p1)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'PseudoVoigt'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> PseudoVoigt:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'PseudoVoigt()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, PseudoVoigt)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 
@@ -360,12 +389,15 @@ class Laplace(Profile):
 
     code = 3
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_exp',)
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_exp': Uniform(0, 1000)}
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_exp; pure Laplace convolved with Gaussian LSF
@@ -373,25 +405,31 @@ class Laplace(Profile):
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_gaussianLaplace(wavelength, c, lsf, 0.0, p0)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Laplace'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Laplace:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'Laplace()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Laplace)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 
@@ -409,12 +447,15 @@ class SEMG(Profile):
 
     code = 4
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_gauss', 'fwhm_exp')
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_gauss': Uniform(0, 1000), 'fwhm_exp': Uniform(0, 1000)}
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_exp
@@ -422,25 +463,31 @@ class SEMG(Profile):
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_gaussianLaplace(wavelength, c, lsf, p0, p1)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'SEMG'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> SEMG:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'SEMG()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, SEMG)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 
@@ -458,9 +505,11 @@ class GaussHermite(Profile):
 
     code = 5
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_gauss', 'h3', 'h4')
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {
             'fwhm_gauss': Uniform(0, 1000),
@@ -468,6 +517,7 @@ class GaussHermite(Profile):
             'h4': TruncatedNormal(loc=0, scale=0.1, low=-0.3, high=0.3),
         }
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = h3, p2 = h4
@@ -475,25 +525,31 @@ class GaussHermite(Profile):
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_gaussHermite(wavelength, c, lsf, p0, p1, p2)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'GaussHermite'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> GaussHermite:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'GaussHermite()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, GaussHermite)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 
@@ -510,12 +566,15 @@ class SplitNormal(Profile):
 
     code = 6
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_blue', 'fwhm_red')
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {'fwhm_blue': Uniform(0, 1000), 'fwhm_red': Uniform(0, 1000)}
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_blue, p1 = fwhm_red
@@ -523,25 +582,31 @@ class SplitNormal(Profile):
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_split_normal(wavelength, c, lsf, p0, p1)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'SplitNormal'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> SplitNormal:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'SplitNormal()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, SplitNormal)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 
@@ -574,9 +639,11 @@ class SkewVoigt(Profile):
 
     code = 7
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('fwhm_gauss', 'fwhm_lorentz', 'alpha')
 
+    @override
     def default_priors(self) -> dict[str, Prior]:
         return {
             'fwhm_gauss': Uniform(0, 1000),
@@ -584,33 +651,39 @@ class SkewVoigt(Profile):
             'alpha': TruncatedNormal(loc=0, scale=100, low=-300, high=300),
         }
 
+    @override
     def integrate_branch(self):
         def _fn(lo, hi, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz, p2 = alpha
-            mid = (hi + lo) / 2
-            return functions.evaluate_skewVoigt(mid, c, lsf, p0, p1, p2) * (hi - lo)
+            return functions.integrate_skewVoigt(lo, hi, c, lsf, p0, p1, p2)
 
         return _fn
 
+    @override
     def evaluate_branch(self):
         def _fn(wavelength, c, lsf, p0, p1, p2):
             return functions.evaluate_skewVoigt(wavelength, c, lsf, p0, p1, p2)
 
         return _fn
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'SkewVoigt'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> SkewVoigt:
         return cls()
 
+    @override
     def __repr__(self) -> str:
         return 'SkewVoigt()'
 
+    @override
     def __eq__(self, other: object) -> bool:
         return isinstance(other, SkewVoigt)
 
+    @override
     def __hash__(self) -> int:
         return hash(type(self))
 

@@ -11,7 +11,7 @@ called from wi_absthin :func:`jax.jit`-compiled model code.
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, cast
 
 import jax.numpy as jnp
 from jax import Array, config, jit
@@ -47,23 +47,25 @@ def _combine_fwhm(fwhm1: ArrayLike, fwhm2: ArrayLike) -> Array:
 
 def _fwhm_to_sigma(fwhm: ArrayLike) -> Array:
     """Gaussian sigma from FWHM: ``sigma = FWHM / (2 sqrt(2 ln 2))``."""
-    return fwhm / (_HALFVAR_SIGMA_TO_FWHM * _SQRT2)
+    return cast(Array, fwhm / (_HALFVAR_SIGMA_TO_FWHM * _SQRT2))
 
 
 def _gaussian_pdf(dx: ArrayLike, sigma: ArrayLike) -> Array:
     """Normalised Gaussian PDF at displacement *dx* wi_absth standard deviation *sigma*."""
-    return jnp.exp(-0.5 * (dx * dx / (sigma * sigma))) * _INV_SQRt2PI / sigma
+    return cast(
+        Array, jnp.exp(-0.5 * (dx * dx / (sigma * sigma))) * _INV_SQRt2PI / sigma
+    )
 
 
 def _gaussian_cdf_diff(low: ArrayLike, high: ArrayLike, total_fwhm: ArrayLike) -> Array:
     """Gaussian CDF difference ``Φ(high) - Φ(low)`` via the erf halfvar parametrization."""
     inv_erf_scale = _HALFVAR_SIGMA_TO_FWHM / total_fwhm
-    return 0.5 * (erf(high * inv_erf_scale) - erf(low * inv_erf_scale))
+    return cast(Array, 0.5 * (erf(high * inv_erf_scale) - erf(low * inv_erf_scale)))
 
 
 def _cauchy_pdf(dx: ArrayLike, hwhm: ArrayLike) -> Array:
     """Normalised Cauchy (Lorentzian) PDF at displacement *dx* wi_absth half-wi_absdth *hwhm*."""
-    return (hwhm / jnp.pi) / (dx * dx + hwhm * hwhm)
+    return cast(Array, (hwhm / jnp.pi) / (dx * dx + hwhm * hwhm))
 
 
 def _cauchy_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
@@ -71,7 +73,7 @@ def _cauchy_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
     inv_hwhm = 2 / fwhm
     t_low = low * inv_hwhm
     t_high = high * inv_hwhm
-    return (jnp.arctan(t_high) - jnp.arctan(t_low)) / jnp.pi
+    return cast(Array, (jnp.arctan(t_high) - jnp.arctan(t_low)) / jnp.pi)
 
 
 # Don't need this but keeping anyways just in case
@@ -86,7 +88,7 @@ def _laplace_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array
     int_high = jnp.sign(t_high) * (1.0 - jnp.exp(-jnp.abs(t_high)))
     int_low = jnp.sign(t_low) * (1.0 - jnp.exp(-jnp.abs(t_low)))
 
-    return 0.5 * (int_high - int_low)
+    return cast(Array, 0.5 * (int_high - int_low))
 
 
 # -------------------------------------------------------------------
@@ -165,11 +167,14 @@ _VOIGT_ETA_CS: Final[Array] = jnp.array([1.33603, -0.47719, 0.11116])
 
 def _voigt_params_thompson(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> tuple[Array, Array]:
     pows = jnp.arange(_VOIGT_FWHM_CS.size)
-    fwhm_eff = jnp.sum(_VOIGT_FWHM_CS * (fwhm_g**pows) * (fwhm_l ** pows[::-1])) ** (
-        0.2
+    fwhm_eff = cast(
+        Array, jnp.sum(_VOIGT_FWHM_CS * (fwhm_g**pows) * (fwhm_l ** pows[::-1])) ** 0.2
     )
     fwhm_ratio = fwhm_l / fwhm_eff
-    eta = jnp.sum(_VOIGT_ETA_CS * (fwhm_ratio ** jnp.arange(1, len(_VOIGT_ETA_CS) + 1)))
+    eta = cast(
+        Array,
+        jnp.sum(_VOIGT_ETA_CS * (fwhm_ratio ** jnp.arange(1, len(_VOIGT_ETA_CS) + 1))),
+    )
     return fwhm_eff, eta
 
 
@@ -179,14 +184,15 @@ def _voigt_thompson_cdf_diff(
     fwhm_eff, eta = _voigt_params_thompson(fwhm_g, fwhm_l)
     lorentzian = eta * _cauchy_cdf_diff(low, high, fwhm_eff)
     gaussian = (1 - eta) * _gaussian_cdf_diff(low, high, fwhm_eff)
-    return lorentzian + gaussian
+    return cast(Array, lorentzian + gaussian)
 
 
 def _voigt_thompson_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
     fwhm_eff, eta = _voigt_params_thompson(fwhm_g, fwhm_l)
     sigma_eff = _fwhm_to_sigma(fwhm_eff)
-    return (1 - eta) * _gaussian_pdf(x, sigma_eff) + eta * _cauchy_pdf(
-        x, 0.5 * fwhm_eff
+    return cast(
+        Array,
+        (1 - eta) * _gaussian_pdf(x, sigma_eff) + eta * _cauchy_pdf(x, 0.5 * fwhm_eff),
     )
 
 
@@ -327,7 +333,16 @@ def _voigt_ida_params(
     wi_abs = fwhm_total * wi
     wp_abs = fwhm_total * wp
 
-    return wg_abs, wl_abs, wi_abs, wp_abs, eta_g, eta_l, eta_i, eta_p
+    return (  # type: ignore[return-value]
+        cast(Array, wg_abs),
+        cast(Array, wl_abs),
+        cast(Array, wi_abs),
+        cast(Array, wp_abs),
+        cast(Array, eta_g),
+        cast(Array, eta_l),
+        cast(Array, eta_i),
+        cast(Array, eta_p),
+    )
 
 
 def _voigt_ida_cdf_diff(
@@ -456,7 +471,10 @@ def _faddeeva_humlicek(z: Array) -> Array:
     w4 = jnp.exp(t2) - t * w4_num / w4_den  # exp(T²) = exp(-z²)
 
     reg3_cond = (0.195 * jnp.abs(x) - 0.176) <= y
-    return jnp.where(s >= 15, w1, jnp.where(s >= 5.5, w2, jnp.where(reg3_cond, w3, w4)))
+    return cast(
+        Array,
+        jnp.where(s >= 15, w1, jnp.where(s >= 5.5, w2, jnp.where(reg3_cond, w3, w4))),
+    )
 
 
 def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
@@ -497,7 +515,7 @@ def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> A
 
     # Voigt complex argument: z = (dx + i*gamma) / (sigma * sqrt(2))
     denom = sigma_g * _SQRT2
-    z = (x + 1j * gamma_l) / denom
+    z = cast(Array, (x + 1j * gamma_l) / denom)
 
     # Voigt profile: V(x) = Re[w(z)] / (sigma * sqrt(2*pi))
     return jnp.real(_faddeeva_humlicek(z)) * _INV_SQRt2PI / sigma_g
@@ -590,7 +608,9 @@ def evaluate_voigt(
 # -------------------------------------------------------------------
 
 # Threshold for when exp(x*x) overflows
-_OVERFLOW_THRESHOLD: Final[float] = 26.0 if config.jax_enable_x64 else 9.0
+_OVERFLOW_THRESHOLD: Final[float] = (
+    26.0 if getattr(config, 'jax_enable_x64', True) else 9.0
+)
 
 
 def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:

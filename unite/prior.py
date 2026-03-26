@@ -348,6 +348,8 @@ def _deserialize_bound(value: float | dict, token_registry: dict | None) -> Boun
             left = _deserialize_bound(value['left'], token_registry)
             right = _deserialize_bound(value['right'], token_registry)
             return _BinOpExpr(value['op'], left, right)
+        msg = f'Unrecognized serialized bound: {value!r}'
+        raise ValueError(msg)
     return float(value)
 
 
@@ -592,7 +594,8 @@ def prior_from_dict(d: dict, token_registry: dict | None = None) -> Prior:
         If the type is not registered.
     """
     cls = _PRIOR_REGISTRY[d['type']]
-    return cls.from_dict(d, token_registry=token_registry)
+    # Concrete subclasses accept token_registry; ABC signature omits it.
+    return cls.from_dict(d, token_registry=token_registry)  # pyright: ignore[reportCallIssue]
 
 
 # -------------------------------------------------------------------

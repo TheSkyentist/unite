@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast, override
 
 import jax
 import jax.numpy as jnp
@@ -501,12 +501,15 @@ class Linear(ContinuumForm):
     """
 
     @property
+    @override
     def is_linear(self) -> bool:
         return True
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('scale', 'angle', 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
@@ -514,6 +517,7 @@ class Linear(ContinuumForm):
             'norm_wav': Fixed(region_center),
         }
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -523,6 +527,7 @@ class Linear(ContinuumForm):
             'norm_wav': (False, wl_unit),
         }
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -533,12 +538,16 @@ class Linear(ContinuumForm):
         lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
         nw = params['norm_wav']
-        return params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
+        return cast(
+            Array, params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
+        )
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Linear'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Linear:
         return cls()
 
@@ -576,6 +585,7 @@ class Polynomial(ContinuumForm):
         self._degree = degree
 
     @property
+    @override
     def is_linear(self) -> bool:
         return True
 
@@ -584,11 +594,13 @@ class Polynomial(ContinuumForm):
         """Polynomial degree."""
         return self._degree
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         if self._degree == 0:
             return ('scale', 'norm_wav')
         return ('scale', *(f'c{i}' for i in range(1, self._degree + 1)), 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._degree + 1):
@@ -596,6 +608,7 @@ class Polynomial(ContinuumForm):
         priors['norm_wav'] = Fixed(region_center)
         return priors
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -605,6 +618,7 @@ class Polynomial(ContinuumForm):
         d['norm_wav'] = (False, wl_unit)
         return d
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -623,6 +637,7 @@ class Polynomial(ContinuumForm):
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm)
         return jnp.polyval(convolved, x)
 
+    @override
     def integrate(
         self,
         low: ArrayLike,
@@ -642,21 +657,26 @@ class Polynomial(ContinuumForm):
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm)
         return _polyint_avg(convolved, x_low, x_high)
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Polynomial', 'degree': self._degree}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Polynomial:
         return cls(degree=d['degree'])
 
+    @override
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
         return self._degree == other._degree  # type: ignore[attr-defined]
 
+    @override
     def __hash__(self) -> int:
         return hash(('Polynomial', self._degree))
 
+    @override
     def __repr__(self) -> str:
         return f'Polynomial(degree={self._degree})'
 
@@ -713,6 +733,7 @@ class Chebyshev(ContinuumForm):
         self._cheb2mono = _cheb_to_mono_matrix(order + 1)
 
     @property
+    @override
     def is_linear(self) -> bool:
         return False
 
@@ -726,11 +747,13 @@ class Chebyshev(ContinuumForm):
         """Stretch factor for the region normalization."""
         return self._stretch
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         if self._order == 0:
             return ('scale', 'norm_wav')
         return ('scale', *(f'c{i}' for i in range(1, self._order + 1)), 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._order + 1):
@@ -738,6 +761,7 @@ class Chebyshev(ContinuumForm):
         priors['norm_wav'] = Fixed(region_center)
         return priors
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -748,6 +772,7 @@ class Chebyshev(ContinuumForm):
         d['norm_wav'] = (False, wl_unit)
         return d
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -776,8 +801,9 @@ class Chebyshev(ContinuumForm):
         shape = jnp.polyval(convolved, x)
         # norm_wav is a scalar — no LSF convolution needed.
         shape_nw = chebval(x_nw, cheb_coeffs)
-        return params['scale'] * shape / shape_nw
+        return cast(Array, params['scale'] * shape / shape_nw)
 
+    @override
     def integrate(
         self,
         low: ArrayLike,
@@ -804,23 +830,28 @@ class Chebyshev(ContinuumForm):
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         shape_avg = _polyint_avg(convolved, x_low, x_high)
         shape_nw = chebval(x_nw, cheb_coeffs)
-        return params['scale'] * shape_avg / shape_nw
+        return cast(Array, params['scale'] * shape_avg / shape_nw)
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Chebyshev', 'order': self._order, 'stretch': self._stretch}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Chebyshev:
         return cls(order=d['order'], stretch=d.get('stretch', 1.0))
 
+    @override
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
         return self._order == other._order and self._stretch == other._stretch  # type: ignore[attr-defined]
 
+    @override
     def __hash__(self) -> int:
         return hash(('Chebyshev', self._order, self._stretch))
 
+    @override
     def __repr__(self) -> str:
         return f'Chebyshev(order={self._order}, stretch={self._stretch})'
 
@@ -872,6 +903,7 @@ class BSpline(ContinuumForm):
         self._n_basis = len(self._knots) + degree + 1
 
     @property
+    @override
     def is_linear(self) -> bool:
         return False
 
@@ -890,11 +922,13 @@ class BSpline(ContinuumForm):
         """Knot vector (in the original units passed at construction)."""
         return self._knots
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         if self._n_basis == 1:
             return ('scale', 'norm_wav')
         return ('scale', *(f'coeff_{i}' for i in range(1, self._n_basis)), 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._n_basis):
@@ -902,6 +936,7 @@ class BSpline(ContinuumForm):
         priors['norm_wav'] = Fixed(region_center)
         return priors
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -912,6 +947,7 @@ class BSpline(ContinuumForm):
         d['norm_wav'] = (False, wl_unit)
         return d
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -943,8 +979,9 @@ class BSpline(ContinuumForm):
         shape_nw = bspline_eval(
             jnp.atleast_1d(u_nw), shape_coeffs, knots_norm, self._degree
         )[0]
-        return params['scale'] * shape / shape_nw
+        return cast(Array, params['scale'] * shape / shape_nw)
 
+    @override
     def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
         """Validate and prepare the knot vector for evaluation within the region bounds."""
         if any((self._knots <= low) or (self._knots >= high)):
@@ -961,6 +998,7 @@ class BSpline(ContinuumForm):
         )
         self._knots_eval = knots_clamped
 
+    @override
     def to_dict(self) -> dict:
         return {
             'type': 'BSpline',
@@ -970,20 +1008,25 @@ class BSpline(ContinuumForm):
         }
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> BSpline:
         return cls(knots=d['knots'] * u.Unit(d['unit']), degree=d.get('degree', 3))
 
+    @override
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return (  # type: ignore[attr-defined]
+        other = cast('BSpline', other)
+        return (
             bool(jnp.array_equal(self._knots, other._knots))
             and self._degree == other._degree
         )
 
+    @override
     def __hash__(self) -> int:
         return hash(('BSpline', tuple(self._knots.to(u.um).value), self._degree))
 
+    @override
     def __repr__(self) -> str:
         return f'BSpline(degree={self._degree}, knots={self._knots})'
 
@@ -1040,6 +1083,7 @@ class Bernstein(ContinuumForm):
         self._bern2mono = _bernstein_to_mono_matrix(degree)
 
     @property
+    @override
     def is_linear(self) -> bool:
         return False
 
@@ -1053,6 +1097,7 @@ class Bernstein(ContinuumForm):
         """Stretch factor for the region normalization."""
         return self._stretch
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         if self._degree == 0:
             return ('scale', 'norm_wav')
@@ -1062,6 +1107,7 @@ class Bernstein(ContinuumForm):
             'norm_wav',
         )
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
         for i in range(1, self._degree + 1):
@@ -1069,6 +1115,7 @@ class Bernstein(ContinuumForm):
         priors['norm_wav'] = Fixed(region_center)
         return priors
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -1079,6 +1126,7 @@ class Bernstein(ContinuumForm):
         d['norm_wav'] = (False, wl_unit)
         return d
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -1116,8 +1164,9 @@ class Bernstein(ContinuumForm):
         shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
 
         # 3. Normalize so that the continuum equals `scale` at `norm_wav`
-        return params['scale'] * shape / shape_nw
+        return cast(Array, params['scale'] * shape / shape_nw)
 
+    @override
     def integrate(
         self,
         low: ArrayLike,
@@ -1151,23 +1200,27 @@ class Bernstein(ContinuumForm):
         shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
         return params['scale'] * shape_avg / shape_nw
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Bernstein', 'degree': self._degree, 'stretch': self._stretch}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Bernstein:
         return cls(degree=d['degree'], stretch=d.get('stretch', 1.0))
 
+    @override
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return (  # type: ignore[attr-defined]
-            self._degree == other._degree and self._stretch == other._stretch
-        )
+        other = cast('Bernstein', other)
+        return self._degree == other._degree and self._stretch == other._stretch
 
+    @override
     def __hash__(self) -> int:
         return hash(('Bernstein', self._degree, self._stretch))
 
+    @override
     def __repr__(self) -> str:
         return f'Bernstein(degree={self._degree}, stretch={self._stretch})'
 
@@ -1196,9 +1249,11 @@ class PowerLaw(ContinuumForm):
       Default prior: ``Fixed(region_center)``.
     """
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('scale', 'beta', 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
@@ -1206,6 +1261,7 @@ class PowerLaw(ContinuumForm):
             'norm_wav': Fixed(region_center),
         }
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -1215,6 +1271,7 @@ class PowerLaw(ContinuumForm):
             'norm_wav': (False, wl_unit),
         }
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -1226,7 +1283,7 @@ class PowerLaw(ContinuumForm):
     ) -> Array:
         # LSF convolution is not supported for PowerLaw.
         nw = params['norm_wav']
-        return params['scale'] * (wavelength / nw) ** params['beta']
+        return cast(Array, params['scale'] * (wavelength / nw) ** params['beta'])
 
     # def integrate(
     #     self,
@@ -1254,10 +1311,12 @@ class PowerLaw(ContinuumForm):
     #     avg = jnp.where(jnp.abs(bp1) > 1e-10, power_avg, log_avg)
     #     return params['scale'] / nw**beta * avg
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'PowerLaw'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> PowerLaw:
         return cls()
 
@@ -1297,9 +1356,11 @@ class Blackbody(ContinuumForm):
     def __init__(self) -> None:
         self._micron_factor: float = 1.0
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('scale', 'temperature', 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
@@ -1307,6 +1368,7 @@ class Blackbody(ContinuumForm):
             'norm_wav': Fixed(region_center),
         }
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -1316,6 +1378,7 @@ class Blackbody(ContinuumForm):
             'norm_wav': (False, wl_unit),
         }
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -1331,14 +1394,17 @@ class Blackbody(ContinuumForm):
         bb = planck_function(wl_um, params['temperature'], nw_um)
         return params['scale'] * bb
 
+    @override
     def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
         """Compute the micron conversion factor for the region's wavelength unit."""
         self._micron_factor = _get_conversion_factor(low.unit, u.um)
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'Blackbody'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> Blackbody:
         return cls()
 
@@ -1378,9 +1444,11 @@ class ModifiedBlackbody(ContinuumForm):
     def __init__(self) -> None:
         self._micron_factor: float = 1.0
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('scale', 'temperature', 'beta', 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
@@ -1389,6 +1457,7 @@ class ModifiedBlackbody(ContinuumForm):
             'norm_wav': Fixed(region_center),
         }
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -1399,6 +1468,7 @@ class ModifiedBlackbody(ContinuumForm):
             'norm_wav': (False, wl_unit),
         }
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -1415,14 +1485,17 @@ class ModifiedBlackbody(ContinuumForm):
         modifier = (wl_um / nw_um) ** params['beta']
         return params['scale'] * bb * modifier
 
+    @override
     def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
         """Compute the micron conversion factor for the region's wavelength unit."""
         self._micron_factor = _get_conversion_factor(low.unit, u.um)
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'ModifiedBlackbody'}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> ModifiedBlackbody:
         return cls()
 
@@ -1490,9 +1563,11 @@ class AttenuatedBlackbody(ContinuumForm):
         """Extinction reference wavelength as an astropy Quantity."""
         return self._lambda_ext
 
+    @override
     def param_names(self) -> tuple[str, ...]:
         return ('scale', 'temperature', 'tau_v', 'alpha', 'norm_wav')
 
+    @override
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
@@ -1502,6 +1577,7 @@ class AttenuatedBlackbody(ContinuumForm):
             'norm_wav': Fixed(region_center),
         }
 
+    @override
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
@@ -1513,6 +1589,7 @@ class AttenuatedBlackbody(ContinuumForm):
             'norm_wav': (False, wl_unit),
         }
 
+    @override
     def evaluate(
         self,
         wavelength: ArrayLike,
@@ -1531,24 +1608,30 @@ class AttenuatedBlackbody(ContinuumForm):
         extinction = jnp.exp(-params['tau_v'] * (ext_data - ext_pivot))
         return params['scale'] * bb * extinction
 
+    @override
     def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
         """Compute the conversion factors for the region's wavelength unit."""
         self._micron_factor = _get_conversion_factor(low.unit, u.um)
 
+    @override
     def to_dict(self) -> dict:
         return {'type': 'AttenuatedBlackbody', 'lambda_ext': self.lambda_ext}
 
     @classmethod
+    @override
     def from_dict(cls, d: dict) -> AttenuatedBlackbody:
         return cls(lambda_ext=d.get('lambda_ext', 0.55))
 
+    @override
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
         return self.lambda_ext == other.lambda_ext  # type: ignore[attr-defined]
 
+    @override
     def __hash__(self) -> int:
         return hash(('AttenuatedBlackbody', self.lambda_ext))
 
+    @override
     def __repr__(self) -> str:
         return f'AttenuatedBlackbody(lambda_ext={self.lambda_ext})'

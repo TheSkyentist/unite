@@ -6,12 +6,15 @@ into user-friendly :class:`~astropy.table.Table` objects and FITS files.
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 from astropy import units as u
 from astropy.io import fits
 from astropy.table import QTable, Table
 
 from unite.compute import evaluate_model
+from unite.continuum.library import ContinuumForm
 from unite.model import ModelArgs
 from unite.prior import Fixed
 
@@ -125,7 +128,7 @@ def make_parameter_table(
     if args.cont_config is not None and args.cont_resolved_params is not None:
         for k, resolved in enumerate(args.cont_resolved_params):
             for pn, tok in resolved.items():
-                cont_param_lookup[tok.name] = (k, pn)
+                cont_param_lookup[cast(str, tok.name)] = (k, pn)
 
     def _to_column(pname: str, arr: np.ndarray) -> np.ndarray | u.Quantity:
         """Convert a raw sample array to a physical Quantity where possible."""
@@ -140,7 +143,9 @@ def make_parameter_table(
             return arr  # dimensionless
         if pname in cont_param_lookup:
             k, pn = cont_param_lookup[pname]
+            assert args.cont_config is not None
             region = args.cont_config[k]
+            assert isinstance(region.form, ContinuumForm)
             pu = region.form.param_units(flux_unit, region._unit)
             apply_cs, phys_unit = pu.get(pn, (False, None))
             phys = arr * cont_scale_0 if apply_cs else arr
@@ -161,7 +166,7 @@ def make_parameter_table(
         prior = args.all_priors[pname]
         if pct_arr is not None:
             if isinstance(prior, Fixed):
-                val = float(prior.value)
+                val = float(prior.resolved_value({}))
                 table[pname] = _to_column(pname, np.full(len(pct_arr), val))
             else:
                 arr = np.asarray(samples[pname])
@@ -169,7 +174,9 @@ def make_parameter_table(
         else:
             n_samp = _get_n_samples(samples)
             if isinstance(prior, Fixed):
-                table[pname] = _to_column(pname, np.full(n_samp, float(prior.value)))
+                table[pname] = _to_column(
+                    pname, np.full(n_samp, float(prior.resolved_value({})))
+                )
             else:
                 table[pname] = _to_column(pname, np.asarray(samples[pname]))
 
@@ -221,12 +228,12 @@ def make_parameter_table(
     # Add metadata (short keys for FITS compatibility).
     lsq = args.line_scale_quantity
     csq = args.continuum_scale_quantity
-    table.meta['LFLXSCL'] = float(lsq.value) if lsq is not None else None
-    table.meta['LFLXUNT'] = str(lsq.unit) if lsq is not None else None
-    table.meta['CNTSCL'] = float(csq.value) if csq is not None else None
-    table.meta['CNTUNT'] = str(csq.unit) if csq is not None else None
-    table.meta['NRMFCTRS'] = list(args.norm_factors)
-    table.meta['ZSYS'] = args.redshift
+    table.meta['LFLXSCL'] = float(lsq.value) if lsq is not None else None  # pyright: ignore[reportOptionalSubscript]
+    table.meta['LFLXUNT'] = str(lsq.unit) if lsq is not None else None  # pyright: ignore[reportOptionalSubscript]
+    table.meta['CNTSCL'] = float(csq.value) if csq is not None else None  # pyright: ignore[reportOptionalSubscript]
+    table.meta['CNTUNT'] = str(csq.unit) if csq is not None else None  # pyright: ignore[reportOptionalSubscript]
+    table.meta['NRMFCTRS'] = list(args.norm_factors)  # pyright: ignore[reportOptionalSubscript]
+    table.meta['ZSYS'] = args.redshift  # pyright: ignore[reportOptionalSubscript]
 
     return table
 
@@ -267,7 +274,11 @@ def make_spectra_tables(
     for i, (pred, spectrum) in enumerate(zip(predictions, args.spectra, strict=True)):
         # Build trim mask: keep only pixels within any continuum region.
         wl = pred.wavelength
-        if args.cont_config is not None and args.cont_low is not None:
+        if (
+            args.cont_config is not None
+            and args.cont_low is not None
+            and args.cont_high is not None
+        ):
             z = args.redshift
             inv_s2c = 1.0 / args.spec_to_canonical[i]
             pixel_mask = np.zeros(len(wl), dtype=bool)
@@ -324,8 +335,8 @@ def make_spectra_tables(
             np.asarray(spectrum.scaled_error)[pixel_mask], unit=spec_flux_unit
         )
 
-        t.meta['SPECNAME'] = spectrum.name
-        t.meta['NORMFAC'] = float(args.norm_factors[i])
+        t.meta['SPECNAME'] = spectrum.name  # pyright: ignore[reportOptionalSubscript]
+        t.meta['NORMFAC'] = float(args.norm_factors[i])  # pyright: ignore[reportOptionalSubscript]
 
         if insert_nan and region_bounds:
             t = _insert_nan_between_regions(t, region_bounds)
@@ -381,7 +392,7 @@ def make_hdul(
         primary.header['CNTUNT'] = (str(csq.unit), 'Continuum flux scale unit')
     primary.header['NSPEC'] = (len(args.spectra), 'Number of spectra')
 
-    hdus = [primary]
+    hdus: list[fits.hdu.base._BaseHDU] = [primary]
 
     # Parameter table.
     param_hdu = fits.BinTableHDU(param_table, name='PARAMETERS')
@@ -389,7 +400,8 @@ def make_hdul(
 
     # Per-spectrum tables.
     for table in spectra_tables:
-        name = table.meta.get('SPECNAME', 'SPECTRUM')
+        meta = table.meta
+        name = meta.get('SPECNAME', 'SPECTRUM') if meta is not None else 'SPECTRUM'
         spec_hdu = fits.BinTableHDU(table, name=name.upper())
         hdus.append(spec_hdu)
 
@@ -527,16 +539,16 @@ def _compute_rew_columns(
     is_absorption = np.asarray(cm.is_absorption)
     has_absorption = bool(np.any(is_absorption))
 
+    def _prior_to_samples(n: str) -> np.ndarray:
+        """Return (n_samples,) array for parameter n, from Fixed value or samples."""
+        p = args.all_priors[n]
+        if isinstance(p, Fixed):
+            return np.full(n_samples, float(p.resolved_value({})))
+        return np.asarray(samples[n])
+
     # --- flux per line: (n_samples, n_lines) ---
     if cm.flux_names:
-        flux_vecs = np.column_stack(
-            [
-                np.full(n_samples, float(args.all_priors[n].value))
-                if isinstance(args.all_priors[n], Fixed)
-                else np.asarray(samples[n])
-                for n in cm.flux_names
-            ]
-        )
+        flux_vecs = np.column_stack([_prior_to_samples(n) for n in cm.flux_names])
         flux_per_line = (
             flux_vecs @ np.asarray(cm.flux_matrix) * np.asarray(cm.strengths)
         )
@@ -545,14 +557,7 @@ def _compute_rew_columns(
 
     # --- redshift per line: (n_samples, n_lines) ---
     if cm.z_names:
-        z_vecs = np.column_stack(
-            [
-                np.full(n_samples, float(args.all_priors[n].value))
-                if isinstance(args.all_priors[n], Fixed)
-                else np.asarray(samples[n])
-                for n in cm.z_names
-            ]
-        )
+        z_vecs = np.column_stack([_prior_to_samples(n) for n in cm.z_names])
         z_per_line = z_vecs @ np.asarray(cm.z_matrix)
     else:
         z_per_line = np.zeros((n_samples, n_lines))
@@ -565,29 +570,47 @@ def _compute_rew_columns(
 
     result: dict[str, np.ndarray] = {}
 
+    # These are guaranteed not None because _compute_rew_columns returns {} above
+    # when either is None.  Rebind to non-Optional locals so closures see narrow types.
+    _cont_config = args.cont_config
+    _cont_resolved_params = args.cont_resolved_params
+    _cont_low = args.cont_low
+    _cont_high = args.cont_high
+    _cont_center = args.cont_center
+    _cont_nw_conv = args.cont_nw_conv
+    _cont_forms = args.cont_forms
+    assert _cont_config is not None
+    assert _cont_resolved_params is not None
+    assert _cont_low is not None
+    assert _cont_high is not None
+    assert _cont_center is not None
+    assert _cont_nw_conv is not None
+    assert _cont_forms is not None
+
     # --- Helper: evaluate total continuum at a point, summing all covering regions ---
     def _cont_at_point(obs_wl: np.ndarray) -> np.ndarray:
         """Total un-scaled continuum at obs_wl (n_samples,) → (n_samples,)."""
         total = np.zeros(n_samples)
-        for k in range(len(args.cont_config)):
-            obs_low = float(args.cont_low[k]) * (1.0 + z_sys)
-            obs_high = float(args.cont_high[k]) * (1.0 + z_sys)
-            obs_center = float(args.cont_center[k]) * (1.0 + z_sys)
+        for k in range(len(_cont_config)):
+            obs_low = float(_cont_low[k]) * (1.0 + z_sys)
+            obs_high = float(_cont_high[k]) * (1.0 + z_sys)
+            obs_center = float(_cont_center[k]) * (1.0 + z_sys)
             median_wl = float(np.median(obs_wl))
             if median_wl < obs_low or median_wl > obs_high:
                 continue
             cont_p: dict[str, np.ndarray] = {}
-            for pn, tok in args.cont_resolved_params[k].items():
-                prior = args.all_priors[tok.name]
+            for pn, tok in _cont_resolved_params[k].items():
+                tok_name = cast(str, tok.name)
+                prior = args.all_priors[tok_name]
                 val: np.ndarray = (
-                    np.full(n_samples, float(prior.value))
+                    np.full(n_samples, float(prior.resolved_value({})))
                     if isinstance(prior, Fixed)
-                    else np.asarray(samples[tok.name])
+                    else np.asarray(samples[tok_name])
                 )
                 if pn == 'norm_wav':
-                    val = val * args.cont_nw_conv[k] * (1.0 + z_sys)
+                    val = val * _cont_nw_conv[k] * (1.0 + z_sys)
                 cont_p[pn] = val
-            form = args.cont_forms[k]
+            form = _cont_forms[k]
             total = total + np.asarray(
                 form.evaluate(obs_wl, obs_center, cont_p, obs_low, obs_high)
             )
@@ -618,6 +641,7 @@ def _compute_rew_columns(
             if best_spec_idx is None:
                 continue
 
+            assert predictions is not None
             pred = predictions[best_spec_idx]
             if label not in pred.lines:
                 continue

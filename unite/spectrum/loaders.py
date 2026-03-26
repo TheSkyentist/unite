@@ -11,6 +11,7 @@ All loaders are re-exported from :mod:`unite.spectrum`::
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from astropy import units as u
@@ -105,13 +106,15 @@ def from_DJA(
 
     δλ = np.diff(λ) / 2
     mid = λ[:-1] + δλ
-    edges = np.concatenate([λ[0:1] - δλ[0:1], mid, λ[-2:-1] + δλ[-2:-1]])
-    low = edges[:-1]
-    high = edges[1:]
+    edges = cast(
+        u.Quantity, np.concatenate([λ[0:1] - δλ[0:1], mid, λ[-2:-1] + δλ[-2:-1]])
+    )
+    low = cast(u.Quantity, edges[:-1])
+    high = cast(u.Quantity, edges[1:])
 
     mask = ~spec['flux'].mask
-    low = low[mask]
-    high = high[mask]
+    low = cast(u.Quantity, low[mask])
+    high = cast(u.Quantity, high[mask])
     fλ = fλ[mask]
     eλ = eλ[mask]
 
@@ -197,15 +200,17 @@ def from_sdss_fits(
     else:
         good_pixels = ivar > 0
 
-    low = low[good_pixels]
-    high = high[good_pixels]
-    flux = flux[good_pixels]
-    error = error[good_pixels]
+    low = cast(u.Quantity, low[good_pixels])  # type: ignore[index]
+    high = cast(u.Quantity, high[good_pixels])  # type: ignore[index]
+    flux = cast(u.Quantity, flux[good_pixels])  # type: ignore[index]
+    error = cast(u.Quantity, error[good_pixels])  # type: ignore[index]
 
     wdisp = np.asarray(data['wdisp'], dtype=float)
     disperser._wavelength_grid = jnp.asarray(wavelength, dtype=float)
     disperser._R_grid = jnp.asarray(wavelength / (2.355 * wdisp), dtype=float)
-    disperser._dlam_dpix_grid = jnp.gradient(disperser._wavelength_grid)
+    disperser._dlam_dpix_grid = cast(
+        jnp.ndarray, jnp.gradient(disperser._wavelength_grid)
+    )
 
     return Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name=name

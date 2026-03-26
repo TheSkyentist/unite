@@ -69,6 +69,7 @@ from unite.instrument.nirspec.disperser import (
     G395H,
     G395M,
     PRISM,
+    NIRSpecDisperser,
 )
 from unite.instrument.sdss.disperser import SDSSDisperser
 from unite.prior import Parameter, prior_from_dict
@@ -141,11 +142,11 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
         raise TypeError(msg)
 
     d: dict = {'type': cls_name, 'name': disperser.name}
-    if cls_name == 'NIRSpecDisperser':
+    if isinstance(disperser, NIRSpecDisperser):
         d['grating'] = disperser.grating
         d['r_source'] = disperser.r_source
     elif hasattr(disperser, 'r_source'):
-        d['r_source'] = disperser.r_source
+        d['r_source'] = getattr(disperser, 'r_source')
 
     # CalibParam references by token name (or null for fixed).
     for attr in ('r_scale', 'flux_scale', 'pix_offset'):
