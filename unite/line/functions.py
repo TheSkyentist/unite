@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Final, cast
 
 import jax.numpy as jnp
-from jax import Array, config, jit
+from jax import Array, config, jit, lax
 from jax.scipy.special import erf, erfc
 from jax.typing import ArrayLike
 
@@ -35,6 +35,30 @@ _SQRT2: Final[Array] = jnp.sqrt(2.0)
 _SQRT6: Final[Array] = jnp.sqrt(6.0)
 _SQRt24: Final[Array] = jnp.sqrt(24.0)
 
+# 20-point Gauss-Legendre nodes transformed to [0, 1] and weights scaled by 1/2.
+# Used by _owens_t for vectorized quadrature (no loop).
+# nodes: t_i = (s_i + 1) / 2 where s_i are the GL nodes on [-1, 1]
+# weights: w_i / 2 (Jacobian for the [-1,1] → [0,1] substitution)
+_OWENS_T_NODES: Final[Array] = 0.5 * (
+    jnp.array([
+        -0.9931285991850949, -0.9639719272779138, -0.9122344282513259,
+        -0.8391169718222188, -0.7463064833401507, -0.6360536807265150,
+        -0.5108670019508271, -0.3737060887154195, -0.2277858511416451,
+        -0.0765265211334973,  0.0765265211334973,  0.2277858511416451,
+         0.3737060887154195,  0.5108670019508271,  0.6360536807265150,
+         0.7463064833401507,  0.8391169718222188,  0.9122344282513259,
+         0.9639719272779138,  0.9931285991850949,
+    ])
+    + 1.0
+)
+_OWENS_T_WEIGHTS: Final[Array] = 0.5 * jnp.array([
+    0.0176140071391521, 0.0406014298003869, 0.0626720483341091, 0.0832767415767047,
+    0.1019301198172404, 0.1181945319615184, 0.1316886384491766, 0.1420961093183820,
+    0.1491729864726037, 0.1527533871307258, 0.1527533871307258, 0.1491729864726037,
+    0.1420961093183820, 0.1316886384491766, 0.1181945319615184, 0.1019301198172404,
+    0.0832767415767047, 0.0626720483341091, 0.0406014298003869, 0.0176140071391521,
+])
+
 # -------------------------------------------------------------------
 # Private helpers
 # -------------------------------------------------------------------
@@ -50,10 +74,12 @@ def _fwhm_to_sigma(fwhm: ArrayLike) -> Array:
     return cast(Array, fwhm / (_HALFVAR_SIGMA_TO_FWHM * _SQRT2))
 
 
-def _gaussian_pdf(dx: ArrayLike, sigma: ArrayLike) -> Array:
+def _gaussian_pdf(x: ArrayLike, fwhm: ArrayLike) -> Array:
     """Normalised Gaussian PDF at displacement *dx* wi_absth standard deviation *sigma*."""
+    inv_sigma = 1 / _fwhm_to_sigma(fwhm)
     return cast(
-        Array, jnp.exp(-0.5 * (dx * dx / (sigma * sigma))) * _INV_SQRt2PI / sigma
+        Array,
+        jnp.exp(-0.5 * (x * x * inv_sigma * inv_sigma)) * _INV_SQRt2PI * inv_sigma,
     )
 
 
@@ -63,9 +89,9 @@ def _gaussian_cdf_diff(low: ArrayLike, high: ArrayLike, total_fwhm: ArrayLike) -
     return cast(Array, 0.5 * (erf(high * inv_erf_scale) - erf(low * inv_erf_scale)))
 
 
-def _cauchy_pdf(dx: ArrayLike, hwhm: ArrayLike) -> Array:
+def _cauchy_pdf(x: ArrayLike, hwhm: ArrayLike) -> Array:
     """Normalised Cauchy (Lorentzian) PDF at displacement *dx* wi_absth half-wi_absdth *hwhm*."""
-    return cast(Array, (hwhm / jnp.pi) / (dx * dx + hwhm * hwhm))
+    return cast(Array, (hwhm / jnp.pi) / (x * x + hwhm * hwhm))
 
 
 def _cauchy_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
@@ -89,6 +115,62 @@ def _laplace_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array
     int_low = jnp.sign(t_low) * (1.0 - jnp.exp(-jnp.abs(t_low)))
 
     return cast(Array, 0.5 * (int_high - int_low))
+
+
+def _skew(x: ArrayLike, alpha: ArrayLike, scale: ArrayLike) -> Array:
+    return 1 + erf(alpha * x / scale)
+
+
+def _skew_normal_pdf(x: ArrayLike, fwhm: ArrayLike, alpha: ArrayLike) -> Array:
+    """Normalised skew-normal PDF at displacement *dx* wi_absth FWHM *fwhm* and skew *alpha*."""
+    return _gaussian_pdf(x, fwhm) * _skew(x, alpha, _fwhm_to_sigma(fwhm))
+
+
+def _owens_t(h: ArrayLike, a: ArrayLike) -> Array:
+    r"""Owen's T function via 20-point Gauss-Legendre quadrature.
+
+    Uses the trigonometric substitution :math:`x = \tan\theta` to map the
+    integration domain :math:`[0, |a|]` to :math:`[0, \arctan|a|] \subset [0, \pi/2)`:
+
+    .. math::
+
+        T(h, a) = \frac{1}{2\pi} \int_0^{\arctan|a|}
+                  \exp\!\left(-\frac{h^2}{2\cos^2\!\theta}\right) d\theta
+
+    The domain is always bounded by :math:`\pi/2` regardless of :math:`|a|`, so
+    the 20 GL nodes are distributed uniformly over the function's natural support,
+    giving near-machine-precision accuracy for any finite :math:`h` and :math:`a`
+    without branching or loops.  Sign is restored via :math:`T(h,-a) = -T(h,a)`.
+
+    Parameters
+    ----------
+    h : ArrayLike
+        Real-valued input.
+    a : ArrayLike
+        Real-valued input.
+
+    Returns
+    -------
+    Array
+        Value of Owen's T function.
+    """
+    h = jnp.asarray(h)
+    a = jnp.asarray(a)
+    theta_max = jnp.arctan(jnp.abs(a))                               # ∈ [0, π/2)
+    theta = theta_max[..., None] * _OWENS_T_NODES                    # (..., 20)
+    cos2 = jnp.cos(theta) ** 2
+    integrand = jnp.exp(-0.5 * h[..., None] ** 2 / cos2)            # (..., 20)
+    result = theta_max / (2.0 * jnp.pi) * jnp.sum(_OWENS_T_WEIGHTS * integrand, axis=-1)
+    return cast(Array, jnp.where(a < 0.0, -result, result))
+
+
+def _skew_normal_cdf_diff(
+    low: ArrayLike, high: ArrayLike, fwhm: ArrayLike, alpha: ArrayLike
+) -> Array:
+    """Skew-normal CDF difference ``F(high) - F(low)``."""
+    sigma = _fwhm_to_sigma(fwhm)
+    cdf = _gaussian_cdf_diff(low, high, fwhm)
+    return cdf + 2 * (_owens_t(high / sigma, alpha) - _owens_t(low / sigma, alpha))
 
 
 # -------------------------------------------------------------------
@@ -151,7 +233,7 @@ def evaluate_gaussian(
         Normalised profile value at each wavelength point.
     """
     total_fwhm = _combine_fwhm(lsf_fwhm, fwhm)
-    return _gaussian_pdf(wavelength - center, _fwhm_to_sigma(total_fwhm))
+    return _gaussian_pdf(wavelength - center, total_fwhm)
 
 
 # -------------------------------------------------------------------
@@ -189,10 +271,9 @@ def _voigt_thompson_cdf_diff(
 
 def _voigt_thompson_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
     fwhm_eff, eta = _voigt_params_thompson(fwhm_g, fwhm_l)
-    sigma_eff = _fwhm_to_sigma(fwhm_eff)
     return cast(
         Array,
-        (1 - eta) * _gaussian_pdf(x, sigma_eff) + eta * _cauchy_pdf(x, 0.5 * fwhm_eff),
+        (1 - eta) * _gaussian_pdf(x, fwhm_eff) + eta * _cauchy_pdf(x, 0.5 * fwhm_eff),
     )
 
 
@@ -392,7 +473,7 @@ def _voigt_ida_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
     )
     dx = x
 
-    gauss = eta_g * _gaussian_pdf(dx, _fwhm_to_sigma(wg_abs))
+    gauss = eta_g * _gaussian_pdf(dx, wg_abs)
     lorentz = eta_l * _cauchy_pdf(dx, 0.5 * wl_abs)
     irrat = eta_i * _f_l_pdf(dx, wi_abs * _IRRAT_FWHM_TO_GAMMA)
     hyper = eta_p * _f_p_pdf(dx, wp_abs * _HYPER_FWHM_TO_GAMMA)
@@ -748,7 +829,9 @@ def evaluate_gaussianLaplace(
 
     # Pure Gaussian limit when exponential component is negligible
     return jnp.where(
-        a > _OVERFLOW_THRESHOLD, _gaussian_pdf(wavelength - center, sigma), result
+        a > _OVERFLOW_THRESHOLD,
+        _gaussian_pdf(wavelength - center, fwhm_g_total),
+        result,
     )
 
 
@@ -1001,11 +1084,11 @@ def evaluate_gaussHermite(
     c4 = h4 * r3 * r / _SQRt24
 
     # Standard coordinate
-    y = (wavelength - center) / sigma_tot
-    gauss_pdf = _gaussian_pdf(wavelength - center, sigma_tot)
+    gauss_pdf = _gaussian_pdf(wavelength - center, fwhm_tot)
 
     # Hermite polynomial corrections (probabilists' convention)
     # He_3(y) = y^3 - 3y,  He_4(y) = y^4 - 6y^2 + 3
+    y = (wavelength - center) / sigma_tot
     y3 = y * y * y
     he3 = y3 - 3 * y
     he4 = y * y3 - 6 * y * y + 3
@@ -1013,94 +1096,78 @@ def evaluate_gaussHermite(
 
 
 # -------------------------------------------------------------------
-# Skew Gaussian
+# Skew Gaussian kernel
 # -------------------------------------------------------------------
 
 
-# def _owens_t(h, a):
-#     """
-#     Owen's T function T(h, a) implemented in JAX.
-
-#     Parameters
-#     ----------
-#     h : array_like
-#         Real-valued input.
-#     a : array_like
-#         Real-valued input.
-
-#     Returns
-#     -------
-#     T : array_like
-#         Value of Owen's T function.
-#     """
-#     h = jnp.asarray(h)
-#     a = jnp.asarray(a)
-
-#     # Constants
-#     inv_2pi = 1.0 / (2.0 * jnp.pi)
-
-#     # Handle special cases
-#     def case_a_zero(_):
-#         return jnp.zeros_like(h)
-
-#     def case_h_zero(_):
-#         return jnp.arctan(a) * inv_2pi
-
-#     def general_case(_):
-#         abs_h = jnp.abs(h)
-#         abs_a = jnp.abs(a)
-
-#         # Use symmetry: T(-h, a) = T(h, a)
-#         h0 = abs_h
-#         a0 = abs_a
-
-#         # Series expansion for small a
-#         def series_small_a(h, a):
-#             # Power series expansion
-#             max_iter = 50
-
-#             def body_fun(i, val):
-#                 term, summation = val
-#                 new_term = term * (-a * a * h * h) / (2 * i + 1)
-#                 summation = summation + new_term / (2 * i + 1)
-#                 return (new_term, summation)
-
-#             term0 = a * jnp.exp(-0.5 * h * h)
-#             sum0 = term0
-
-#             _, summation = lax.fori_loop(1, max_iter, body_fun, (term0, sum0))
-
-#             return summation * inv_2pi
-
-#         # Approximation using Gaussian CDF relation
-#         def asymptotic_large_a(h, a):
-#             # T(h, a) ≈ 0.5 * Φ(h) * (1 - Φ(a h))
-#             phi_h = 0.5 * (1.0 + erf(h / jnp.sqrt(2.0)))
-#             phi_ah = 0.5 * (1.0 + erf(a * h / jnp.sqrt(2.0)))
-#             return 0.5 * phi_h * (1.0 - phi_ah)
-
-#         # Switch strategy
-#         use_series = a0 <= 1.0
-
-#         result = jnp.where(
-#             use_series, series_small_a(h0, a0), asymptotic_large_a(h0, a0)
-#         )
-
-#         # Restore sign symmetry: T(h, -a) = -T(h, a)
-#         result = jnp.where(a < 0, -result, result)
-
-#         return result
-
-#     return lax.cond(
-#         jnp.all(a == 0),
-#         case_a_zero,
-#         lambda _: lax.cond(jnp.all(h == 0), case_h_zero, general_case, operand=None),
-#         operand=None,
-#     )
+def _alpha_gauss(alpha: ArrayLike, fwhm_lsf: ArrayLike, fwhm_tot: ArrayLike) -> Array:
+    """Effective skewness after convolving a skew Gaussian with a Gaussian LSF."""
+    return alpha * fwhm_tot / jnp.sqrt(fwhm_tot**2 + 2 * alpha**2 * fwhm_lsf**2)
 
 
-def _skew(x: ArrayLike, alpha: ArrayLike, scale: ArrayLike) -> Array:
-    return 1 + erf(alpha * x / scale)
+@jit
+def integrate_skewGaussian(
+    low: ArrayLike,
+    high: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm: ArrayLike,
+    alpha: ArrayLike,
+) -> Array:
+    """Integrate a skew Gaussian over wavelength bins.
+
+    Parameters
+    ----------
+    low : ArrayLike
+        Lower bin edges.
+    high : ArrayLike
+        Upper bin edges.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm : ArrayLike
+        Intrinsic Gaussian FWHM.
+
+    Returns
+    -------
+    jnp.ndarray
+        Integrated fraction per bin.
+    """
+    fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm)
+    alpha_gauss = _alpha_gauss(alpha, lsf_fwhm, fwhm_tot)
+    return _skew_normal_cdf_diff(low - center, high - center, fwhm_tot, alpha_gauss)
+
+
+@jit
+def evaluate_skewGaussian(
+    wavelength: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm: ArrayLike,
+    alpha: ArrayLike,
+) -> Array:
+    """Evaluate a skew Gaussian profile at wavelength points.
+
+    Parameters
+    ----------
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm : ArrayLike
+        Intrinsic Gaussian FWHM.
+
+    Returns
+    -------
+    jnp.ndarray
+        Normalised profile value at each wavelength point.
+    """
+    fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm)
+    alpha_gauss = _alpha_gauss(alpha, lsf_fwhm, fwhm_tot)
+    return _skew_normal_pdf(wavelength - center, fwhm_tot, alpha_gauss)
 
 
 # -------------------------------------------------------------------
@@ -1133,7 +1200,7 @@ def _alpha_eff(
     gamma = fwhm_l / 2
 
     w0 = _combine_fwhm(fwhm_g, fwhm_l)
-    w0p = _combine_fwhm(_combine_fwhm(fwhm_g, lsf_fwhm), fwhm_l)
+    w0p = _combine_fwhm(w0, lsf_fwhm)
 
     # Gaussian-body exact formula
     a_gauss = alpha * w0 / jnp.sqrt(w0p**2 + 2 * alpha**2 * sigma_lsf**2)

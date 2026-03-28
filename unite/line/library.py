@@ -688,6 +688,79 @@ class SkewVoigt(Profile):
         return hash(type(self))
 
 
+@_register
+class SkewGaussian(Profile):
+    r"""Skew-normal (skew Gaussian) line profile.
+
+    A Gaussian modified by a skew factor
+    ``[1 + erf(alpha * (x - c) / sigma_tot)]`` where ``sigma_tot`` is
+    the standard deviation of the LSF-convolved Gaussian component.
+
+    Convolution with the Gaussian LSF rescales the skewness parameter to
+
+    .. math::
+
+        \alpha_\text{eff} = \frac{\alpha\,\sigma_\text{tot}}
+            {\sqrt{\sigma_\text{tot}^2 + \alpha^2\,\sigma_\text{lsf}^2}}
+
+    where :math:`\sigma_\text{tot} = \sqrt{\sigma^2 + \sigma_\text{lsf}^2}`.
+    Unlike :class:`SkewVoigt`, this profile is analytically integrated via
+    the Owen's T function, so no approximation is made for the skew correction.
+
+    Requires two parameters: ``fwhm`` for the Gaussian width and ``alpha``
+    for the skewness (positive values shift flux redward).
+    """
+
+    code = 8
+
+    @override
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm', 'alpha')
+
+    @override
+    def default_priors(self) -> dict[str, Prior]:
+        return {
+            'fwhm': Uniform(0, 1000),
+            'alpha': TruncatedNormal(loc=0, scale=100, low=-300, high=300),
+        }
+
+    @override
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm, p1 = alpha
+            return functions.integrate_skewGaussian(lo, hi, c, lsf, p0, p1)
+
+        return _fn
+
+    @override
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return functions.evaluate_skewGaussian(wavelength, c, lsf, p0, p1)
+
+        return _fn
+
+    @override
+    def to_dict(self) -> dict:
+        return {'type': 'SkewGaussian'}
+
+    @classmethod
+    @override
+    def from_dict(cls, d: dict) -> SkewGaussian:
+        return cls()
+
+    @override
+    def __repr__(self) -> str:
+        return 'SkewGaussian()'
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, SkewGaussian)
+
+    @override
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
 _PROFILE_ALIASES: dict[str, Profile] = {
     'gaussian': Gaussian(),
     'normal': Gaussian(),
@@ -705,6 +778,8 @@ _PROFILE_ALIASES: dict[str, Profile] = {
     'two-sided': SplitNormal(),
     'skew-voigt': SkewVoigt(),
     'skewvoigt': SkewVoigt(),
+    'skew-gaussian': SkewGaussian(),
+    'skewgaussian': SkewGaussian(),
 }
 
 

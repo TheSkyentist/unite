@@ -9,6 +9,7 @@ from unite.line.library import (
     Gaussian,
     Laplace,
     PseudoVoigt,
+    SkewGaussian,
     SkewVoigt,
     SplitNormal,
     profile_from_dict,
@@ -28,6 +29,7 @@ _ALL_PROFILES = [
     GaussHermite(),
     SplitNormal(),
     SkewVoigt(),
+    SkewGaussian(),
 ]
 
 
@@ -56,6 +58,7 @@ _ALL_PROFILE_CLASSES = [
     GaussHermite,
     SplitNormal,
     SkewVoigt,
+    SkewGaussian,
 ]
 
 
