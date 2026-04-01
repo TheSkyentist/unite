@@ -95,6 +95,15 @@ build = "python -m build"
 test = "pytest"
 test-cov = "pytest --cov=unite --cov-report=term-missing --cov-report=xml:coverage.xml"
 
+[tool.pixi.feature.test-py312.dependencies]
+python = ">=3.12,<3.13"
+
+[tool.pixi.feature.test-py313.dependencies]
+python = ">=3.13,<3.14"
+
+[tool.pixi.feature.test-py314.dependencies]
+python = ">=3.14,<3.15"
+
 [tool.pixi.feature.test-lowest]
 dependencies = { python = ">=3.12.0,<3.13" }
 tasks = { test-lowest = "pytest" }
@@ -110,7 +119,9 @@ docs-clean = "rm -rf docs/_build docs/auto_tutorials docs/sg_execution_times.rst
 default = {features = [], solve-group = "default"}
 dev = {features = ["dev"], solve-group = "default"}
 build = {features = ["build"], solve-group = "build"}
-test = {features = ["test"], solve-group = "default"}
+test-py312 = {features = ["test", "test-py312"], solve-group = "py312"}
+test-py313 = {features = ["test", "test-py313"], solve-group = "py313"}
+test-py314 = {features = ["test", "test-py314"], solve-group = "py314"}
 test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
 docs = {features = ["docs"], solve-group = "default"}
 
