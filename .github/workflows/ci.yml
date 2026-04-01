@@ -79,7 +79,7 @@ jobs:
           fail_ci_if_error: false
 
   test-lowest:
-    name: Test (lowest deps, Python 3.12)
+    name: Test (Lowest Dependencies)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
