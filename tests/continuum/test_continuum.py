@@ -691,7 +691,7 @@ class TestSerializationRoundTrip:
         assert d['regions'][0]['wavelength_unit'] == str(u.AA)
         config2 = ContinuumConfiguration.from_dict(d)
         assert config2[0].low == pytest.approx(4600.0)
-        assert config2[0]._unit.is_equivalent(u.AA)
+        assert config2[0].unit.is_equivalent(u.AA)
 
     def test_powerlaw_norm_wav_param_roundtrip(self):
         nw = NormWavelength('my_nw', prior=Fixed(3.5))
