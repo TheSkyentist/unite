@@ -223,11 +223,11 @@ class TestMakeSpectraTables:
     """Tests for make_spectra_tables."""
 
     def test_full_mode(self, simple_setup):
-        """Returns list of one Table with correct columns and metadata."""
+        """Returns dict of one Table with correct columns and metadata."""
         samples, args = simple_setup
         tables = make_spectra_tables(samples, args)
-        assert isinstance(tables, list) and len(tables) == 1
-        t = tables[0]
+        assert isinstance(tables, dict) and len(tables) == 1
+        t = tables['test']
         assert isinstance(t, Table)
         for col in (
             'wavelength',
@@ -243,7 +243,7 @@ class TestMakeSpectraTables:
     def test_percentiles_mode(self, simple_setup):
         """Percentile mode: model_total has shape (n_pix, n_percentiles)."""
         samples, args = simple_setup
-        t = make_spectra_tables(samples, args, percentiles=_PERCENTILES)[0]
+        t = make_spectra_tables(samples, args, percentiles=_PERCENTILES)['test']
         assert t['model_total'].shape == (len(t['wavelength']), 3)
 
 
@@ -261,6 +261,58 @@ class TestMakeHDUL:
         assert hdul[1].name == 'PARAMETERS'
         assert isinstance(hdul[1], fits.BinTableHDU)
         assert isinstance(hdul[2], fits.BinTableHDU)
+
+
+class TestMakeSpectraTablesReturnHdul:
+    """Tests for make_spectra_tables(return_hdul=True)."""
+
+    def test_returns_hdul(self, simple_setup):
+        """return_hdul=True returns an HDUList."""
+        samples, args = simple_setup
+        result = make_spectra_tables(samples, args, return_hdul=True)
+        assert isinstance(result, fits.HDUList)
+
+    def test_structure(self, simple_setup):
+        """HDUList: PrimaryHDU + one BinTableHDU per spectrum."""
+        samples, args = simple_setup
+        hdul = make_spectra_tables(samples, args, return_hdul=True)
+        assert isinstance(hdul[0], fits.PrimaryHDU)
+        assert len(hdul) == 2  # primary + 1 spectrum
+        assert isinstance(hdul[1], fits.BinTableHDU)
+
+    def test_extension_names(self, simple_setup):
+        """Extension names match spectrum names (upper-cased)."""
+        samples, args = simple_setup
+        hdul = make_spectra_tables(samples, args, return_hdul=True)
+        assert hdul[1].name == 'TEST'
+
+    def test_columns_preserved(self, simple_setup):
+        """BinTableHDU contains expected columns."""
+        samples, args = simple_setup
+        hdul = make_spectra_tables(samples, args, return_hdul=True)
+        colnames = [col.name for col in hdul[1].columns]
+        for col in ('wavelength', 'model_total', 'observed_flux', 'observed_error', 'scaled_error'):
+            assert col in colnames
+
+    def test_percentiles_mode(self, simple_setup):
+        """return_hdul=True works with percentiles."""
+        samples, args = simple_setup
+        hdul = make_spectra_tables(samples, args, percentiles=_PERCENTILES, return_hdul=True)
+        assert isinstance(hdul, fits.HDUList)
+        assert len(hdul) == 2
+
+    def test_default_returns_dict(self, simple_setup):
+        """Default (return_hdul=False) still returns a dict."""
+        samples, args = simple_setup
+        result = make_spectra_tables(samples, args)
+        assert isinstance(result, dict)
+
+    def test_multiple_spectra(self, two_region_setup):
+        """One BinTableHDU per spectrum when multiple spectra present."""
+        samples, args = two_region_setup
+        hdul = make_spectra_tables(samples, args, return_hdul=True)
+        assert len(hdul) == 2  # primary + 1 spectrum
+        assert hdul[1].name == 'TWO_REGION_SPEC'
 
 
 class TestRestEquivalentWidths:
@@ -319,7 +371,7 @@ class TestMakeSpectraTablesWithContinuum:
     def test_percentiles_mode(self, continuum_setup):
         """Percentile mode: continuum columns have shape (n_pix, 3)."""
         samples, args = continuum_setup
-        t = make_spectra_tables(samples, args, percentiles=_PERCENTILES)[0]
+        t = make_spectra_tables(samples, args, percentiles=_PERCENTILES)['test']
         cont_cols = self._get_cont_cols(t)
         assert len(cont_cols) > 0
         for col in cont_cols:
@@ -328,7 +380,7 @@ class TestMakeSpectraTablesWithContinuum:
     def test_full_mode(self, continuum_setup):
         """Full mode: continuum columns have shape (n_pix, n_samples)."""
         samples, args = continuum_setup
-        t = make_spectra_tables(samples, args, percentiles=None)[0]
+        t = make_spectra_tables(samples, args, percentiles=None)['test']
         cont_cols = self._get_cont_cols(t)
         assert len(cont_cols) > 0
         for col in cont_cols:
@@ -343,8 +395,8 @@ class TestInsertNan:
         samples, args = two_region_setup
         tables_without = make_spectra_tables(samples, args, insert_nan=False)
         tables_with = make_spectra_tables(samples, args, insert_nan=True)
-        assert len(tables_with[0]) > len(tables_without[0])
-        model_vals = np.asarray(tables_with[0]['model_total'])
+        assert len(tables_with['two_region_spec']) > len(tables_without['two_region_spec'])
+        model_vals = np.asarray(tables_with['two_region_spec']['model_total'])
         assert np.any(np.isnan(model_vals))
 
 
@@ -538,7 +590,7 @@ class TestREWAccuracy:
         """Absorption line appears as a regular (negative) column in spectra tables."""
         args = absorption_rew_setup
         tables = make_spectra_tables({}, args)
-        t = tables[0]
+        t = tables['rew']
         # Absorption line appears under its label, not as trans_*.
         assert 'HI_abs' in t.colnames
         assert 'trans_HI_abs' not in t.colnames

@@ -350,10 +350,12 @@ pyplot.show()
 #
 # :func:`~unite.results.make_parameter_table` returns a flat
 # :class:`~astropy.table.Table` with one row per posterior sample.
-# :func:`~unite.results.make_spectra_tables` returns one table per spectrum
-# with wavelength, continuum, and per-line model predictions.
+# :func:`~unite.results.make_spectra_tables` returns a dict keyed by spectrum name,
+# with wavelength, continuum, and per-line model predictions per spectrum.
 # Passing percentiles only returns the percentiles, not the samples.
 # Returned tables are also in physical units based on the input.
+# Pass ``return_hdul=True`` to get an :class:`~astropy.io.fits.HDUList` directly
+# for saving to disk.
 #
 # See :doc:`../usage/results` for FITS output, rest equivalent widths,
 # and evaluating the model at arbitrary samples.
@@ -381,7 +383,7 @@ xlims = [
 ]
 
 for row, s in enumerate(spectra):
-    tab = spectra_tables[row]
+    tab = spectra_tables[s.name]
     median_model = tab['model_total'][:, 1]
     for col, ax in enumerate(axes[row]):
         ax.step(s.wavelength, s.flux, where='mid', color='k', lw=0.6, alpha=0.7)
@@ -443,7 +445,7 @@ print(f'Free parameters: {n_params}')
 
 chi2_total = 0.0
 n_pixels_total = 0
-for t in spectra_tables:
+for t in spectra_tables.values():
     obs = t['observed_flux']
     err = t['scaled_error']
     med = t['model_total'][:, 1]  # median (50th percentile, could do it from max logL

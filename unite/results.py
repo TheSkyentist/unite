@@ -6,7 +6,7 @@ into user-friendly :class:`~astropy.table.Table` objects and FITS files.
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Literal, cast, overload
 
 import numpy as np
 from astropy import units as u
@@ -238,13 +238,36 @@ def make_parameter_table(
     return table
 
 
+@overload
+def make_spectra_tables(
+    samples: dict[str, np.ndarray],
+    args: ModelArgs,
+    *,
+    insert_nan: bool = ...,
+    percentiles: np.ndarray | None = ...,
+    return_hdul: Literal[False] = ...,
+) -> dict[str, Table]: ...
+
+
+@overload
+def make_spectra_tables(
+    samples: dict[str, np.ndarray],
+    args: ModelArgs,
+    *,
+    insert_nan: bool = ...,
+    percentiles: np.ndarray | None = ...,
+    return_hdul: Literal[True],
+) -> fits.HDUList: ...
+
+
 def make_spectra_tables(
     samples: dict[str, np.ndarray],
     args: ModelArgs,
     *,
     insert_nan: bool = False,
     percentiles: np.ndarray | None = None,
-) -> list[Table]:
+    return_hdul: bool = False,
+) -> dict[str, Table] | fits.HDUList:
     """Build per-spectrum tables of model decompositions.
 
     Parameters
@@ -261,15 +284,26 @@ def make_spectra_tables(
         If provided, collapses the sample dimension to those percentiles
         (shape ``(n_percentiles, n_pixels)``).
         If ``None`` (default), returns all samples (shape ``(n_samples, n_pixels)``).
+    return_hdul : bool
+        If ``True``, wrap the per-spectrum tables in an
+        :class:`~astropy.io.fits.HDUList` and return that instead of a dict.
+        HDU 0 is an empty :class:`~astropy.io.fits.PrimaryHDU`; subsequent
+        HDUs are :class:`~astropy.io.fits.BinTableHDU` entries whose extension
+        names are the spectrum names (upper-cased for FITS compatibility).
+        Default ``False``.
 
     Returns
     -------
-    list of astropy.table.QTable
-        One table per spectrum.  Columns carry physical units where
-        ``flux_unit`` was set on the spectrum.
+    dict of str to astropy.table.QTable, or astropy.io.fits.HDUList
+        When ``return_hdul=False`` (default): a dict keyed by spectrum name,
+        one table per spectrum.
+        When ``return_hdul=True``: an :class:`~astropy.io.fits.HDUList` with
+        HDU 0 empty and one :class:`~astropy.io.fits.BinTableHDU` per spectrum.
+        In both cases columns carry physical units where ``flux_unit`` was set
+        on the spectrum.
     """
     predictions = evaluate_model(samples, args)
-    tables: list[Table] = []
+    tables: dict[str, Table] = {}
 
     for i, (pred, spectrum) in enumerate(zip(predictions, args.spectra, strict=True)):
         # Build trim mask: keep only pixels within any continuum region.
@@ -341,7 +375,13 @@ def make_spectra_tables(
         if insert_nan and region_bounds:
             t = _insert_nan_between_regions(t, region_bounds)
 
-        tables.append(t)
+        tables[spectrum.name] = t
+
+    if return_hdul:
+        hdus: list[fits.hdu.base._BaseHDU] = [fits.PrimaryHDU()]
+        for name, table in tables.items():
+            hdus.append(fits.BinTableHDU(table, name=name.upper()))
+        return fits.HDUList(hdus)
 
     return tables
 
@@ -399,7 +439,7 @@ def make_hdul(
     hdus.append(param_hdu)
 
     # Per-spectrum tables.
-    for table in spectra_tables:
+    for table in spectra_tables.values():
         meta = table.meta
         name = meta.get('SPECNAME', 'SPECTRUM') if meta is not None else 'SPECTRUM'
         spec_hdu = fits.BinTableHDU(table, name=name.upper())

@@ -347,8 +347,10 @@ samples = mcmc.get_samples()
 # ---------------------------------
 #
 # :func:`~unite.results.make_parameter_table` returns physical-unit posteriors.
-# :func:`~unite.results.make_spectra_tables` decomposes the model into per-line
-# and continuum contributions.
+# :func:`~unite.results.make_spectra_tables` returns a dict keyed by spectrum name,
+# decomposing the model into per-line and continuum contributions.
+# Pass ``return_hdul=True`` to get an :class:`~astropy.io.fits.HDUList` directly
+# for saving to disk.
 #
 # See :doc:`../usage/results` for FITS output, rest equivalent widths,
 # and evaluating the model at arbitrary samples.
@@ -366,7 +368,7 @@ print(param_table)
 
 fig, ax = pyplot.subplots(figsize=(10, 5))
 
-tab = spectra_tables[0]
+tab = spectra_tables['custom']
 median_model = tab['model_total'][:, 1]
 broad = tab['Ha_broad'][:, 1]
 
@@ -424,7 +426,7 @@ print(f'Free parameters: {n_params}')
 
 chi2_total = 0.0
 n_pixels_total = 0
-for t in spectra_tables:
+for t in spectra_tables.values():
     obs = t['observed_flux']
     err = t['scaled_error']
     med = t['model_total'][:, 1]  # median (50th percentile, could do it from max logL

@@ -144,8 +144,8 @@ The table carries useful metadata:
 
 ## Per-Spectrum Model Tables
 
-{func}`~unite.results.make_spectra_tables` returns a list of {class}`~astropy.table.Table`
-objects — one per spectrum — with the model decomposed into individual components.
+{func}`~unite.results.make_spectra_tables` returns a `dict[str, Table]` keyed by spectrum
+name — one entry per spectrum — with the model decomposed into individual components.
 
 ```python
 import numpy as np
@@ -157,8 +157,12 @@ tables = make_spectra_tables(samples, model_args)
 percentiles = np.array([0.16, 0.5, 0.84])
 tables = make_spectra_tables(samples, model_args, percentiles=percentiles)
 
-for t in tables:
-    print(t.meta['SPECNAME'])   # spectrum name
+# Access by spectrum name
+t = tables['my_spectrum']
+
+# Or iterate over all spectra
+for name, t in tables.items():
+    print(name)          # spectrum name (same as t.meta['SPECNAME'])
     print(t.colnames)
     # ['wavelength', 'model_total', 'H_alpha_0', 'H_alpha_1', 'NII_6585_0',
     #  'NII_6549_0', 'cont_region_0', 'observed_flux', 'observed_error']
@@ -196,11 +200,38 @@ percentiles = np.array([0.16, 0.5, 0.84])
 tables = make_spectra_tables(samples, model_args, percentiles=percentiles, insert_nan=True)
 
 fig, ax = plt.subplots()
-for t in tables:
+for name, t in tables.items():
     ax.step(t['wavelength'], t['model_total'][:, 1],  # median (index 1 = 0.5 percentile)
-            where='mid', label=t.meta['SPECNAME'])
+            where='mid', label=name)
 ax.set_xlabel('Wavelength')
 ax.legend()
+```
+
+### Saving spectra tables to FITS
+
+Pass `return_hdul=True` to get an {class}`~astropy.io.fits.HDUList` directly instead of
+a dict.  HDU 0 is an empty {class}`~astropy.io.fits.PrimaryHDU`; the remaining HDUs are
+{class}`~astropy.io.fits.BinTableHDU` entries whose extension names are the spectrum names
+(upper-cased for FITS compatibility).  This is convenient when you want to write spectra
+tables to disk without also including the parameter table:
+
+```python
+import numpy as np
+
+percentiles = np.array([0.16, 0.5, 0.84])
+hdul = make_spectra_tables(
+    samples, model_args, percentiles=percentiles, insert_nan=True, return_hdul=True
+)
+hdul.writeto('spectra.fits', overwrite=True)
+```
+
+To access individual spectra by name after loading:
+
+```python
+from astropy.io import fits
+
+with fits.open('spectra.fits') as hdul:
+    t = hdul['MY_SPECTRUM']  # extension name is spectrum name, upper-cased
 ```
 
 ---
@@ -307,7 +338,7 @@ spectra_tables = make_spectra_tables(samples, model_args, percentiles=percentile
 
 chi2_total = 0.0
 n_pixels_total = 0
-for t in spectra_tables:
+for t in spectra_tables.values():
     obs   = np.asarray(t['observed_flux'])
     err   = np.asarray(t['scaled_error'])
     med   = np.asarray(t['model_total'][:, 1])  # median (50th percentile)
