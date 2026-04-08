@@ -4,7 +4,7 @@ description = "Unified liNe Integration Turbo Engine"
 readme = "README.md"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
   "numpyro>=0.20.0,<0.21",
   "astropy>=7.2.0,<8",
@@ -126,10 +126,6 @@ test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
 docs = {features = ["docs"], solve-group = "default"}
 
 # ---------------------------------------------------------------------------
-# ruff
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # basedpyright
 # ---------------------------------------------------------------------------
 
@@ -142,6 +138,10 @@ reportMissingTypeStubs = "none"
 reportOperatorIssue = "none"
 # Only check the package itself; validation scripts and docs are not shipped
 include = ["unite"]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
 
 [tool.ruff]
 target-version = "py314"

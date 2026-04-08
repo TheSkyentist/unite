@@ -188,7 +188,7 @@ class ContinuumRegion:
         high_q = high_q.to(low_q.unit)
 
         # Convert to region wavelengths
-        self._unit: u.UnitBase = cast(u.UnitBase, low_q.unit)
+        self.unit: u.UnitBase = cast(u.UnitBase, low_q.unit)
         self.low = float(low_q.value)
         self.high = float(high_q.value)
 
@@ -587,7 +587,7 @@ class ContinuumConfiguration:
             rd: dict = {
                 'low': region.low,
                 'high': region.high,
-                'wavelength_unit': str(region._unit),
+                'wavelength_unit': str(region.unit),
                 'form': form_names[id(region.form)],
                 'params': {pn: tok.name for pn, tok in resolved.items()},
             }
@@ -803,7 +803,7 @@ class ContinuumConfiguration:
         rows = []
         for region, resolved in zip(self._regions, self._resolved_params, strict=True):
             range_str = f'[{region.low}, {region.high}]'
-            unit_str = str(region._unit)
+            unit_str = str(region.unit)
             form_str = repr(region.form)
             params_str = ', '.join(cast(str, tok.name) for tok in resolved.values())
             rows.append((range_str, unit_str, form_str, params_str))

@@ -62,7 +62,7 @@ class ModelArgs:
     cont_low: list[float] | None
     cont_high: list[float] | None
     cont_center: list[float] | None
-    # --- Unit conversion factors: region._unit → canonical unit, per region ---
+    # --- Unit conversion factors: region.unit → canonical unit, per region ---
     cont_nw_conv: list[float] | None
     #: Pre-converted continuum forms (static wavelength config in canonical unit).
     cont_forms: list | None
@@ -557,7 +557,7 @@ class ModelBuilder:
             for s in self._spectra:
                 mask = jnp.zeros(s.npix, dtype=bool)
                 for region in self._cont_config:
-                    conv = _get_conversion_factor(region._unit, s.unit)
+                    conv = _get_conversion_factor(region.unit, s.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
                     mask = mask | s.pixel_mask(obs_low, obs_high)
@@ -630,7 +630,7 @@ class ModelBuilder:
             cont_nw_conv = []
             cont_forms = []
             for region in self._cont_config:
-                conv = _get_conversion_factor(region._unit, self._canonical_unit)
+                conv = _get_conversion_factor(region.unit, self._canonical_unit)
                 cont_low.append(region.low * conv)
                 cont_high.append(region.high * conv)
                 cont_center.append(region.center * conv)

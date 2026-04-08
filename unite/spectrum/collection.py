@@ -375,7 +375,7 @@ class Spectra:
 
             if continuum_config is not None:
                 for region in continuum_config:
-                    conv = _get_conversion_factor(region._unit, spectrum.unit)
+                    conv = _get_conversion_factor(region.unit, spectrum.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
 
@@ -546,7 +546,7 @@ class Spectra:
                 # Check if any filtered line falls in this region (rest frame).
                 has_line = False
                 for lam_rest in filtered_lines.wavelengths:
-                    lam_val = float(lam_rest.to(region._unit).value)
+                    lam_val = float(lam_rest.to(region.unit).value)
                     if region.low <= lam_val <= region.high:
                         has_line = True
                         break
@@ -631,11 +631,11 @@ class Spectra:
         if continuum_config is not None:
             kept = []
             for region in continuum_config:
-                # Convert region bounds (stored as bare floats in region._unit)
+                # Convert region bounds (stored as bare floats in region.unit)
                 # to each spectrum's disperser unit before checking coverage.
                 region_covered = False
                 for s in self._spectra:
-                    conv = _get_conversion_factor(region._unit, s.unit)
+                    conv = _get_conversion_factor(region.unit, s.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
                     if s.covers(obs_low, obs_high):

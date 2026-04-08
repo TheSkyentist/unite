@@ -146,7 +146,7 @@ def make_parameter_table(
             assert args.cont_config is not None
             region = args.cont_config[k]
             assert isinstance(region.form, ContinuumForm)
-            pu = region.form.param_units(flux_unit, region._unit)
+            pu = region.form.param_units(flux_unit, region.unit)
             apply_cs, phys_unit = pu.get(pn, (False, None))
             phys = arr * cont_scale_0 if apply_cs else arr
             return u.Quantity(phys, unit=phys_unit) if phys_unit is not None else phys
