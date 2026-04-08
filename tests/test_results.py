@@ -291,13 +291,21 @@ class TestMakeSpectraTablesReturnHdul:
         samples, args = simple_setup
         hdul = make_spectra_tables(samples, args, return_hdul=True)
         colnames = [col.name for col in hdul[1].columns]
-        for col in ('wavelength', 'model_total', 'observed_flux', 'observed_error', 'scaled_error'):
+        for col in (
+            'wavelength',
+            'model_total',
+            'observed_flux',
+            'observed_error',
+            'scaled_error',
+        ):
             assert col in colnames
 
     def test_percentiles_mode(self, simple_setup):
         """return_hdul=True works with percentiles."""
         samples, args = simple_setup
-        hdul = make_spectra_tables(samples, args, percentiles=_PERCENTILES, return_hdul=True)
+        hdul = make_spectra_tables(
+            samples, args, percentiles=_PERCENTILES, return_hdul=True
+        )
         assert isinstance(hdul, fits.HDUList)
         assert len(hdul) == 2
 
@@ -395,7 +403,9 @@ class TestInsertNan:
         samples, args = two_region_setup
         tables_without = make_spectra_tables(samples, args, insert_nan=False)
         tables_with = make_spectra_tables(samples, args, insert_nan=True)
-        assert len(tables_with['two_region_spec']) > len(tables_without['two_region_spec'])
+        assert len(tables_with['two_region_spec']) > len(
+            tables_without['two_region_spec']
+        )
         model_vals = np.asarray(tables_with['two_region_spec']['model_total'])
         assert np.any(np.isnan(model_vals))
 
