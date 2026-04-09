@@ -8,6 +8,7 @@ function that can be passed to any numpyro inference algorithm (NUTS, SVI, etc.)
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,9 @@ from unite.line.compute import evaluate_lines, integrate_lines
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum import Spectra, Spectrum
+
+# Conversion factor from FWHM to Gaussian sigma: 1 / (2 * sqrt(2 * ln 2)).
+_FWHM_TO_SIGMA: float = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
 
 # ------------------------------------------------------------------
 # ModelArgs — data bundle for the numpyro model function
@@ -94,11 +98,18 @@ class ModelArgs:
     #: composed model over pixels.
     integration_mode: str = 'analytic'
     #: Gauss-Legendre quadrature nodes on ``[-1, 1]``.
-    #: ``None`` when ``integration_mode='analytic'``.
+    #: ``None`` when ``integration_mode != 'quadrature'``.
     quadrature_nodes: jnp.ndarray | None = None
     #: Gauss-Legendre quadrature weights.
-    #: ``None`` when ``integration_mode='analytic'``.
+    #: ``None`` when ``integration_mode != 'quadrature'``.
     quadrature_weights: jnp.ndarray | None = None
+    #: Number of uniform sub-pixel evaluation points per pixel for convolution mode.
+    #: ``None`` when ``integration_mode != 'convolution'``.
+    n_super: int | None = None
+    #: Half-width of the banded LSF convolution kernel in fine-grid indices.
+    #: Pre-computed at build time as a Python ``int`` (not a traced value).
+    #: ``None`` when ``integration_mode != 'convolution'``.
+    conv_half_width: int | None = None
 
     def __len__(self) -> int:
         """Return the number of spectra in the model."""
@@ -241,6 +252,8 @@ def unite_model(args: ModelArgs) -> None:
             low = low + shift
             high = high + shift
 
+        n_pixels = low.shape[0]
+
         # LSF FWHM at each line center (n_lines,).
         # R() expects disperser-unit wavelengths, result is in canonical unit.
         lsf_fwhm = centers / (disp.R(centers * inv_wl_scale) * r_scale)
@@ -298,6 +311,61 @@ def unite_model(args: ModelArgs) -> None:
 
             model_at_nodes = jax.vmap(_glq_eval)(x)  # (n_nodes, n_pix)
             model = 0.5 * jnp.dot(weights, model_at_nodes)  # pixel-averaged
+        elif args.integration_mode == 'convolution':
+            # Numerical LSF convolution: evaluate the intrinsic model (lsf_fwhm=0)
+            # on a uniform fine sub-pixel grid, convolve with the wavelength-
+            # dependent Gaussian LSF, then pixel-average.  This correctly computes
+            # LSF ⊗ [F · exp(-τ · φ_intrinsic)] rather than F · exp(-τ · LSF ⊗ φ).
+            from unite._lsf import _lsf_convolve
+
+            n_super = args.n_super
+            half_width = args.conv_half_width
+            assert n_super is not None
+            assert half_width is not None
+
+            # Fine grid: n_super uniform points per pixel, midpoints of sub-bins.
+            # Shape: (n_super, n_pixels), flattened to (n_super * n_pixels,).
+            offsets = (jnp.arange(n_super) + 0.5) / n_super  # (n_super,)
+            x_fine = low[None, :] + offsets[:, None] * (high - low)[None, :]
+            x_flat = x_fine.ravel()  # (n_super * n_pixels,)
+
+            # Evaluate intrinsic model (lsf_fwhm=0) on fine grid.
+            # _combine_fwhm(0, fwhm) = fwhm, so intrinsic profiles are used.
+            zero_lsf = jnp.zeros_like(centers)
+
+            def _conv_eval(
+                wav,
+                *,
+                _zero_lsf=zero_lsf,
+                _scaled_flux=scaled_flux,
+                _csn=cont_scale_norm,
+            ):
+                phi = evaluate_lines(
+                    wav, centers, _zero_lsf, p0, p1, p2, cm.profile_codes
+                )
+                cont = eval_continuum(wav, args, context, z_sys, 0.0) * _csn
+                return compose_from_profiles(
+                    phi,
+                    _scaled_flux,
+                    tau_per_line,
+                    cm.is_absorption,
+                    cont,
+                    args.absorber_position,
+                )
+
+            model_fine_intrinsic = _conv_eval(x_flat)  # (n_super * n_pixels,)
+
+            # Compute wavelength-varying LSF sigma at each fine-grid point.
+            lsf_fwhm_fine = x_flat / (disp.R(x_flat * inv_wl_scale) * r_scale)
+            sigma_fine = lsf_fwhm_fine * _FWHM_TO_SIGMA
+
+            # Convolve intrinsic model with the spatially-varying Gaussian LSF.
+            model_conv = _lsf_convolve(
+                x_flat, model_fine_intrinsic, sigma_fine, half_width
+            )
+
+            # Apply flux_scale and pixel-average: reshape → (n_super, n_pixels).
+            model = flux_scale * model_conv.reshape(n_super, n_pixels).mean(axis=0)
         else:
             # Analytic: integrate each line profile individually via CDF,
             # then combine.  Exact for flux-parametrized lines; approximate
@@ -473,6 +541,8 @@ class ModelBuilder:
         absorber_position: str = 'foreground',
         integration_mode: str = 'analytic',
         n_nodes: int = 7,
+        n_super: int = 10,
+        conv_half_width: int | None = None,
     ) -> tuple[Callable, ModelArgs]:
         """Build the numpyro model function and its arguments.
 
@@ -498,14 +568,35 @@ class ModelBuilder:
               for emission profiles and pixel-center evaluation for
               absorption profiles.
             * ``'quadrature'`` — Gauss-Legendre quadrature for all
-              profiles (both emission and absorption).  This is more
-              accurate for absorption lines at the cost of speed.
+              profiles (both emission and absorption).  More accurate
+              for absorption lines at the cost of speed.
+            * ``'convolution'`` — evaluates the intrinsic model
+              (``lsf_fwhm=0``) on a uniform fine sub-pixel grid of
+              ``n_super`` points per pixel, numerically convolves with
+              the wavelength-dependent Gaussian LSF, then pixel-averages.
+              Correctly computes ``LSF ⊗ [F · exp(-τ · φ_intrinsic)]``
+              rather than ``F · exp(-τ · LSF ⊗ φ)``, eliminating the
+              LSF pre-convolution approximation for absorption lines.
 
         n_nodes : int, optional
             Number of Gauss-Legendre quadrature nodes per pixel
             (default: 7).  Only used when ``integration_mode='quadrature'``.
             Higher values give more accurate integration at greater
             computational cost.
+        n_super : int, optional
+            Number of uniform sub-pixel evaluation points per pixel
+            (default: 10).  Only used when
+            ``integration_mode='convolution'``.  Higher values resolve
+            narrower intrinsic line profiles at the cost of speed.
+            ``n_super=10`` is adequate for NIRSpec gratings; increase to
+            20 for narrow absorbers at PRISM resolution.
+        conv_half_width : int or None, optional
+            Half-width of the banded LSF convolution kernel in fine-grid
+            indices (default: ``None``).  When ``None``, auto-computed at
+            build time as ``ceil(4 * max_sigma / min_dx_fine * 1.5)``
+            where ``max_sigma`` is the largest LSF sigma across all
+            spectra and ``min_dx_fine`` is the finest sub-pixel spacing.
+            Only used when ``integration_mode='convolution'``.
 
         Returns
         -------
@@ -528,7 +619,7 @@ class ModelBuilder:
             )
             raise ValueError(msg)
 
-        valid_modes = ('analytic', 'quadrature')
+        valid_modes = ('analytic', 'quadrature', 'convolution')
         if integration_mode not in valid_modes:
             msg = (
                 f'integration_mode must be one of {valid_modes}, '
@@ -584,6 +675,28 @@ class ModelBuilder:
                 )
         else:
             trimmed_spectra = list(self._spectra)
+
+        # For convolution mode, compute the kernel half-width (in fine-grid indices)
+        # from the maximum LSF sigma and minimum fine-grid spacing across all spectra.
+        if integration_mode == 'convolution':
+            if conv_half_width is None:
+                max_lsf_fwhm = 0.0
+                min_dx_fine = float('inf')
+                for s in trimmed_spectra:
+                    wl_scale = _get_conversion_factor(s.unit, self._canonical_unit)
+                    pix_mid_disp = (s.low + s.high) / 2.0
+                    r_arr = jnp.asarray(s.disperser.R(pix_mid_disp))
+                    lsf = jnp.asarray(pix_mid_disp * wl_scale) / r_arr
+                    max_lsf_fwhm = max(max_lsf_fwhm, float(jnp.max(lsf)))
+                    pix_widths = (s.high - s.low) * wl_scale
+                    min_dx_fine = min(min_dx_fine, float(jnp.min(pix_widths)) / n_super)
+                max_sigma = max_lsf_fwhm * _FWHM_TO_SIGMA
+                conv_half_width = max(1, math.ceil(4.0 * max_sigma / min_dx_fine * 1.5))
+            n_super_val: int | None = n_super
+            conv_half_width_val: int | None = conv_half_width
+        else:
+            n_super_val = None
+            conv_half_width_val = None
 
         # Per-spectrum wavelength conversion factors.
         spec_to_canonical = [
@@ -682,6 +795,8 @@ class ModelBuilder:
             integration_mode=integration_mode,
             quadrature_nodes=quadrature_nodes,
             quadrature_weights=quadrature_weights,
+            n_super=n_super_val,
+            conv_half_width=conv_half_width_val,
         )
         return unite_model, args
 
@@ -695,6 +810,7 @@ class ModelBuilder:
         absorber_position: str = 'foreground',
         integration_mode: str = 'analytic',
         n_nodes: int = 7,
+        n_super: int = 10,
     ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -725,6 +841,9 @@ class ModelBuilder:
         n_nodes : int, optional
             Gauss-Legendre quadrature nodes per pixel (default: 7).
             See :meth:`build` for details.
+        n_super : int, optional
+            Sub-pixel evaluation points per pixel for convolution mode
+            (default: 10).  See :meth:`build` for details.
 
         Returns
         -------
@@ -744,6 +863,7 @@ class ModelBuilder:
             absorber_position=absorber_position,
             integration_mode=integration_mode,
             n_nodes=n_nodes,
+            n_super=n_super,
         )
         mcmc = infer.MCMC(
             infer.NUTS(model_fn, dense_mass=True),

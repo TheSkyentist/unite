@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from unite._compose import compose_leave_one_out
+from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
 from unite._utils import C_KMS
 from unite.continuum.compute import eval_continuum, eval_continuum_regions
 from unite.line.compute import evaluate_lines, integrate_lines
@@ -206,16 +207,21 @@ def evaluate_model(
             scaled_flux = flux_per_line * _line_scale
 
             # --- Continuum (per-region for decomposition) ---
-            cont_regions = eval_continuum_regions(
-                wavelength, args, params, z_sys, cont_lsf_fwhm
-            )
-            cont_total = jnp.zeros_like(wavelength)
-            for region in cont_regions:
-                cont_total = cont_total + region
-            cont_total_scaled = cont_total * _cont_scale
-            cont_regions_scaled = [
-                r * _cont_scale * flux_scale_val for r in cont_regions
-            ]
+            # For analytic/quadrature: evaluate at pixel centres with LSF.
+            # For convolution: evaluated on the fine grid inside the branch below.
+            cont_total_scaled: jnp.ndarray = jnp.zeros_like(wavelength)
+            cont_regions_scaled: list[jnp.ndarray] = []
+            if args.integration_mode != 'convolution':
+                cont_regions = eval_continuum_regions(
+                    wavelength, args, params, z_sys, cont_lsf_fwhm
+                )
+                cont_total = jnp.zeros_like(wavelength)
+                for region in cont_regions:
+                    cont_total = cont_total + region
+                cont_total_scaled = cont_total * _cont_scale
+                cont_regions_scaled = [
+                    r * _cont_scale * flux_scale_val for r in cont_regions
+                ]
 
             # --- Line decomposition ---
             if args.integration_mode == 'quadrature':
@@ -258,6 +264,77 @@ def evaluate_model(
                 # the [-1,1] → [low,high] change of variable).
                 total = 0.5 * jnp.dot(weights, node_totals)
                 line_contribs = 0.5 * jnp.einsum('n,nlp->lp', weights, node_deltas)
+            elif args.integration_mode == 'convolution':
+                # Numerical LSF convolution: evaluate intrinsic model (lsf_fwhm=0)
+                # on a fine sub-pixel grid, convolve with the wavelength-dependent
+                # Gaussian LSF, then pixel-average.  Per-line decomposition uses
+                # compose_leave_one_out on the fine grid; convolution is linear so
+                # convolving deltas separately is exact.
+                n_super = args.n_super
+                half_width = args.conv_half_width
+                assert n_super is not None
+                assert half_width is not None
+                n_pixels = low.shape[0]
+
+                # Fine grid: (n_super, n_pixels) → flattened (N,).
+                offsets = (jnp.arange(n_super) + 0.5) / n_super
+                x_fine = low[None, :] + offsets[:, None] * (high - low)[None, :]
+                x_flat = x_fine.ravel()
+
+                # Intrinsic profiles (lsf_fwhm=0) on fine grid.
+                zero_lsf = jnp.zeros_like(centers)
+                phi_fine = evaluate_lines(
+                    x_flat, centers, zero_lsf, p0, p1, p2, cm.profile_codes
+                )
+
+                # Per-region continuum on fine grid (lsf_fwhm=0), then convolve
+                # and pixel-average for the decomposition output.
+                lsf_fwhm_fine = x_flat / (_disp.R(x_flat * _inv_wl_scale) * r_scale)
+                sigma_fine = lsf_fwhm_fine * _FWHM_TO_SIGMA
+
+                cont_regions_fine = eval_continuum_regions(
+                    x_flat, args, params, z_sys, 0.0
+                )
+                cont_regions_scaled = [
+                    _lsf_convolve(x_flat, r * _cont_scale, sigma_fine, half_width)
+                    .reshape(n_super, n_pixels)
+                    .mean(axis=0)
+                    * flux_scale_val
+                    for r in cont_regions_fine
+                ]
+
+                # Total continuum on fine grid for model composition.
+                cont_fine_total = jnp.zeros_like(x_flat)
+                for r in cont_regions_fine:
+                    cont_fine_total = cont_fine_total + r
+                cont_fine_scaled = cont_fine_total * _cont_scale
+
+                # Leave-one-out decomposition on fine grid.
+                total_fine, deltas_fine = compose_leave_one_out(
+                    phi_fine,
+                    scaled_flux,
+                    tau_per_line,
+                    cm.is_absorption,
+                    cont_fine_scaled,
+                    args.absorber_position,
+                )
+
+                # Convolve total and each per-line delta with the LSF.
+                # Convolution is linear: LSF⊗(total - total_without_j) =
+                # (LSF⊗total) - (LSF⊗total_without_j).
+                total_conv = _lsf_convolve(x_flat, total_fine, sigma_fine, half_width)
+                deltas_conv = jax.vmap(
+                    lambda d: _lsf_convolve(x_flat, d, sigma_fine, half_width)
+                )(deltas_fine)  # (n_lines, N)
+
+                total = flux_scale_val * total_conv.reshape(n_super, n_pixels).mean(
+                    axis=0
+                )
+                line_contribs = flux_scale_val * deltas_conv.reshape(
+                    -1, n_super, n_pixels
+                ).mean(axis=1)  # (n_lines, n_pixels)
+
+                return total, line_contribs, cont_regions_scaled
             else:
                 # Analytic: CDF-based per-line integration, then compose.
                 pixints = integrate_lines(

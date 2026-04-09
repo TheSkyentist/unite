@@ -13,7 +13,7 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 
 ## What it does
 
-- **Two pixel-integration modes**: analytic (exact CDF-based, default) and Gauss-Legendre quadrature (configurable node count) — fast, memory-efficient, and correct even for undersampled data
+- **Three pixel-integration modes**: analytic (exact CDF-based, default), Gauss-Legendre quadrature (`n_nodes` sub-pixel points per pixel), and numerical LSF convolution (`n_super` uniform fine-grid points per pixel + banded wavelength-varying Gaussian convolution, correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` for absorption lines)
 - **Simultaneous multi-spectrum fitting** across gratings and instruments with shared kinematic parameters (redshift, FWHM)
 - **Multiple line profiles**: Gaussian, Cauchy, Pseudo-Voigt, Laplace, SEMG, Gauss-Hermite, Split-Normal, Skew-Voigt
 - **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)`, with configurable absorber position (`foreground`, `behind_lines`, `behind_continuum`)
@@ -88,7 +88,9 @@ spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 
 # 3. Build and run with any NumPyro sampler
 # integration_mode='analytic' (default) uses exact CDF integration;
-# integration_mode='quadrature' uses Gauss-Legendre quadrature (n_nodes per pixel)
+# integration_mode='quadrature' uses Gauss-Legendre quadrature (n_nodes per pixel);
+# integration_mode='convolution' convolves intrinsic model with LSF on a fine grid
+#   (n_super uniform points per pixel) — most accurate for absorption lines
 builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
 model_fn, model_args = builder.build(integration_mode='analytic')
 

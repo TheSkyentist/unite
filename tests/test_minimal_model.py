@@ -1412,3 +1412,215 @@ class TestIntegrationMode:
         model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
         samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
         assert f'obs_{spec.name}' in samples
+
+
+class TestConvolutionMode:
+    """Tests for integration_mode='convolution'."""
+
+    def _make_builder(self, lc, cont=None):
+        """Helper: prepare spectra and return a ModelBuilder."""
+        spec = create_simple_spectrum()
+        spectra = Spectra([spec], redshift=0.0)
+        if cont is not None:
+            spectra.prepare(lc, cont)
+            spectra.compute_scales(
+                spectra.prepared_line_config, spectra.prepared_cont_config
+            )
+            return (
+                model.ModelBuilder(
+                    spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+                ),
+                spec,
+            )
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        return model.ModelBuilder(spectra.prepared_line_config, None, spectra), spec
+
+    def test_fields_stored(self):
+        """Convolution mode stores n_super and conv_half_width; quadrature arrays are None."""
+        lc = create_minimal_config()
+        builder, _ = self._make_builder(lc)
+        _, args = builder.build(integration_mode='convolution', n_super=8)
+        assert args.integration_mode == 'convolution'
+        assert args.n_super == 8
+        assert isinstance(args.conv_half_width, int)
+        assert args.conv_half_width >= 1
+        assert args.quadrature_nodes is None
+        assert args.quadrature_weights is None
+
+    def test_n_super_respected(self):
+        """n_super=20 should be stored as-is."""
+        lc = create_minimal_config()
+        builder, _ = self._make_builder(lc)
+        _, args = builder.build(integration_mode='convolution', n_super=20)
+        assert args.n_super == 20
+
+    def test_conv_half_width_override(self):
+        """User-supplied conv_half_width overrides the auto-computed value."""
+        lc = create_minimal_config()
+        builder, _ = self._make_builder(lc)
+        _, args = builder.build(
+            integration_mode='convolution', n_super=10, conv_half_width=15
+        )
+        assert args.conv_half_width == 15
+
+    def test_analytic_no_conv_fields(self):
+        """Analytic mode should not set n_super or conv_half_width."""
+        lc = create_minimal_config()
+        builder, _ = self._make_builder(lc)
+        _, args = builder.build(integration_mode='analytic')
+        assert args.n_super is None
+        assert args.conv_half_width is None
+
+    def test_predictive_runs(self):
+        """Convolution mode model runs under Predictive without error."""
+        lc = create_minimal_config()
+        builder, spec = self._make_builder(lc)
+        model_fn, args = builder.build(integration_mode='convolution', n_super=5)
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+        assert f'obs_{spec.name}' in samples
+        obs = samples[f'obs_{spec.name}']
+        assert obs.shape == (2, spec.npix)
+        assert jnp.all(jnp.isfinite(obs))
+
+    def test_matches_analytic_emission_broadline(self):
+        """For a broad emission line (FWHM >> pixel), convolution ≈ analytic."""
+        from unite.compute import evaluate_model
+
+        spec = create_simple_spectrum()
+        lc = line.LineConfiguration()
+        # Broad line: intrinsic FWHM 1000 km/s >> LSF and pixel width.
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(1000.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+
+        _, args_a = builder.build(integration_mode='analytic')
+        _, args_c = builder.build(integration_mode='convolution', n_super=10)
+
+        pred_a = evaluate_model({}, args_a)[0]
+        pred_c = evaluate_model({}, args_c)[0]
+
+        # Broad lines: analytic and convolution agree closely in the interior.
+        # The spectral edges have slightly larger discrepancy due to zero-padding
+        # of the convolution kernel, so we compare only interior pixels.
+        interior = slice(10, -10)
+        assert np.allclose(
+            pred_a.total[..., interior], pred_c.total[..., interior], rtol=1e-2
+        )
+
+    def test_absorption_differs_from_analytic(self):
+        """Convolution mode should differ from analytic for a tau-parametrized line.
+
+        This exercises the core fix: LSF⊗[exp(-τ·φ)] ≠ exp(-τ·(LSF⊗φ)).
+        A broad emission line provides background flux for the absorber to modulate —
+        tau-only without any background signal produces zero in both modes.
+        All priors are Fixed so evaluate_model({}, args) works without samples.
+        """
+        from unite.compute import evaluate_model
+
+        spec = create_simple_spectrum()
+        lc = line.LineConfiguration()
+        # Broad emission background (FWHM=2000 km/s → broad, nearly flat over spectrum).
+        lc.add_line(
+            'Ha_em',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(2000.0)),
+            flux=line.Flux(prior=prior.Fixed(5.0)),
+        )
+        # Narrow tau absorber on top (FWHM=100 km/s, optically thick tau=2).
+        lc.add_line(
+            'Ha_abs',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(100.0)),
+            tau=line.Tau(prior=prior.Fixed(2.0)),
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+
+        _, args_a = builder.build(integration_mode='analytic')
+        _, args_c = builder.build(integration_mode='convolution', n_super=10)
+
+        pred_a = evaluate_model({}, args_a)[0]
+        pred_c = evaluate_model({}, args_c)[0]
+
+        # Total signal must be non-zero (emission line is present).
+        assert np.any(pred_c.total != 0)
+        # The two modes must differ in the interior — different LSF handling.
+        interior = slice(10, -10)
+        assert not np.allclose(
+            pred_a.total[..., interior], pred_c.total[..., interior], rtol=1e-6
+        )
+
+    def test_output_shape_correct(self):
+        """evaluate_model returns predictions with correct shapes."""
+        from unite.compute import evaluate_model
+
+        spec = create_simple_spectrum()
+        lc = line.LineConfiguration()
+        # Use Fixed priors so evaluate_model({}, args) works without samples.
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc)
+        spectra.compute_scales(spectra.prepared_line_config)
+        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+        _, args = builder.build(integration_mode='convolution', n_super=5)
+        preds = evaluate_model({}, args)
+        assert len(preds) == 1
+        assert preds[0].total.shape == (1, spec.npix)
+        assert jnp.all(jnp.isfinite(preds[0].total))
+        assert len(preds[0].lines) == 1
+
+    def test_with_continuum(self):
+        """Convolution mode with continuum runs without error."""
+        from unite.compute import evaluate_model
+        from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6450.0 * u.AA, 6650.0 * u.AA, Linear())]
+        )
+        builder, spec = self._make_builder(lc, cont)
+        model_fn, args = builder.build(integration_mode='convolution', n_super=5)
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+        assert f'obs_{spec.name}' in samples
+        assert jnp.all(jnp.isfinite(samples[f'obs_{spec.name}']))
+
+        # evaluate_model needs samples for non-Fixed continuum params; use Predictive.
+        model_fn2, args2 = builder.build(integration_mode='convolution', n_super=5)
+        samples = Predictive(model_fn2, num_samples=1)(random.PRNGKey(1), args2)
+        preds = evaluate_model(samples, args2)
+        assert preds[0].continuum_regions  # non-empty continuum decomposition
+        for v in preds[0].continuum_regions.values():
+            assert jnp.all(jnp.isfinite(v))
+
+    def test_invalid_mode_still_raises(self):
+        """Regression: invalid integration_mode still raises ValueError."""
+        lc = create_minimal_config()
+        builder, _ = self._make_builder(lc)
+        with pytest.raises(ValueError, match='integration_mode must be one of'):
+            builder.build(integration_mode='convolution_typo')
