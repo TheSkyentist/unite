@@ -32,7 +32,7 @@ pip install unite
 Or with [Pixi](https://pixi.sh/):
 
 ```bash
-pixi add unite
+pixi add unite --pypi
 ```
 
 ## Quick Start
