@@ -4,7 +4,7 @@ import astropy.units as u
 import numpy as np
 import pytest
 from astropy.io import fits
-from astropy.table import Table
+from astropy.table import QTable, Table
 from jax import random
 from numpyro.infer import Predictive
 
@@ -615,3 +615,49 @@ class TestREWAccuracy:
         assert 'rew_HI_abs' in table.colnames
         assert len(table['rew_HI_abs']) == 3
         assert np.all(np.isfinite(np.asarray(table['rew_HI_abs'])))
+
+
+# ---------------------------------------------------------------------------
+# Unit preservation in FITS HDUs
+# ---------------------------------------------------------------------------
+
+
+class TestUnitPreservation:
+    """Units are preserved in FITS HDUs via TUNITn keywords."""
+
+    def test_return_hdul_tunit_keywords(self, simple_setup):
+        """make_spectra_tables(return_hdul=True) writes TUNITn keywords in the header."""
+        samples, args = simple_setup
+        hdul = make_spectra_tables(samples, args, return_hdul=True)
+        tunit_keys = [k for k in hdul[1].header if k.startswith('TUNIT')]
+        assert len(tunit_keys) > 0, 'No TUNITn keywords found — units were not written'
+
+    def test_return_hdul_units_roundtrip(self, simple_setup):
+        """Units survive QTable.read() through make_spectra_tables(return_hdul=True)."""
+        samples, args = simple_setup
+        t_ref = make_spectra_tables(samples, args)['test']
+        hdul = make_spectra_tables(samples, args, return_hdul=True)
+        qt = QTable.read(hdul, hdu=1)
+        assert qt['wavelength'].unit == t_ref['wavelength'].unit
+        assert qt['observed_flux'].unit == t_ref['observed_flux'].unit
+        assert qt['model_total'].unit == t_ref['model_total'].unit
+
+    def test_make_hdul_spectra_units_roundtrip(self, simple_setup):
+        """Units survive QTable.read() on the spectra HDU from make_hdul."""
+        samples, args = simple_setup
+        t_ref = make_spectra_tables(samples, args)['test']
+        hdul = make_hdul(samples, args)
+        qt = QTable.read(hdul, hdu=2)  # HDU 0=primary, 1=parameters, 2=spectrum
+        assert qt['wavelength'].unit == t_ref['wavelength'].unit
+        assert qt['observed_flux'].unit == t_ref['observed_flux'].unit
+
+    def test_make_hdul_parameters_units_roundtrip(self, simple_setup):
+        """Flux parameter columns carry units after QTable.read() on the PARAMETERS HDU."""
+        samples, args = simple_setup
+        t_ref = make_parameter_table(samples, args)
+        hdul = make_hdul(samples, args)
+        qt = QTable.read(hdul, hdu=1)
+        flux_cols = [c for c in t_ref.colnames if c.startswith('flux_')]
+        assert flux_cols, 'No flux_ columns found in parameter table'
+        for col in flux_cols:
+            assert qt[col].unit == t_ref[col].unit

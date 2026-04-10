@@ -380,7 +380,9 @@ def make_spectra_tables(
     if return_hdul:
         hdus: list[fits.hdu.base._BaseHDU] = [fits.PrimaryHDU()]
         for name, table in tables.items():
-            hdus.append(fits.BinTableHDU(table, name=name.upper()))
+            hdu = fits.table_to_hdu(table)
+            hdu.name = name.upper()
+            hdus.append(hdu)
         return fits.HDUList(hdus)
 
     return tables
@@ -435,14 +437,16 @@ def make_hdul(
     hdus: list[fits.hdu.base._BaseHDU] = [primary]
 
     # Parameter table.
-    param_hdu = fits.BinTableHDU(param_table, name='PARAMETERS')
+    param_hdu = fits.table_to_hdu(param_table)
+    param_hdu.name = 'PARAMETERS'
     hdus.append(param_hdu)
 
     # Per-spectrum tables.
     for table in spectra_tables.values():
         meta = table.meta
         name = meta.get('SPECNAME', 'SPECTRUM') if meta is not None else 'SPECTRUM'
-        spec_hdu = fits.BinTableHDU(table, name=name.upper())
+        spec_hdu = fits.table_to_hdu(table)
+        spec_hdu.name = name.upper()
         hdus.append(spec_hdu)
 
     return fits.HDUList(hdus)
