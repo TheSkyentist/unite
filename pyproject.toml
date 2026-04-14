@@ -28,6 +28,7 @@ classifiers = [
 test = [
   "pytest>=9.0.2, <10",
   "pytest-cov>=7.0.0, <8",
+  "pytest-xdist>=3.0.0, <4",
 ]
 docs = [
   "sphinx>=9.1.0, <10",
@@ -193,7 +194,7 @@ convention = "numpy"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--strict-config"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "-n", "auto"]
 xfail_strict = true
 filterwarnings = ["error"]
 markers = [
@@ -207,6 +208,7 @@ markers = [
 [tool.coverage.run]
 source = ["unite"]
 branch = true
+parallel = true
 
 [tool.coverage.report]
 show_missing = true
