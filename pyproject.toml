@@ -196,7 +196,10 @@ convention = "numpy"
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--strict-config", "-n", "auto"]
 xfail_strict = true
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  "ignore:XDG_CONFIG_HOME is set to.*:astropy.utils.exceptions.AstropyUserWarning",
+]
 markers = [
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
