@@ -333,7 +333,7 @@ def _voigt_ida_params(
     wi_abs = fwhm_total * wi
     wp_abs = fwhm_total * wp
 
-    return (  # type: ignore[return-value]
+    return (
         cast(Array, wg_abs),
         cast(Array, wl_abs),
         cast(Array, wi_abs),

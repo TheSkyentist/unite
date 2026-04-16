@@ -76,7 +76,7 @@ JAX_LOGGING_LEVEL = "ERROR"
 format = "ruff format unite tests docs/tutorials"
 lint = "ruff check unite tests docs/tutorials"
 lint-fix = "ruff check --fix unite tests docs/tutorials"
-type-check = "basedpyright unite"
+type-check = "ty check unite"
 
 [tool.pixi.dependencies]
 python = ">=3.12.0,<3.15"
@@ -84,7 +84,7 @@ ruff = ">=0.15.2,<0.16"
 matplotlib = ">=3.10.8,<4"
 vulture = ">=2.14,<3"
 ipython = ">=9.10.0,<10"
-basedpyright = ">=1.38.3,<2"
+ty = ">=0.0.29,<1"
 
 [tool.pixi.pypi-dependencies]
 unite = { path = ".", editable = true }
@@ -127,18 +127,15 @@ test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
 docs = {features = ["docs"], solve-group = "default"}
 
 # ---------------------------------------------------------------------------
-# basedpyright
+# ty
 # ---------------------------------------------------------------------------
 
-[tool.basedpyright]
-typeCheckingMode = "standard"
-# numpyro has no type stubs; suppress the noise globally
-reportMissingTypeStubs = "none"
+[tool.ty.rules]
 # ArrayLike arithmetic is idiomatic in JAX codebases; operator type-checking
-# on ArrayLike unions produces hundreds of false-positive errors
-reportOperatorIssue = "none"
-# Only check the package itself; validation scripts and docs are not shipped
-include = ["unite"]
+# on ArrayLike unions produces false-positive errors throughout line/continuum kernels
+unsupported-operator = "ignore"
+# cast() calls are sometimes needed to guide basedpyright; ty infers these correctly
+redundant-cast = "ignore"
 
 # ---------------------------------------------------------------------------
 # ruff

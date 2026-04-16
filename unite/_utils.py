@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from astropy import units as u
-from astropy.constants import c  # pyright: ignore[reportAttributeAccessIssue]
+from astropy.constants import c  # ty: ignore[unresolved-import]
 
 _T = TypeVar('_T')
 
@@ -22,7 +22,7 @@ C_KMS: float = c.to('km/s').value
 # ---------------------------------------------------------------------------
 
 
-def _make_register(registry: dict[str, type]) -> Callable[[type[_T]], type[_T]]:
+def _make_register(registry: dict[str, type[Any]]) -> Callable[[type[_T]], type[_T]]:
     """Return a class decorator that registers classes by name.
 
     Parameters
@@ -187,4 +187,4 @@ def _get_conversion_factor(
     assert isinstance(from_unit, u.UnitBase), (
         f'from_unit must be a UnitBase, got {type(from_unit)}'
     )
-    return float(from_unit.to(to_unit))  # pyright: ignore[reportArgumentType]
+    return float(from_unit.to(to_unit))

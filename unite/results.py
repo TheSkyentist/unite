@@ -228,12 +228,12 @@ def make_parameter_table(
     # Add metadata (short keys for FITS compatibility).
     lsq = args.line_scale_quantity
     csq = args.continuum_scale_quantity
-    table.meta['LFLXSCL'] = float(lsq.value) if lsq is not None else None  # pyright: ignore[reportOptionalSubscript]
-    table.meta['LFLXUNT'] = str(lsq.unit) if lsq is not None else None  # pyright: ignore[reportOptionalSubscript]
-    table.meta['CNTSCL'] = float(csq.value) if csq is not None else None  # pyright: ignore[reportOptionalSubscript]
-    table.meta['CNTUNT'] = str(csq.unit) if csq is not None else None  # pyright: ignore[reportOptionalSubscript]
-    table.meta['NRMFCTRS'] = list(args.norm_factors)  # pyright: ignore[reportOptionalSubscript]
-    table.meta['ZSYS'] = args.redshift  # pyright: ignore[reportOptionalSubscript]
+    table.meta['LFLXSCL'] = float(lsq.value) if lsq is not None else None
+    table.meta['LFLXUNT'] = str(lsq.unit) if lsq is not None else None
+    table.meta['CNTSCL'] = float(csq.value) if csq is not None else None
+    table.meta['CNTUNT'] = str(csq.unit) if csq is not None else None
+    table.meta['NRMFCTRS'] = list(args.norm_factors)
+    table.meta['ZSYS'] = args.redshift
 
     return table
 
@@ -369,8 +369,8 @@ def make_spectra_tables(
             np.asarray(spectrum.scaled_error)[pixel_mask], unit=spec_flux_unit
         )
 
-        t.meta['SPECNAME'] = spectrum.name  # pyright: ignore[reportOptionalSubscript]
-        t.meta['NORMFAC'] = float(args.norm_factors[i])  # pyright: ignore[reportOptionalSubscript]
+        t.meta['SPECNAME'] = spectrum.name
+        t.meta['NORMFAC'] = float(args.norm_factors[i])
 
         if insert_nan and region_bounds:
             t = _insert_nan_between_regions(t, region_bounds)

@@ -670,7 +670,7 @@ class Polynomial(ContinuumForm):
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return self._degree == other._degree  # type: ignore[attr-defined]
+        return self._degree == other._degree  # ty: ignore[unresolved-attribute]
 
     @override
     def __hash__(self) -> int:
@@ -845,7 +845,7 @@ class Chebyshev(ContinuumForm):
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return self._order == other._order and self._stretch == other._stretch  # type: ignore[attr-defined]
+        return self._order == other._order and self._stretch == other._stretch  # ty: ignore[unresolved-attribute]
 
     @override
     def __hash__(self) -> int:
@@ -975,10 +975,14 @@ class BSpline(ContinuumForm):
             [jnp.array([1.0])]
             + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._n_basis)]
         )
-        shape = bspline_eval(u, shape_coeffs, knots_norm, self._degree)
-        shape_nw = bspline_eval(
-            jnp.atleast_1d(u_nw), shape_coeffs, knots_norm, self._degree
-        )[0]
+        shape = bspline_eval(u, shape_coeffs, knots_norm, self._degree)  # ty: ignore[invalid-argument-type, too-many-positional-arguments]
+        _snw = bspline_eval(
+            jnp.atleast_1d(u_nw),  # ty: ignore[invalid-argument-type]
+            shape_coeffs,  # ty: ignore[too-many-positional-arguments]
+            knots_norm,
+            self._degree,
+        )
+        shape_nw = _snw[0]  # ty: ignore[not-subscriptable]
         return cast(Array, params['scale'] * shape / shape_nw)
 
     @override
@@ -1626,7 +1630,7 @@ class AttenuatedBlackbody(ContinuumForm):
     def __eq__(self, other: object) -> bool:
         if type(self) is not type(other):
             return NotImplemented
-        return self.lambda_ext == other.lambda_ext  # type: ignore[attr-defined]
+        return self.lambda_ext == other.lambda_ext  # ty: ignore[unresolved-attribute]
 
     @override
     def __hash__(self) -> int:

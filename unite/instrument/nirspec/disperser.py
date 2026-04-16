@@ -115,7 +115,7 @@ def _load_uniform_disp(grating: str) -> dict[str, jnp.ndarray]:
     filename = f'jwst_nirspec_{grating}_disp.fits'
     ref = resources.files('unite.instrument.nirspec.data').joinpath(filename)
     with resources.as_file(ref) as path, fits.open(path) as hdul:
-        data = hdul[1].data  # type: ignore[index]
+        data = hdul[1].data
         return {
             'wavelength': jnp.asarray(data['WAVELENGTH'], dtype=float),
             'dlds': jnp.asarray(data['DLDS'], dtype=float),
@@ -218,18 +218,18 @@ class NIRSpecDisperser(Disperser):
             self._R_grid: jnp.ndarray | None = uniform['R']
             self._R_poly: jnp.ndarray | None = None
             _r_grid = uniform['R']
-            self.R = lambda wavelength: jnp.interp(
+            self.R = lambda wavelength: jnp.interp(  # ty: ignore[invalid-assignment]
                 wavelength, self._wavelength_grid, _r_grid
             )
         else:
             self._R_grid = None
             self._R_poly = jnp.asarray(_DEGRAAFF25_R_COEFFS[grating], dtype=float)
             _r_poly = self._R_poly
-            self.R = lambda wavelength: jnp.polyval(_r_poly, wavelength)
+            self.R = lambda wavelength: jnp.polyval(_r_poly, wavelength)  # ty: ignore[invalid-assignment]
 
     # -- Disperser interface -------------------------------------------------
 
-    def R(self, wavelength):
+    def R(self, wavelength):  # ty: ignore[invalid-method-override]
         """Return the resolving power at the given wavelengths (µm)."""
         raise NotImplementedError('R method should be set dynamically in __init__.')
 

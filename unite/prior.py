@@ -595,7 +595,7 @@ def prior_from_dict(d: dict, token_registry: dict | None = None) -> Prior:
     """
     cls = _PRIOR_REGISTRY[d['type']]
     # Concrete subclasses accept token_registry; ABC signature omits it.
-    return cls.from_dict(d, token_registry=token_registry)  # pyright: ignore[reportCallIssue]
+    return cls.from_dict(d, token_registry=token_registry)  # ty: ignore[unknown-argument]
 
 
 # -------------------------------------------------------------------

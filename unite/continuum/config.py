@@ -766,13 +766,13 @@ class ContinuumConfiguration:
         # Collect user-provided token names from each config (region.params only;
         # auto-created tokens are re-indexed on construction and never collide).
         self_names = {
-            cast(str, tok.name)
+            tok.name
             for r in self._regions
             for tok in r.params.values()
             if tok.name is not None
         }
         other_names = {
-            cast(str, tok.name)
+            tok.name
             for r in other._regions
             for tok in r.params.values()
             if tok.name is not None
