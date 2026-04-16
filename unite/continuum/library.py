@@ -538,9 +538,7 @@ class Linear(ContinuumForm):
         lsf_fwhm: ArrayLike = 0.0,
     ) -> Array:
         nw = params['norm_wav']
-        return cast(
-            Array, params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
-        )
+        return params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
 
     @override
     def to_dict(self) -> dict:
@@ -667,16 +665,6 @@ class Polynomial(ContinuumForm):
         return cls(degree=d['degree'])
 
     @override
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        return self._degree == other._degree  # ty: ignore[unresolved-attribute]
-
-    @override
-    def __hash__(self) -> int:
-        return hash(('Polynomial', self._degree))
-
-    @override
     def __repr__(self) -> str:
         return f'Polynomial(degree={self._degree})'
 
@@ -801,7 +789,7 @@ class Chebyshev(ContinuumForm):
         shape = jnp.polyval(convolved, x)
         # norm_wav is a scalar — no LSF convolution needed.
         shape_nw = chebval(x_nw, cheb_coeffs)
-        return cast(Array, params['scale'] * shape / shape_nw)
+        return params['scale'] * shape / shape_nw
 
     @override
     def integrate(
@@ -830,7 +818,7 @@ class Chebyshev(ContinuumForm):
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         shape_avg = _polyint_avg(convolved, x_low, x_high)
         shape_nw = chebval(x_nw, cheb_coeffs)
-        return cast(Array, params['scale'] * shape_avg / shape_nw)
+        return params['scale'] * shape_avg / shape_nw
 
     @override
     def to_dict(self) -> dict:
@@ -840,16 +828,6 @@ class Chebyshev(ContinuumForm):
     @override
     def from_dict(cls, d: dict) -> Chebyshev:
         return cls(order=d['order'], stretch=d.get('stretch', 1.0))
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        return self._order == other._order and self._stretch == other._stretch  # ty: ignore[unresolved-attribute]
-
-    @override
-    def __hash__(self) -> int:
-        return hash(('Chebyshev', self._order, self._stretch))
 
     @override
     def __repr__(self) -> str:
@@ -983,7 +961,7 @@ class BSpline(ContinuumForm):
             self._degree,
         )
         shape_nw = _snw[0]  # ty: ignore[not-subscriptable]
-        return cast(Array, params['scale'] * shape / shape_nw)
+        return params['scale'] * shape / shape_nw
 
     @override
     def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
@@ -1015,20 +993,6 @@ class BSpline(ContinuumForm):
     @override
     def from_dict(cls, d: dict) -> BSpline:
         return cls(knots=d['knots'] * u.Unit(d['unit']), degree=d.get('degree', 3))
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        other = cast('BSpline', other)
-        return (
-            bool(jnp.array_equal(self._knots, other._knots))
-            and self._degree == other._degree
-        )
-
-    @override
-    def __hash__(self) -> int:
-        return hash(('BSpline', tuple(self._knots.to(u.um).value), self._degree))
 
     @override
     def __repr__(self) -> str:
@@ -1212,17 +1176,6 @@ class Bernstein(ContinuumForm):
     @override
     def from_dict(cls, d: dict) -> Bernstein:
         return cls(degree=d['degree'], stretch=d.get('stretch', 1.0))
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        other = cast('Bernstein', other)
-        return self._degree == other._degree and self._stretch == other._stretch
-
-    @override
-    def __hash__(self) -> int:
-        return hash(('Bernstein', self._degree, self._stretch))
 
     @override
     def __repr__(self) -> str:
@@ -1625,16 +1578,6 @@ class AttenuatedBlackbody(ContinuumForm):
     @override
     def from_dict(cls, d: dict) -> AttenuatedBlackbody:
         return cls(lambda_ext=d.get('lambda_ext', 0.55))
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        if type(self) is not type(other):
-            return NotImplemented
-        return self.lambda_ext == other.lambda_ext  # ty: ignore[unresolved-attribute]
-
-    @override
-    def __hash__(self) -> int:
-        return hash(('AttenuatedBlackbody', self.lambda_ext))
 
     @override
     def __repr__(self) -> str:

@@ -643,13 +643,25 @@ class Parameter:
                 )
                 raise TypeError(msg)
         self.label: str | None = name  # user-supplied semantic label
-        self.name: str | None = None  # NumPyro site name (set at registration)
+        self._name: str | None = None  # NumPyro site name (set at registration)
         self.prior = prior
+
+    @property
+    def name(self) -> str:
+        """NumPyro site name. Set at registration; asserts the token has been registered."""
+        assert self._name is not None, (
+            f'{type(self).__name__} token has not been registered (name not set)'
+        )
+        return self._name
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self._name = value
 
     def __repr__(self) -> str:
         """Return a readable string representation."""
         parts = []
-        label = self.label or self.name
+        label = self.label or self._name
         if label is not None:
             parts.append(repr(label))
         parts.append(f'prior={self.prior!r}')

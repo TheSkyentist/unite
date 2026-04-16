@@ -6,7 +6,7 @@ into user-friendly :class:`~astropy.table.Table` objects and FITS files.
 
 from __future__ import annotations
 
-from typing import Literal, cast, overload
+from typing import Literal, overload
 
 import numpy as np
 from astropy import units as u
@@ -128,7 +128,7 @@ def make_parameter_table(
     if args.cont_config is not None and args.cont_resolved_params is not None:
         for k, resolved in enumerate(args.cont_resolved_params):
             for pn, tok in resolved.items():
-                cont_param_lookup[cast(str, tok.name)] = (k, pn)
+                cont_param_lookup[tok.name] = (k, pn)
 
     def _to_column(pname: str, arr: np.ndarray) -> np.ndarray | u.Quantity:
         """Convert a raw sample array to a physical Quantity where possible."""
@@ -644,7 +644,7 @@ def _compute_rew_columns(
                 continue
             cont_p: dict[str, np.ndarray] = {}
             for pn, tok in _cont_resolved_params[k].items():
-                tok_name = cast(str, tok.name)
+                tok_name = tok.name
                 prior = args.all_priors[tok_name]
                 val: np.ndarray = (
                     np.full(n_samples, float(prior.resolved_value({})))

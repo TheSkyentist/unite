@@ -7,7 +7,7 @@ be called from within :func:`jax.jit`-compiled model code.
 from __future__ import annotations
 
 from functools import partial
-from typing import Final, cast
+from typing import Final
 
 import jax.numpy as jnp
 from astropy import units as u
@@ -63,10 +63,7 @@ def planck_function(
     x = hc_kbt / wavelength_micron
     x_p = hc_kbt / pivot_micron
 
-    return cast(
-        Array,
-        ((pivot_micron / wavelength_micron) ** 5) * (jnp.expm1(x_p) / jnp.expm1(x)),
-    )
+    return ((pivot_micron / wavelength_micron) ** 5) * (jnp.expm1(x_p) / jnp.expm1(x))
 
 
 # ---------------------------------------------------------------------------

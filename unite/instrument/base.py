@@ -161,7 +161,7 @@ class Disperser(ABC):
             ('flux_scale', flux_scale),
             ('pix_offset', pix_offset),
         ]:
-            if tok is not None and tok.name is None and tok.label is not None:
+            if tok is not None and tok._name is None and tok.label is not None:
                 tok.name = f'{slot}_{tok.label}'
 
     @abstractmethod

@@ -4,7 +4,7 @@ description = "Unified liNe Integration Turbo Engine"
 readme = "README.md"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
-version = "2.4.1"
+version = "2.4.2"
 dependencies = [
   "numpyro>=0.20.0,<0.21",
   "astropy>=7.2.0,<8",
@@ -134,8 +134,6 @@ docs = {features = ["docs"], solve-group = "default"}
 # ArrayLike arithmetic is idiomatic in JAX codebases; operator type-checking
 # on ArrayLike unions produces false-positive errors throughout line/continuum kernels
 unsupported-operator = "ignore"
-# cast() calls are sometimes needed to guide basedpyright; ty infers these correctly
-redundant-cast = "ignore"
 
 # ---------------------------------------------------------------------------
 # ruff

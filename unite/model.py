@@ -229,18 +229,12 @@ def unite_model(args: ModelArgs) -> None:
         cs = args.continuum_scales[i]
 
         # Calibration values (fall back to identity when no token is attached).
-        r_scale = (
-            context[cast(str, disp.r_scale.name)] if disp.r_scale is not None else 1.0
-        )
+        r_scale = context[disp.r_scale.name] if disp.r_scale is not None else 1.0
         flux_scale = (
-            context[cast(str, disp.flux_scale.name)]
-            if disp.flux_scale is not None
-            else 1.0
+            context[disp.flux_scale.name] if disp.flux_scale is not None else 1.0
         )
         pix_offset = (
-            context[cast(str, disp.pix_offset.name)]
-            if disp.pix_offset is not None
-            else 0.0
+            context[disp.pix_offset.name] if disp.pix_offset is not None else 0.0
         )
 
         # Pixel edges in canonical wavelength unit.
@@ -487,7 +481,7 @@ class ModelBuilder:
         param_to_name: dict[object, str] = {
             # We can reconstruct token→name from the matrices' name lists and
             # the original entries since tokens carry their .name attribute.
-            tok: cast(str, tok.name)
+            tok: tok.name
             for entry in line_config._entries
             for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values())
             if tok is not None
@@ -502,7 +496,7 @@ class ModelBuilder:
                 seen_dispersers.add(id(disp))
                 for tok in (disp.r_scale, disp.flux_scale, disp.pix_offset):
                     if tok is not None and id(tok) not in seen_tok_ids:
-                        tok_name = cast(str, tok.name)
+                        tok_name = tok.name
                         seen_tok_ids.add(id(tok))
                         all_priors[tok_name] = tok.prior
                         param_to_name[tok] = tok_name
@@ -514,7 +508,7 @@ class ModelBuilder:
             for resolved in continuum_config.resolved_params:
                 for tok in resolved.values():
                     if id(tok) not in seen_cont_ids:
-                        tok_name = cast(str, tok.name)
+                        tok_name = tok.name
                         seen_cont_ids.add(id(tok))
                         all_priors[tok_name] = tok.prior
                         param_to_name[tok] = tok_name

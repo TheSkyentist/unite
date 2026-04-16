@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 from astropy import units as u
@@ -182,7 +182,7 @@ class Spectra:
 
         # Canonical wavelength unit: default to the first spectrum's unit.
         if canonical_unit is not None:
-            _cu = cast(u.UnitBase, u.Unit(str(canonical_unit)))
+            _cu = u.Unit(str(canonical_unit))
             if not _cu.is_equivalent(u.m):
                 msg = f'canonical_unit must have wavelength dimensions, got {_cu!r}.'
                 raise u.UnitConversionError(msg)
@@ -616,7 +616,7 @@ class Spectra:
         mask = []
         for wavelength in line_config.wavelengths:
             # wavelength is a Quantity; convert to each spectrum's disperser unit
-            lam_obs = cast(u.Quantity, wavelength * (1.0 + z))
+            lam_obs = wavelength * (1.0 + z)
             covered = any(
                 s.covers(
                     float(lam_obs.to(s.unit).value) * (1.0 - eps),

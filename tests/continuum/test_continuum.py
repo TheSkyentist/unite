@@ -796,11 +796,7 @@ class TestLinear:
         assert val[0] == pytest.approx(3.0)
 
     def test_roundtrip(self):
-        f = Linear()
-        assert form_from_dict(f.to_dict()) == f
-
-    def test_equality(self):
-        assert Linear() == Linear()
+        assert isinstance(form_from_dict(Linear().to_dict()), Linear)
 
 
 class TestPowerLaw:
@@ -856,12 +852,7 @@ class TestPowerLaw:
         assert val[0] == pytest.approx(3.7)
 
     def test_roundtrip(self):
-        f = PowerLaw()
-        f2 = form_from_dict(f.to_dict())
-        assert f2 == f
-
-    def test_equality(self):
-        assert PowerLaw() == PowerLaw()
+        assert isinstance(form_from_dict(PowerLaw().to_dict()), PowerLaw)
 
     def test_repr(self):
         assert repr(PowerLaw()) == 'PowerLaw()'
@@ -901,16 +892,9 @@ class TestPolynomial:
         assert val[0] == pytest.approx(4.0)
 
     def test_roundtrip(self):
-        f = Polynomial(degree=3)
-        f2 = form_from_dict(f.to_dict())
+        f2 = form_from_dict(Polynomial(degree=3).to_dict())
+        assert isinstance(f2, Polynomial)
         assert f2.degree == 3
-        assert f2 == f
-
-    def test_equality_different_degree(self):
-        assert Polynomial(1) != Polynomial(2)
-
-    def test_hash_consistent(self):
-        assert hash(Polynomial(2)) == hash(Polynomial(2))
 
 
 class TestChebyshev:
@@ -946,14 +930,10 @@ class TestChebyshev:
         assert val[0] == pytest.approx(2.0, rel=1e-5)
 
     def test_roundtrip(self):
-        f = Chebyshev(order=3)
-        f2 = form_from_dict(f.to_dict())
+        f2 = form_from_dict(Chebyshev(order=3).to_dict())
+        assert isinstance(f2, Chebyshev)
         assert f2.order == 3
         assert f2.stretch == pytest.approx(1)
-        assert f2 == f
-
-    def test_equality_checks_stretch(self):
-        assert Chebyshev(2, 0.1) != Chebyshev(2, 0.2)
 
 
 class TestBlackbody:
@@ -1020,9 +1000,7 @@ class TestBlackbody:
         assert val_aa[0] == pytest.approx(val_um[0], rel=1e-5)
 
     def test_roundtrip(self):
-        f = Blackbody()
-        f2 = form_from_dict(f.to_dict())
-        assert f2 == f
+        assert isinstance(form_from_dict(Blackbody().to_dict()), Blackbody)
 
 
 class TestModifiedBlackbody:
@@ -1048,9 +1026,9 @@ class TestModifiedBlackbody:
         assert val[0] == pytest.approx(3.0, rel=1e-5)
 
     def test_roundtrip(self):
-        f = ModifiedBlackbody()
-        f2 = form_from_dict(f.to_dict())
-        assert f2 == f
+        assert isinstance(
+            form_from_dict(ModifiedBlackbody().to_dict()), ModifiedBlackbody
+        )
 
 
 class TestAttenuatedBlackbody:
@@ -1082,13 +1060,9 @@ class TestAttenuatedBlackbody:
         assert val[0] == pytest.approx(1.5, rel=1e-5)
 
     def test_roundtrip(self):
-        f = AttenuatedBlackbody(lambda_ext=0.6 * u.um)
-        f2 = form_from_dict(f.to_dict())
+        f2 = form_from_dict(AttenuatedBlackbody(lambda_ext=0.6 * u.um).to_dict())
+        assert isinstance(f2, AttenuatedBlackbody)
         assert f2.lambda_ext.value == pytest.approx(0.6)
-        assert f2 == f
-
-    def test_equality_checks_lambda_ext(self):
-        assert AttenuatedBlackbody(0.55 * u.um) != AttenuatedBlackbody(0.50 * u.um)
 
 
 class TestBSpline:
@@ -1127,7 +1101,7 @@ class TestBSpline:
     def test_roundtrip(self, cubic_knots):
         b = BSpline(cubic_knots, degree=3)
         b2 = form_from_dict(b.to_dict())
-        assert b2 == b
+        assert isinstance(b2, BSpline)
         assert b2.n_basis == b.n_basis
 
 
@@ -1161,15 +1135,8 @@ class TestBernstein:
 
     def test_roundtrip(self, bernstein):
         b2 = form_from_dict(bernstein.to_dict())
+        assert isinstance(b2, Bernstein)
         assert b2.degree == 3
-        assert b2 == bernstein
-
-    def test_equality_checks_stretch(self):
-        b1 = Bernstein(degree=3, stretch=1.0)
-        b2 = Bernstein(degree=3, stretch=1.5)
-        assert b1 != b2
-        b3 = Bernstein(degree=3, stretch=1.0)
-        assert b1 == b3
 
 
 # ---------------------------------------------------------------------------
@@ -1396,11 +1363,11 @@ class TestDefaultPriors:
 
 
 # ---------------------------------------------------------------------------
-# __eq__ cross-type (NotImplemented) and __hash__ for all forms
+# __hash__ for all forms (base class behaviour)
 # ---------------------------------------------------------------------------
 
 
-class TestFormEqHash:
+class TestFormHash:
     @pytest.mark.parametrize(
         'form',
         [
@@ -1423,34 +1390,6 @@ class TestFormEqHash:
         assert Linear() != PowerLaw()
         assert Blackbody() != ModifiedBlackbody()
         assert Polynomial(2) != Chebyshev(2)
-
-    def test_polynomial_eq_hash(self):
-        assert Polynomial(2) == Polynomial(2)
-        assert Polynomial(2) != Polynomial(3)
-        assert hash(Polynomial(2)) == hash(Polynomial(2))
-
-    def test_chebyshev_eq_hash(self):
-        assert Chebyshev(2, 0.1) == Chebyshev(2, 0.1)
-        assert Chebyshev(2, 0.1) != Chebyshev(2, 0.2)
-        assert isinstance(hash(Chebyshev(2, 0.1)), int)
-
-    def test_attenuated_blackbody_eq_hash(self):
-        assert AttenuatedBlackbody(0.55 * u.um) == AttenuatedBlackbody(0.55 * u.um)
-        assert AttenuatedBlackbody(0.55 * u.um) != AttenuatedBlackbody(0.50 * u.um)
-        assert isinstance(hash(AttenuatedBlackbody(0.55 * u.um)), int)
-
-    def test_bspline_eq_hash(self):
-        knots = [1.0] * u.um
-        b1 = BSpline(knots, degree=3)
-        b2 = BSpline(knots, degree=3)
-        assert b1 == b2
-        assert isinstance(hash(b1), int)
-
-    def test_bernstein_eq_hash(self):
-        b1 = Bernstein(degree=3)
-        b2 = Bernstein(degree=3)
-        assert b1 == b2
-        assert isinstance(hash(b1), int)
 
 
 # ---------------------------------------------------------------------------

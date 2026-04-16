@@ -269,7 +269,7 @@ class InstrumentConfig:
         for d in self._dispersers:
             for slot in _slots:
                 tok = getattr(d, slot)
-                if tok is not None and tok.name is None:
+                if tok is not None and tok._name is None:
                     tok_dispersers.setdefault(id(tok), []).append(d)
 
         counters: dict[str, int] = {}  # slot → next alpha index
@@ -278,7 +278,7 @@ class InstrumentConfig:
         for d in self._dispersers:
             for slot in _slots:
                 tok = getattr(d, slot)
-                if tok is None or tok.name is not None or id(tok) in seen:
+                if tok is None or tok._name is not None or id(tok) in seen:
                     continue
                 seen.add(id(tok))
                 dispersers_with_tok = tok_dispersers.get(id(tok), [])

@@ -300,7 +300,7 @@ def _token_matrix(
     mat = np.zeros((len(unique), n_lines), dtype=float)
     for j, entry in enumerate(entries):
         mat[seen[id(get_tok(entry))], j] = 1.0
-    return [cast(str, t.name) for t in unique], jnp.array(mat)
+    return [t.name for t in unique], jnp.array(mat)
 
 
 def _slot_matrix(
@@ -331,7 +331,7 @@ def _slot_matrix(
     mat = np.zeros((len(unique), n_lines), dtype=float)
     for j, tok in tok_pairs:
         mat[seen[id(tok)], j] = 1.0
-    return [cast(str, t.name) for t in unique], jnp.array(mat)
+    return [t.name for t in unique], jnp.array(mat)
 
 
 # ------------------------------------------------------------------
@@ -634,7 +634,7 @@ class LineConfiguration:
         prefix = _prefix_for(category)
         used = self._used_names.setdefault(category, set())
 
-        if token.name is not None:
+        if token._name is not None:
             # Already has a finalized site name (e.g. re-used from _filter or merge).
             site_name = token.name
             if site_name in used:
@@ -749,7 +749,7 @@ class LineConfiguration:
             for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
                 if tok is not None and id(tok) not in seen_ids:
                     seen_ids.add(id(tok))
-                    priors[cast(str, tok.name)] = tok.prior
+                    priors[tok.name] = tok.prior
 
         return ConfigMatrices(
             wavelengths=wavelengths,
@@ -799,7 +799,7 @@ class LineConfiguration:
             tid = id(tok)
             if tid not in seen_ids:
                 seen_ids.add(tid)
-                sections.setdefault(section, []).append((cast(str, tok.name), tok))
+                sections.setdefault(section, []).append((tok.name, tok))
 
         for entry in self._entries:
             _collect(entry.redshift, 'redshift')
@@ -829,9 +829,9 @@ class LineConfiguration:
             item: dict = {
                 'name': entry.name,
                 'wavelength': float(entry.wavelength.value),
-                'wavelength_unit': cast(u.UnitBase, entry.wavelength.unit).to_string(),
-                'redshift': cast(str, entry.redshift.name),
-                'params': {pn: cast(str, tok.name) for pn, tok in entry.fwhms.items()},
+                'wavelength_unit': entry.wavelength.unit.to_string(),
+                'redshift': entry.redshift.name,
+                'params': {pn: tok.name for pn, tok in entry.fwhms.items()},
             }
             if entry.flux is not None:
                 item['flux'] = entry.flux.name
@@ -1074,10 +1074,10 @@ class LineConfiguration:
             for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
                 if (
                     tok is not None
-                    and tok.name is not None
-                    and tok.name not in self_tokens
+                    and tok._name is not None
+                    and tok._name not in self_tokens
                 ):
-                    self_tokens[tok.name] = tok
+                    self_tokens[tok._name] = tok
 
         # Build a mapping from other's token id → replacement token.
         other_remap: dict[int, Parameter] = {}
@@ -1088,8 +1088,8 @@ class LineConfiguration:
                 tid = id(tok)
                 if tid in other_remap:
                     continue
-                if tok.name in self_tokens:
-                    existing = self_tokens[tok.name]
+                if tok._name in self_tokens:
+                    existing = self_tokens[tok._name]
                     if strict:
                         msg = (
                             f'Token name collision: {tok.name!r} exists in both '
@@ -1186,12 +1186,12 @@ class LineConfiguration:
         for entry in self._entries:
             prof_name = type(entry.profile).__name__
             # Tokens are always named after add_line registration
-            fwhm_display = ', '.join(cast(str, f.name) for f in entry.fwhms.values())
+            fwhm_display = ', '.join(f.name for f in entry.fwhms.values())
 
             flux_or_tau = (
-                cast(str, entry.flux.name)
+                entry.flux.name
                 if entry.flux is not None
-                else cast(str, entry.tau.name)
+                else entry.tau.name
                 if entry.tau is not None
                 else ''
             )
@@ -1201,7 +1201,7 @@ class LineConfiguration:
                     entry.name,
                     f'{entry.wavelength:.2f}',
                     prof_name,
-                    cast(str, entry.redshift.name),
+                    entry.redshift.name,
                     fwhm_display,
                     flux_or_tau,
                     f'{entry.strength:.2f}',
@@ -1236,7 +1236,7 @@ class LineConfiguration:
             zid = id(entry.redshift)
             if zid not in seen_z:
                 seen_z.add(zid)
-                z_params.append((cast(str, entry.redshift.name), entry.redshift.prior))
+                z_params.append((entry.redshift.name, entry.redshift.prior))
 
         seen_fwhm: dict[str, set[int]] = {}
         fwhm_key_order: list[str] = []
@@ -1250,7 +1250,7 @@ class LineConfiguration:
                 wid = id(w_obj)
                 if wid not in seen_fwhm[wn]:
                     seen_fwhm[wn].add(wid)
-                    fwhm_params[wn].append((cast(str, w_obj.name), w_obj.prior))
+                    fwhm_params[wn].append((w_obj.name, w_obj.prior))
 
         seen_flux: set[int] = set()
         flux_params: list[tuple[str, Prior]] = []
@@ -1259,7 +1259,7 @@ class LineConfiguration:
                 fid = id(entry.flux)
                 if fid not in seen_flux:
                     seen_flux.add(fid)
-                    flux_params.append((cast(str, entry.flux.name), entry.flux.prior))
+                    flux_params.append((entry.flux.name, entry.flux.prior))
 
         seen_tau: set[int] = set()
         tau_params: list[tuple[str, Prior]] = []
@@ -1268,7 +1268,7 @@ class LineConfiguration:
                 tid = id(entry.tau)
                 if tid not in seen_tau:
                     seen_tau.add(tid)
-                    tau_params.append((cast(str, entry.tau.name), entry.tau.prior))
+                    tau_params.append((entry.tau.name, entry.tau.prior))
 
         def _fmt_section(title: str, params: list[tuple[str, Prior]]) -> list[str]:
             name_w = max(len(p[0]) for p in params)

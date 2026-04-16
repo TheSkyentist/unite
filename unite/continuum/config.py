@@ -6,7 +6,6 @@ import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import yaml
@@ -188,7 +187,7 @@ class ContinuumRegion:
         high_q = high_q.to(low_q.unit)
 
         # Convert to region wavelengths
-        self.unit: u.UnitBase = cast(u.UnitBase, low_q.unit)
+        self.unit: u.UnitBase = low_q.unit
         self.low = float(low_q.value)
         self.high = float(high_q.value)
 
@@ -423,7 +422,7 @@ class ContinuumConfiguration:
                     tok = region.params[pn]
                     if id(tok) not in seen:
                         seen.add(id(tok))
-                        if tok.name is None:
+                        if tok._name is None:
                             if tok.label is not None:
                                 tok.name = f'{pn}_{tok.label}'
                             elif region.name is not None:
@@ -573,7 +572,7 @@ class ContinuumConfiguration:
             for tok in resolved.values():
                 if id(tok) not in seen_tok_ids:
                     seen_tok_ids.add(id(tok))
-                    tok_name = cast(str, tok.name)
+                    tok_name = tok.name
                     param_namer[tok] = tok_name
                     params_order.append((tok_name, tok))
 
@@ -769,13 +768,13 @@ class ContinuumConfiguration:
             tok.name
             for r in self._regions
             for tok in r.params.values()
-            if tok.name is not None
+            if tok._name is not None
         }
         other_names = {
             tok.name
             for r in other._regions
             for tok in r.params.values()
-            if tok.name is not None
+            if tok._name is not None
         }
         collisions = sorted(self_names & other_names)
         if collisions:
@@ -805,7 +804,7 @@ class ContinuumConfiguration:
             range_str = f'[{region.low}, {region.high}]'
             unit_str = str(region.unit)
             form_str = repr(region.form)
-            params_str = ', '.join(cast(str, tok.name) for tok in resolved.values())
+            params_str = ', '.join(tok.name for tok in resolved.values())
             rows.append((range_str, unit_str, form_str, params_str))
 
         col_headers = ('Range', 'Unit', 'Form', 'Parameters')
@@ -827,7 +826,7 @@ class ContinuumConfiguration:
             for tok in resolved.values():
                 if id(tok) not in seen_tok_ids2:
                     seen_tok_ids2.add(id(tok))
-                    unique_toks.append((cast(str, tok.name), tok))
+                    unique_toks.append((tok.name, tok))
 
         if unique_toks:
             lines.append('')

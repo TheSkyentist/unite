@@ -20,7 +20,7 @@ class TestRedshift:
     def test_named(self):
         z = Redshift('nlr')
         assert z.label == 'nlr'
-        assert z.name is None  # site name is set at registration time
+        assert z._name is None  # site name is set at registration time
 
     def test_custom_prior(self):
         p = TruncatedNormal(0.0, 0.01, -0.05, 0.05)
@@ -57,7 +57,7 @@ class TestFWHM:
     def test_named_with_prior(self):
         f = FWHM('broad', prior=Uniform(500, 5000))
         assert f.label == 'broad'
-        assert f.name is None  # site name is set at registration time
+        assert f._name is None  # site name is set at registration time
         assert f.prior.low == pytest.approx(500.0)
 
     def test_dependent_bound(self):
@@ -74,7 +74,7 @@ class TestFlux:
     def test_named(self):
         f = Flux('Ha_flux')
         assert f.label == 'Ha_flux'
-        assert f.name is None  # site name is set at registration time
+        assert f._name is None  # site name is set at registration time
 
 
 class TestLineShape:
@@ -97,7 +97,7 @@ class TestTau:
     def test_named(self):
         t = Tau('hi_absorber')
         assert t.label == 'hi_absorber'
-        assert t.name is None  # site name set at registration time
+        assert t._name is None  # site name set at registration time
 
     def test_custom_prior(self):
         p = Uniform(0, 50)

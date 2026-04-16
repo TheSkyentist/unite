@@ -26,7 +26,7 @@ token kwargs.
 from __future__ import annotations
 
 from importlib import resources
-from typing import Literal, cast
+from typing import Literal
 
 import jax.numpy as jnp
 from astropy import units as u
@@ -206,7 +206,7 @@ class NIRSpecDisperser(Disperser):
         )
 
         self.grating: str = grating
-        self.r_source: RSource = cast('RSource', _r_source_str)
+        self.r_source: RSource = _r_source_str
 
         # Load JDOX dispersion table (shared by both R sources).
         uniform = _load_uniform_disp(grating)
