@@ -665,7 +665,7 @@ class Parameter:
         if label is not None:
             parts.append(repr(label))
         parts.append(f'prior={self.prior!r}')
-        return f'{self.__class__.__name__}({", ".join(parts)})'
+        return f'{self.__class__.__name__}({', '.join(parts)})'
 
     def __mul__(self, other) -> _Expr:
         """Return a product expression."""
