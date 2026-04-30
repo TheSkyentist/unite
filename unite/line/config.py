@@ -91,11 +91,28 @@ class Tau(Parameter):
     """
     A named optical depth parameter for absorption lines.
 
-    Represents the absorption depth at the line center.  The normalised
-    profile shape (from the absorption profile class) is multiplied by
-    this value to obtain the wavelength-dependent optical depth
-    ``tau(lam) = tau * phi(lam)``, and the resulting transmission is
-    ``exp(-τ(λ))``.
+    Parametrizes the **peak optical depth** of the intrinsic (pre-LSF)
+    profile: ``tau_0 = tau(lambda_center)`` where the wavelength-dependent
+    optical depth is ``tau(lam) = tau_0 * phi_norm(lam)`` and
+    ``phi_norm = phi / phi(center)`` is the profile normalized to unity at
+    line center.  The resulting transmission is ``T(lam) = exp(-tau(lam))``.
+
+    ``tau_0 = 1`` means the intrinsic profile has 1/e transmission (≈ 37%)
+    at line center; ``tau_0 = 3`` gives ≈ 5% transmission (mildly optically
+    thick); values much above 6 are effectively black at line center.
+
+    Because the normalization uses the intrinsic (zero-LSF) profile peak,
+    ``tau_0`` is an instrument-independent property of the absorber.  The
+    observed absorption depth depends on how well the line is resolved: an
+    unresolved line will show shallower absorption than ``tau_0`` predicts
+    at a single wavelength, but the model correctly accounts for this via
+    LSF convolution.
+
+    For asymmetric profiles (:class:`~unite.line.library.GaussHermite` with
+    ``h3 ≠ 0``, :class:`~unite.line.library.SkewVoigt` with large ``alpha``),
+    the profile maximum lies away from the nominal center wavelength.
+    ``tau_0`` is defined as the optical depth at the nominal center, not the
+    absolute maximum of the profile.
 
     Default prior is uniform between 0 and 10.
     """

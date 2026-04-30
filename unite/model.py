@@ -219,6 +219,30 @@ def unite_model(args: ModelArgs) -> None:
     else:
         p2 = jnp.zeros(n_lines)
 
+    # --- 2b. Convert amplitude tau to area-tau ---
+    # Tau tokens parametrize the peak optical depth of the intrinsic (pre-LSF)
+    # profile: tau_0 = tau(lambda_center).  The compose path expects area-tau
+    # (implicit wavelength units, equal to integral of tau(lambda) dlambda).
+    # Convert: area_tau = tau_0 / phi_intrinsic(center).
+    #
+    # A negligible stand-in LSF (1e-10) avoids 0/0 singularities in EMG-based
+    # profiles (Laplace, SEMG) while leaving phi numerically equal to the
+    # intrinsic limit.  Using the intrinsic peak (not the LSF-convolved one)
+    # keeps tau_0 an instrument-independent physical property of the absorber.
+    #
+    # Note: for asymmetric profiles (GaussHermite with h3≠0, SkewVoigt with
+    # large alpha), the profile maximum may lie away from the nominal center
+    # wavelength.  tau_0 is defined as the optical depth at the nominal center,
+    # not the absolute maximum; document this for users of those profiles.
+    if cm.tau_names:
+        _tiny_lsf = jnp.full_like(centers, 1e-10)
+        _phi_all = evaluate_lines(
+            centers, centers, _tiny_lsf, p0, p1, p2, cm.profile_codes
+        )  # (n_lines, n_lines): row j = line j evaluated at all centers
+        _phi_center = jnp.diag(_phi_all)  # (n_lines,): phi_j(center_j)
+        _phi_safe = jnp.where(cm.is_absorption, _phi_center, 1.0)
+        tau_per_line = tau_per_line / _phi_safe
+
     # --- 3. Per-spectrum likelihood ---
     for i, spectrum in enumerate(args.spectra):
         disp = spectrum.disperser
