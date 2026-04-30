@@ -304,3 +304,61 @@ class TestEvaluateAbsorption:
 
         component_sum = sum(pred.lines.values()) + sum(pred.continuum_regions.values())
         np.testing.assert_allclose(pred.total, component_sum, rtol=1e-5)
+
+    def test_tau_profiles_present(self):
+        """Absorption line produces a tau_profile entry: correct shape, non-negative."""
+        from unite.line.config import Tau
+        from unite.line.library import Gaussian
+
+        spec = _make_spectrum(name='tp_present')
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=Tau(prior=prior.Fixed(2.0)),
+        )
+        _model_fn, args = _build_model(spec, lc)
+        pred = evaluate_model({}, args)[0]
+        assert isinstance(pred.tau_profiles, dict)
+        assert 'HI_abs' in pred.tau_profiles
+        assert 'Ha' not in pred.tau_profiles
+        od = pred.tau_profiles['HI_abs']
+        assert od.shape == pred.total.shape
+        assert np.all(od >= 0)
+        # Peak optical depth should be near line centre.
+        assert np.max(od) > 0
+
+    def test_tau_profiles_zero_for_zero_tau(self):
+        """tau=0 → tau_profile is all zeros."""
+        from unite.line.config import Tau
+        from unite.line.library import Gaussian
+
+        spec = _make_spectrum(name='tp_zero')
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=Tau(prior=prior.Fixed(0.0)),
+        )
+        _model_fn, args = _build_model(spec, lc)
+        pred = evaluate_model({}, args)[0]
+        np.testing.assert_allclose(pred.tau_profiles['HI_abs'], 0.0, atol=1e-10)
+
+    def test_tau_profiles_empty_for_emission_only(self, simple_setup):
+        """Emission-only model → tau_profiles is an empty dict."""
+        samples, args, _ = simple_setup
+        pred = evaluate_model(samples, args)[0]
+        assert pred.tau_profiles == {}

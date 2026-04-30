@@ -174,8 +174,9 @@ for name, t in tables.items():
 |--------|-------------|
 | `wavelength` | Observed-frame wavelength (trimmed to continuum regions) |
 | `model_total` | Total model (lines + continuum) |
-| `<line_name>_<i>` | Individual line component `i` |
-| `cont_region_<k>` | Continuum contribution from region `k` |
+| `<line_label>` | Flux contribution of an emission line (positive); or flux *removed* by an absorber (negative) |
+| `od_<line_label>` | LSF-convolved optical depth profile `tau * phi(λ)` for each absorption line (dimensionless, ≥ 0) |
+| `<cont_region_label>` | Continuum contribution from a region |
 | `observed_flux` | Observed flux from the input spectrum |
 | `observed_error` | Pipeline uncertainty array (unscaled) |
 | `scaled_error` | Error inflated by the per-spectrum `error_scale` factor |
@@ -297,10 +298,14 @@ from unite.compute import evaluate_model
 predictions = evaluate_model(samples, model_args)
 
 for pred, spectrum in zip(predictions, model_args.spectra):
-    # pred.total         — (n_samples, n_pixels)
-    # pred.lines         — dict of name → (n_samples, n_pixels)
+    # pred.total             — (n_samples, n_pixels)
+    # pred.lines             — dict of name → (n_samples, n_pixels)
+    #   emission lines: flux contribution (positive)
+    #   absorption lines: flux removed (negative)
+    # pred.tau_profiles      — dict of name → (n_samples, n_pixels)
+    #   absorption lines only: tau * phi(λ), dimensionless, ≥ 0
     # pred.continuum_regions — dict of name → (n_samples, n_pixels)
-    # pred.wavelength    — (n_pixels,)
+    # pred.wavelength        — (n_pixels,)
     print(pred.wavelength.shape, pred.total.shape)
 ```
 

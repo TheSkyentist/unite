@@ -619,6 +619,54 @@ class TestREWAccuracy:
 
 
 # ---------------------------------------------------------------------------
+# Optical depth profile columns in spectra tables
+# ---------------------------------------------------------------------------
+
+
+class TestOpticalDepthProfiles:
+    """od_{label} columns in make_spectra_tables for absorption lines."""
+
+    def test_od_column_present(self, absorption_rew_setup):
+        """od_HI_abs column is present, dimensionless, and non-negative."""
+        args = absorption_rew_setup
+        tables = make_spectra_tables({}, args)
+        t = tables['rew']
+        assert 'od_HI_abs' in t.colnames
+        od = np.asarray(t['od_HI_abs'])
+        assert np.all(od >= 0)
+        # Should have no flux unit attached (dimensionless).
+        col = t['od_HI_abs']
+        assert not hasattr(col, 'unit') or col.unit in (None, u.dimensionless_unscaled)
+
+    def test_od_column_absent_for_emission_only(self, simple_setup):
+        """No od_ columns when the model has only emission lines."""
+        samples, args = simple_setup
+        tables = make_spectra_tables(samples, args)
+        t = tables['test']
+        assert not any(col.startswith('od_') for col in t.colnames)
+
+    def test_od_column_percentiles_mode(self, absorption_rew_setup):
+        """od_HI_abs has shape (n_pix, n_percentiles) in percentile mode."""
+        args = absorption_rew_setup
+        percentiles = np.array([0.16, 0.5, 0.84])
+        tables = make_spectra_tables({}, args, percentiles=percentiles)
+        t = tables['rew']
+        assert 'od_HI_abs' in t.colnames
+        assert t['od_HI_abs'].shape[1] == 3
+
+    def test_od_column_peaks_near_line_center(self, absorption_rew_setup):
+        """Optical depth profile peaks near the absorption line centre."""
+        args = absorption_rew_setup
+        tables = make_spectra_tables({}, args)
+        t = tables['rew']
+        wl = np.asarray(t['wavelength'])
+        od = np.asarray(t['od_HI_abs'])  # (n_pix, 1) — single Fixed sample
+        peak_idx = np.argmax(od[:, 0])
+        # Line is at 6563 AA; peak should be within 5 AA.
+        assert abs(wl[peak_idx] - 6563.0) < 5.0
+
+
+# ---------------------------------------------------------------------------
 # Unit preservation in FITS HDUs
 # ---------------------------------------------------------------------------
 
