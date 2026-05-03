@@ -349,7 +349,9 @@ def make_spectra_tables(
                     unit=spec_flux_unit,
                 )
             for name, arr in pred.tau_profiles.items():
-                t[f'od_{name}'] = _compute_percentiles(arr[:, pixel_mask], percentiles).T
+                t[f'od_{name}'] = _compute_percentiles(
+                    arr[:, pixel_mask], percentiles
+                ).T
         else:
             # (n_samples, n_pixels) → trim → transpose to (n_pixels, n_samples)
             t['model_total'] = u.Quantity(
