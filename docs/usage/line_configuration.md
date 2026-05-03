@@ -422,10 +422,12 @@ and you want them to be treated as the same model parameter. However, proceed wi
 ## Absorption Lines
 
 `unite` supports absorption lines alongside emission lines. Absorption profiles
-produce a transmission factor `exp(-tau * phi(lambda))` that multiplies the
-emission and/or continuum flux, rather than adding flux. The key difference from
-emission lines is that absorption lines use a {class}`~unite.line.Tau` (optical
-depth) token instead of a {class}`~unite.line.Flux` token.
+produce a wavelength-dependent transmission `T(λ) = exp(-τ₀ · φ_norm(λ))` that
+multiplies the emission and/or continuum flux, where `τ₀` is the {class}`~unite.line.Tau`
+parameter and `φ_norm(λ) = φ(λ) / φ(λ_center)` is the profile normalized to 1
+at the nominal line center. The key difference from emission lines is that absorption
+lines use a {class}`~unite.line.Tau` (optical depth) token instead of a
+{class}`~unite.line.Flux` token.
 
 :::{warning}
 **Two distinct approximations apply to absorption lines — one mode-dependent, one universal.**
@@ -464,8 +466,23 @@ lc.add_line('HI_lor', 4341.0 * u.AA, profile='cauchy', tau=line.Tau())
 
 ### Tau vs Flux
 
-The `Tau` token controls the optical depth at line center. Higher values mean
-stronger absorption:
+The `Tau` parameter is the **optical depth at the nominal line center** of the
+intrinsic (pre-LSF) profile — i.e. `τ₀ = τ(λ_center)` where `λ_center` is the
+rest-frame center wavelength shifted by the line's redshift. Concretely:
+
+- `τ₀ = 1` → transmission ≈ 37% at line center (optically thin to moderate)
+- `τ₀ = 3` → transmission ≈ 5% (significantly optically thick)
+- `τ₀ ≫ 1` → effectively black at line center
+
+**For symmetric profiles** (Gaussian, PseudoVoigt, Cauchy, Laplace, SEMG,
+SplitNormal), `τ₀` is also the *maximum* optical depth anywhere in the profile.
+
+**For asymmetric profiles** (GaussHermite with `h3 ≠ 0`, SkewVoigt with large
+`alpha`), the profile peak shifts away from the nominal center wavelength.
+`τ₀` remains the optical depth *at the nominal center*, not the absolute
+maximum the profile reaches. If the physical peak depth matters for your
+science case, prefer a symmetric profile for absorption lines, or account for
+this distinction when interpreting posteriors.
 
 ```python
 # Explicit tau token with custom prior
