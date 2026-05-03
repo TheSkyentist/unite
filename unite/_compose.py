@@ -12,7 +12,7 @@ import jax.numpy as jnp
 
 
 def compose_from_profiles(
-    profiles, flux_per_line, tau_per_line, is_absorption, continuum, absorber_position
+    profiles, flux_per_line, tau_per_line, is_tau, continuum, absorber_position
 ):
     """Compose the total model from pre-evaluated profiles and continuum.
 
@@ -26,7 +26,7 @@ def compose_from_profiles(
         Flux per line (zero for tau-parametrized lines).
     tau_per_line : jnp.ndarray, shape ``(n_lines,)``
         Optical depth per line (zero for flux-parametrized lines).
-    is_absorption : jnp.ndarray, shape ``(n_lines,)``
+    is_tau : jnp.ndarray, shape ``(n_lines,)``
         Boolean mask: True for tau-parametrized lines.
     continuum : jnp.ndarray, shape ``(n_points,)``
         Continuum flux density at each point.
@@ -39,13 +39,13 @@ def compose_from_profiles(
         Total model flux density (before ``flux_scale`` and normalisation).
     """
     emission, transmission = _emission_and_transmission(
-        profiles, flux_per_line, tau_per_line, is_absorption
+        profiles, flux_per_line, tau_per_line, is_tau
     )
     return _combine(emission, transmission, continuum, absorber_position)
 
 
 def compose_leave_one_out(
-    profiles, flux_per_line, tau_per_line, is_absorption, continuum, absorber_position
+    profiles, flux_per_line, tau_per_line, is_tau, continuum, absorber_position
 ):
     """Compose the total model and per-line contributions.
 
@@ -68,7 +68,7 @@ def compose_leave_one_out(
         Flux per line (zero for tau-parametrized lines).
     tau_per_line : jnp.ndarray, shape ``(n_lines,)``
         Optical depth per line (zero for flux-parametrized lines).
-    is_absorption : jnp.ndarray, shape ``(n_lines,)``
+    is_tau : jnp.ndarray, shape ``(n_lines,)``
         Boolean mask: True for tau-parametrized lines.
     continuum : jnp.ndarray, shape ``(n_points,)``
         Continuum flux density at each point.
@@ -84,7 +84,7 @@ def compose_leave_one_out(
         (positive).  Absorption lines: flux removed (negative).
     """
     emission, transmission = _emission_and_transmission(
-        profiles, flux_per_line, tau_per_line, is_absorption
+        profiles, flux_per_line, tau_per_line, is_tau
     )
     total = _combine(emission, transmission, continuum, absorber_position)
 
@@ -92,12 +92,12 @@ def compose_leave_one_out(
     per_line_delta = jnp.zeros_like(profiles)
 
     for j in range(n_lines):
-        if bool(is_absorption[j]):
+        if bool(is_tau[j]):
             # Absorption: leave-one-out difference = flux removed by this absorber.
             # Emission is unchanged when tau_j is zeroed, so reuse it directly.
             tau_loo = tau_per_line.at[j].set(0.0)
             _, transmission_loo = _emission_and_transmission(
-                profiles, flux_per_line, tau_loo, is_absorption
+                profiles, flux_per_line, tau_loo, is_tau
             )
             total_loo = _combine(
                 emission, transmission_loo, continuum, absorber_position
@@ -116,7 +116,7 @@ def compose_leave_one_out(
 # -------------------------------------------------------------------
 
 
-def _emission_and_transmission(profiles, flux_per_line, tau_per_line, is_absorption):
+def _emission_and_transmission(profiles, flux_per_line, tau_per_line, is_tau):
     """Compute emission sum and combined transmission from profiles.
 
     Parameters
@@ -124,7 +124,7 @@ def _emission_and_transmission(profiles, flux_per_line, tau_per_line, is_absorpt
     profiles : jnp.ndarray, shape ``(n_lines, n_points)``
     flux_per_line : jnp.ndarray, shape ``(n_lines,)``
     tau_per_line : jnp.ndarray, shape ``(n_lines,)``
-    is_absorption : jnp.ndarray, shape ``(n_lines,)``
+    is_tau : jnp.ndarray, shape ``(n_lines,)``
 
     Returns
     -------
@@ -133,10 +133,10 @@ def _emission_and_transmission(profiles, flux_per_line, tau_per_line, is_absorpt
     transmission : jnp.ndarray, shape ``(n_points,)``
         Product of per-line transmissions ``exp(-tau_j * phi_j)``.
     """
-    emission_phi = jnp.where(is_absorption[:, None], 0.0, profiles)
+    emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)
     emission = (flux_per_line[:, None] * emission_phi).sum(axis=0)
 
-    absorption_phi = jnp.where(is_absorption[:, None], profiles, 0.0)
+    absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)
     total_tau = (tau_per_line[:, None] * absorption_phi).sum(axis=0)
     transmission = jnp.exp(-total_tau)
 

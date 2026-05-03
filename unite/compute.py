@@ -254,7 +254,7 @@ def evaluate_model(
                         phi,
                         scaled_flux,
                         tau_per_line,
-                        cm.is_absorption,
+                        cm.is_tau,
                         cont,
                         args.absorber_position,
                     )
@@ -317,7 +317,7 @@ def evaluate_model(
                     phi_fine,
                     scaled_flux,
                     tau_per_line,
-                    cm.is_absorption,
+                    cm.is_tau,
                     cont_fine_scaled,
                     args.absorber_position,
                 )
@@ -347,7 +347,7 @@ def evaluate_model(
                     pixints,
                     scaled_flux,
                     tau_per_line,
-                    cm.is_absorption,
+                    cm.is_tau,
                     cont_total_scaled,
                     args.absorber_position,
                 )

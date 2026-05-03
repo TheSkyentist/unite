@@ -1103,7 +1103,7 @@ class TestAbsorptionModel:
         """Emission-only model still works unchanged."""
         _unite_model, args, _ = basic_model
         assert len(args.matrices.tau_names) == 0
-        assert not jnp.any(args.matrices.is_absorption)
+        assert not jnp.any(args.matrices.is_tau)
 
     def test_absorption_model_builds(self):
         """Model with absorption lines builds and runs."""
@@ -1127,7 +1127,7 @@ class TestAbsorptionModel:
         model_fn, args = _prepare_and_build(lc, None, Spectra([spec], redshift=0.0))
 
         assert len(args.matrices.tau_names) == 1
-        assert jnp.any(args.matrices.is_absorption)
+        assert jnp.any(args.matrices.is_tau)
 
         samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
         assert 'obs_abs_spec' in samples

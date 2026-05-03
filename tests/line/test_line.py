@@ -562,15 +562,15 @@ class TestAbsorptionConfigMatrices:
         cm = lc.build_matrices()
         assert cm.tau_matrix.shape == (0, 1)
         assert len(cm.tau_names) == 0
-        assert not cm.is_absorption[0]
+        assert not cm.is_tau[0]
 
-    def test_is_absorption_mask(self):
+    def test_is_tau_mask(self):
         lc = LineConfiguration()
         lc.add_line('Ha', 6563.0 * u.AA)
         lc.add_line('HI_abs', 6563.0 * u.AA, profile=Gaussian(), tau=Tau())
         cm = lc.build_matrices()
-        assert not cm.is_absorption[0]
-        assert cm.is_absorption[1]
+        assert not cm.is_tau[0]
+        assert cm.is_tau[1]
 
     def test_mixed_matrices(self):
         lc = LineConfiguration()

@@ -284,7 +284,7 @@ class ConfigMatrices:
     #: Indicator matrix mapping tau parameters to lines. Shape ``(n_tau, n_lines)``.
     tau_matrix: jnp.ndarray
     #: Boolean mask indicating which lines are absorption lines. Shape ``(n_lines,)``.
-    is_absorption: jnp.ndarray
+    is_tau: jnp.ndarray
 
     priors: dict[str, Prior]
 
@@ -731,7 +731,7 @@ class LineConfiguration:
             _slot_matrix(tau_entries, n) if tau_entries else ([], jnp.zeros((0, n)))
         )
 
-        is_absorption = jnp.array([e.tau is not None for e in self], dtype=bool)
+        is_tau = jnp.array([e.tau is not None for e in self], dtype=bool)
 
         z_names, z_matrix = _token_matrix(self._entries, lambda e: e.redshift, n)
 
@@ -786,7 +786,7 @@ class LineConfiguration:
             p2_matrix=p2_matrix,
             tau_names=tau_names,
             tau_matrix=tau_matrix,
-            is_absorption=is_absorption,
+            is_tau=is_tau,
             priors=priors,
         )
 

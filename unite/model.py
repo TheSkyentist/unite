@@ -240,7 +240,7 @@ def unite_model(args: ModelArgs) -> None:
             centers, centers, _tiny_lsf, p0, p1, p2, cm.profile_codes
         )  # (n_lines, n_lines): row j = line j evaluated at all centers
         _phi_center = jnp.diag(_phi_all)  # (n_lines,): phi_j(center_j)
-        _phi_safe = jnp.where(cm.is_absorption, _phi_center, 1.0)
+        _phi_safe = jnp.where(cm.is_tau, _phi_center, 1.0)
         tau_per_line = tau_per_line / _phi_safe
 
     # --- 3. Per-spectrum likelihood ---
@@ -321,7 +321,7 @@ def unite_model(args: ModelArgs) -> None:
                     phi,
                     _scaled_flux,
                     tau_per_line,
-                    cm.is_absorption,
+                    cm.is_tau,
                     cont,
                     args.absorber_position,
                 )
@@ -366,7 +366,7 @@ def unite_model(args: ModelArgs) -> None:
                     phi,
                     _scaled_flux,
                     tau_per_line,
-                    cm.is_absorption,
+                    cm.is_tau,
                     cont,
                     args.absorber_position,
                 )
@@ -399,7 +399,7 @@ def unite_model(args: ModelArgs) -> None:
                 pixints,
                 scaled_flux,
                 tau_per_line,
-                cm.is_absorption,
+                cm.is_tau,
                 cont,
                 args.absorber_position,
             )

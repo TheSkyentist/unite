@@ -193,7 +193,7 @@ def make_parameter_table(
     abs_labels = {
         args.line_labels[j]
         for j in range(len(args.line_labels))
-        if np.asarray(cm.is_absorption)[j]
+        if np.asarray(cm.is_tau)[j]
     }
     emission_rew = {
         k: v for k, v in rew_cols.items() if k.removeprefix('rew_') not in abs_labels
@@ -580,8 +580,8 @@ def _compute_rew_columns(
     n_samples = _get_n_samples(samples)
     n_lines = int(cm.wavelengths.shape[0])
     z_sys = args.redshift
-    is_absorption = np.asarray(cm.is_absorption)
-    has_absorption = bool(np.any(is_absorption))
+    is_tau = np.asarray(cm.is_tau)
+    has_absorption = bool(np.any(is_tau))
 
     def _prior_to_samples(n: str) -> np.ndarray:
         """Return (n_samples,) array for parameter n, from Fixed value or samples."""
@@ -667,7 +667,7 @@ def _compute_rew_columns(
         obs_wl_j = rest_wl * (1.0 + z_sys + z_j)
         z_total = z_sys + z_j
 
-        if is_absorption[j]:
+        if is_tau[j]:
             # --- Absorption REW via numerical integration ---
             # delta_j = total * (1 - 1/T_j), already stored in pred.lines.
             # Find the finest spectrum grid that covers this line.
