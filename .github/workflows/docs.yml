@@ -1,6 +1,8 @@
 name: Docs
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -16,5 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: prefix-dev/setup-pixi@v0
+      - name: Install LaTeX dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            texlive-latex-base \
+            texlive-fonts-recommended \
+            texlive-latex-extra \
+            dvipng \
+            cm-super
       - name: Build Sphinx docs
         run: pixi run --frozen docs
