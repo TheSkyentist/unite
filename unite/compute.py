@@ -28,8 +28,11 @@ class SpectrumPrediction:
 
     All arrays are in original (un-normalized) flux units.
 
-    For **emission lines**, each entry in :attr:`lines` is the exact
-    flux contribution of that line (positive, adds to the total).
+    For **emission lines**, each entry in :attr:`lines` is the intrinsic
+    (un-attenuated) flux profile: ``flux * profile``.  This equals the
+    observed contribution when no absorption is present, and ensures that
+    ``sum(pred.lines.values()) + sum(pred.continuum_regions.values()) == pred.total``
+    holds exactly for single-absorber models.
 
     For **absorption lines**, each entry in :attr:`lines` is the flux
     *removed* by that absorber (negative): ``total - total_without_j``.
@@ -40,7 +43,7 @@ class SpectrumPrediction:
     #: Total model flux (lines + continuum). Shape ``(n_samples, n_pixels)``.
     total: np.ndarray
     #: Per-line contributions keyed by informative line labels (e.g. ``'Ha'``, ``'[NII]_6585'``).
-    #: For emission lines: flux-weighted profile (positive).
+    #: For emission lines: intrinsic (un-attenuated) flux profile (positive).
     #: For absorption lines: flux removed by the absorber (negative).
     #: Shape ``(n_samples, n_pixels)`` each.
     lines: dict[str, np.ndarray]

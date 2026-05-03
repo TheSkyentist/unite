@@ -270,3 +270,37 @@ class TestEvaluateAbsorption:
         samples, args, _ = simple_setup
         pred = evaluate_model(samples, args)[0]
         assert not hasattr(pred, 'transmissions')
+
+    def test_components_sum_to_total(self):
+        """sum(line cols) + sum(continuum cols) == total for emission + absorption + continuum."""
+        from unite.continuum.config import ContinuumRegion, ContShape, Scale
+        from unite.continuum.library import Linear
+        from unite.line.config import Tau
+        from unite.line.library import Gaussian
+
+        spec = _make_spectrum(name='sum_check')
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=Tau(prior=prior.Fixed(2.0)),
+        )
+        region = ContinuumRegion(6490.0 * u.AA, 6620.0 * u.AA, form=Linear())
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        region.params['angle'] = ContShape(prior=prior.Fixed(0.0))
+        cc = ContinuumConfiguration([region])
+        _, args = _build_model(spec, lc, cc)
+        pred = evaluate_model({}, args)[0]
+
+        component_sum = sum(pred.lines.values()) + sum(pred.continuum_regions.values())
+        np.testing.assert_allclose(pred.total, component_sum, rtol=1e-5)

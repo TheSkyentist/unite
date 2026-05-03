@@ -47,12 +47,18 @@ def compose_from_profiles(
 def compose_leave_one_out(
     profiles, flux_per_line, tau_per_line, is_absorption, continuum, absorber_position
 ):
-    """Compose the total model and exact per-line contributions.
+    """Compose the total model and per-line contributions.
 
-    For each line *j*, computes ``total - total_without_j`` to give the
-    exact flux contribution (positive for emission, negative for
-    absorption).  Profile evaluation is shared; only the composition
-    is repeated per line.
+    For **emission** lines, ``per_line_delta[j] = flux_per_line[j] * profiles[j]``
+    — the intrinsic (un-attenuated) profile contribution.  Using intrinsic
+    emission ensures that ``sum(per_line_delta) + continuum == total`` for
+    models with a single absorber; using the leave-one-out difference
+    (``T * flux_j * phi_j``) would break this identity because the
+    absorption delta already accounts for the absorber's effect on emission.
+
+    For **absorption** lines, ``per_line_delta[j] = total - total_without_j``
+    — the exact flux removed by that absorber (negative).  Profile
+    evaluation is shared; only the transmission is recomputed per absorber.
 
     Parameters
     ----------
@@ -74,8 +80,8 @@ def compose_leave_one_out(
     total : jnp.ndarray, shape ``(n_points,)``
         Full model flux density.
     per_line_delta : jnp.ndarray, shape ``(n_lines, n_points)``
-        Per-line contribution: ``total - total_without_line_j``.
-        Positive for emission lines, negative for absorption lines.
+        Per-line contribution.  Emission lines: intrinsic flux profile
+        (positive).  Absorption lines: flux removed (negative).
     """
     emission, transmission = _emission_and_transmission(
         profiles, flux_per_line, tau_per_line, is_absorption
@@ -86,20 +92,21 @@ def compose_leave_one_out(
     per_line_delta = jnp.zeros_like(profiles)
 
     for j in range(n_lines):
-        # Build leave-one-out: zero this line's flux or tau.
-        flux_loo = flux_per_line.at[j].set(
-            jnp.where(is_absorption[j], flux_per_line[j], 0.0)
-        )
-        tau_loo = tau_per_line.at[j].set(
-            jnp.where(is_absorption[j], 0.0, tau_per_line[j])
-        )
-        emission_loo, transmission_loo = _emission_and_transmission(
-            profiles, flux_loo, tau_loo, is_absorption
-        )
-        total_loo = _combine(
-            emission_loo, transmission_loo, continuum, absorber_position
-        )
-        per_line_delta = per_line_delta.at[j].set(total - total_loo)
+        if bool(is_absorption[j]):
+            # Absorption: leave-one-out difference = flux removed by this absorber.
+            # Emission is unchanged when tau_j is zeroed, so reuse it directly.
+            tau_loo = tau_per_line.at[j].set(0.0)
+            _, transmission_loo = _emission_and_transmission(
+                profiles, flux_per_line, tau_loo, is_absorption
+            )
+            total_loo = _combine(
+                emission, transmission_loo, continuum, absorber_position
+            )
+            delta_j = total - total_loo
+        else:
+            # Emission: intrinsic profile contribution (no transmission factor).
+            delta_j = flux_per_line[j] * profiles[j]
+        per_line_delta = per_line_delta.at[j].set(delta_j)
 
     return total, per_line_delta
 
