@@ -582,10 +582,11 @@ class TestREWAccuracy:
     def test_absorption_rew_magnitude(self, absorption_rew_setup):
         """Absorption REW magnitude is physical: non-zero, finite, order-of-AA.
 
-        For a Gaussian absorber with tau=2 and FWHM=300 km/s at 6563 AA,
-        the effective FWHM in AA is ~6.56 AA.  The integral of (T-1) for
-        tau=2 is between -FWHM (weak limit) and 0 (no absorption), so the
-        REW should be a few AA (negative).
+        tau=2 is the peak optical depth (T≈13% at line center).  For a
+        Gaussian with FWHM=300 km/s (sigma≈2.79 AA) at 6563 AA, the
+        weak-limit REW ≈ -tau_0/phi_center ≈ -14 AA; the actual REW is
+        smaller in magnitude (curve-of-growth saturation), so we expect
+        roughly -1 to -15 AA.
         """
         args = absorption_rew_setup
         from unite.results import _compute_rew_columns
