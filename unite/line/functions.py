@@ -847,6 +847,106 @@ def evaluate_split_normal(
 
 
 # -------------------------------------------------------------------
+# BoxGauss kernel
+# -------------------------------------------------------------------
+
+
+@jit
+def integrate_boxGauss(
+    low: ArrayLike,
+    high: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_box: ArrayLike,
+    fwhm_gauss: ArrayLike,
+) -> Array:
+    """Integrate a boxcar-Gaussian convolution profile over wavelength bins.
+
+    The intrinsic profile is a uniform rectangular (boxcar) distribution of
+    width ``fwhm_box`` centred at zero, convolved with a Gaussian whose FWHM
+    is the quadrature sum of ``fwhm_gauss`` and ``lsf_fwhm``.
+
+    Parameters
+    ----------
+    low : ArrayLike
+        Lower bin edges.
+    high : ArrayLike
+        Upper bin edges.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm_box : ArrayLike
+        Full width of the boxcar distribution.
+    fwhm_gauss : ArrayLike
+        Intrinsic Gaussian component FWHM, combined with ``lsf_fwhm`` in
+        quadrature.
+
+    Returns
+    -------
+    Array
+        Integrated fraction per bin.
+    """
+    lo = low - center
+    hi = high - center
+    sigma = _fwhm_to_sigma(_combine_fwhm(lsf_fwhm, fwhm_gauss))
+    hw = fwhm_box / 2.0
+
+    def _antideriv(x: ArrayLike, a: ArrayLike):
+        # Antiderivative of Phi((x+a)/sigma) w.r.t. x:
+        # F(x, a) = (x+a)*Phi((x+a)/sigma) + sigma*phi((x+a)/sigma)
+        u = (x + a) / sigma
+        cdf = 0.5 * (1.0 + erf(u / _SQRT2))
+        sigma_pdf = sigma * _INV_SQRt2PI * jnp.exp(-0.5 * u * u)
+        return (x + a) * cdf + sigma_pdf
+
+    return (
+        _antideriv(hi, hw)
+        - _antideriv(lo, hw)
+        - _antideriv(hi, -hw)
+        + _antideriv(lo, -hw)
+    ) / fwhm_box
+
+
+@jit
+def evaluate_boxGauss(
+    wavelength: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_box: ArrayLike,
+    fwhm_gauss: ArrayLike,
+) -> Array:
+    """Evaluate a normalised boxcar-Gaussian convolution profile at wavelength points.
+
+    Parameters
+    ----------
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm_box : ArrayLike
+        Full width of the boxcar distribution.
+    fwhm_gauss : ArrayLike
+        Intrinsic Gaussian component FWHM, combined with ``lsf_fwhm`` in
+        quadrature.
+
+    Returns
+    -------
+    Array
+        Normalised profile value at each wavelength point.
+    """
+    x = wavelength - center
+    sigma = _fwhm_to_sigma(_combine_fwhm(lsf_fwhm, fwhm_gauss))
+    hw = fwhm_box / 2.0
+    inv_sqrt2_sigma = 1.0 / (sigma * _SQRT2)
+    cdf_hi = 0.5 * (1.0 + erf((x + hw) * inv_sqrt2_sigma))
+    cdf_lo = 0.5 * (1.0 + erf((x - hw) * inv_sqrt2_sigma))
+    return (cdf_hi - cdf_lo) / fwhm_box
+
+
+# -------------------------------------------------------------------
 # Gauss-Hermite kernel
 # -------------------------------------------------------------------
 

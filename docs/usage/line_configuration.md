@@ -263,6 +263,7 @@ Profiles are set via the `profile` argument (case-insensitive strings or class i
 | `'hermite'`, `'gauss-hermite'` | `GaussHermite` | `fwhm_gauss` | `h3`, `h4` | analytic |
 | `'split-normal'`, `'two-sided'` | `SplitNormal` | `fwhm_blue`, `fwhm_red` | | analytic |
 | `'skew-voigt'`, `'skewvoigt'` | `SkewVoigt` | `fwhm_gauss`, `fwhm_lorentz` | `alpha` | midpoint rule |
+| `'boxgauss'`, `'box-gauss'`, `'boxcar'` | `BoxGauss` | `fwhm_box`, `fwhm_gauss` | | analytic |
 
 ### Gaussian (default)
 
@@ -391,6 +392,27 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='SkewVoigt',
             fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
             fwhm_lorentz=line.FWHM('l', prior=prior.Uniform(0, 500)),
             alpha=line.LineShape('alpha', prior=prior.TruncatedNormal(0, 2, -10, 10)),
+            flux=flux)
+```
+
+### BoxGauss
+
+A uniform rectangular (boxcar) distribution convolved with a Gaussian. The intrinsic
+profile is constant across a velocity window of width `fwhm_box` and zero outside it
+(area = 1). Convolution with the combined Gaussian (LSF ⊕ `fwhm_gauss` in quadrature)
+smooths the sharp edges. The exact pixel integral is computed analytically using the
+antiderivative of the Gaussian CDF.
+
+The profile reduces to a pure Gaussian as `fwhm_box → 0`, and to a sharp rectangular
+window as `fwhm_gauss → 0` (with `lsf_fwhm → 0`).
+
+**Parameters:** `fwhm_box` (km/s), `fwhm_gauss` (km/s)
+
+```python
+lc.add_line('H_alpha', 6563.0 * u.AA, profile='BoxGauss',
+            redshift=z,
+            fwhm_box=line.FWHM('box', prior=prior.Uniform(100, 2000)),
+            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(0, 500)),
             flux=flux)
 ```
 

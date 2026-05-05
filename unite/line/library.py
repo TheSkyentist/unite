@@ -612,6 +612,68 @@ class SplitNormal(Profile):
 
 
 @_register
+class BoxGauss(Profile):
+    """Boxcar distribution convolved with a Gaussian.
+
+    The intrinsic profile is a uniform rectangular (boxcar) distribution of
+    full width ``fwhm_box`` centred at zero (area = 1), convolved with a
+    Gaussian whose FWHM is the quadrature sum of ``fwhm_gauss`` and
+    ``lsf_fwhm``.  As ``fwhm_box`` → 0 the profile reduces to a pure
+    Gaussian; as ``fwhm_gauss`` → 0 (and ``lsf_fwhm`` → 0) it approaches
+    the sharp rectangular distribution.
+
+    Requires two parameters: ``fwhm_box`` for the boxcar full width and
+    ``fwhm_gauss`` for the intrinsic Gaussian component.
+    """
+
+    code = 8
+
+    @override
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm_box', 'fwhm_gauss')
+
+    @override
+    def default_priors(self) -> dict[str, Prior]:
+        return {'fwhm_box': Uniform(0, 1000), 'fwhm_gauss': Uniform(0, 1000)}
+
+    @override
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_box, p1 = fwhm_gauss
+            return functions.integrate_boxGauss(lo, hi, c, lsf, p0, p1)
+
+        return _fn
+
+    @override
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return functions.evaluate_boxGauss(wavelength, c, lsf, p0, p1)
+
+        return _fn
+
+    @override
+    def to_dict(self) -> dict:
+        return {'type': 'BoxGauss'}
+
+    @classmethod
+    @override
+    def from_dict(cls, d: dict) -> BoxGauss:
+        return cls()
+
+    @override
+    def __repr__(self) -> str:
+        return 'BoxGauss()'
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, BoxGauss)
+
+    @override
+    def __hash__(self) -> int:
+        return hash(type(self))
+
+
+@_register
 class SkewVoigt(Profile):
     r"""Skew pseudo-Voigt line profile.
 
@@ -705,6 +767,9 @@ _PROFILE_ALIASES: dict[str, Profile] = {
     'two-sided': SplitNormal(),
     'skew-voigt': SkewVoigt(),
     'skewvoigt': SkewVoigt(),
+    'boxgauss': BoxGauss(),
+    'box-gauss': BoxGauss(),
+    'boxcar': BoxGauss(),
 }
 
 
