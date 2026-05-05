@@ -1513,6 +1513,26 @@ class TestContinuumConfigurationAdd:
         merged = cc1 + cc2
         assert len(merged) == 1
 
+    def test_add_matching_zorder_succeeds(self):
+        cc1 = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um)], zorder=2
+        )
+        cc2 = ContinuumConfiguration(
+            [ContinuumRegion(3.0 * u.um, 4.0 * u.um)], zorder=2
+        )
+        merged = cc1 + cc2
+        assert merged.zorder == 2
+
+    def test_add_mismatched_zorder_raises(self):
+        cc1 = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um)], zorder=0
+        )
+        cc2 = ContinuumConfiguration(
+            [ContinuumRegion(3.0 * u.um, 4.0 * u.um)], zorder=2
+        )
+        with pytest.raises(ValueError, match='zorder'):
+            cc1 + cc2
+
 
 # ---------------------------------------------------------------------------
 # Form validation errors and repr

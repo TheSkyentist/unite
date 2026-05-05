@@ -344,7 +344,7 @@ class TestLineConfigurationRoundTrip:
     def test_zorder_default_omitted_from_dict(self):
         # Default zorder values are omitted from the dict but survive round-trip
         config = LineConfiguration()
-        config.add_line('Ha', 6564.61 * u.AA)                       # default 0
+        config.add_line('Ha', 6564.61 * u.AA)  # default 0
         config.add_line('NaD', 5893.0 * u.AA, tau=Tau('tau_nad'))  # default 1
         d = config.to_dict()
         assert 'zorder' not in d['lines'][0]
