@@ -125,7 +125,12 @@ def compose_leave_one_out(
     tau_fields = (applies_matrix * tau_per_line[None, :]) @ absorption_phi
     t_eff = jnp.exp(-tau_fields)  # (n_lines, n_points)
 
-    attenuated_emission = (flux_per_line[:, None] * emission_phi * t_eff).sum(axis=0)
+    # Precompute attenuated per-line terms; reused in the tau LOO loop below.
+    attenuated_per_line = (
+        flux_per_line[:, None] * emission_phi * t_eff
+    )  # (n_lines, n_points)
+    attenuated_emission = attenuated_per_line.sum(axis=0)
+
     cont_tau = (cont_applies * tau_per_line) @ absorption_phi
     t_cont = jnp.exp(-cont_tau)
     total = attenuated_emission + t_cont * continuum
@@ -135,16 +140,13 @@ def compose_leave_one_out(
 
     for j in range(n_lines):
         if bool(is_tau[j]):
-            # Absorption: leave-one-out — zero this tau and recompute everything.
-            tau_loo = tau_per_line.at[j].set(0.0)
-            tau_fields_loo = (applies_matrix * tau_loo[None, :]) @ absorption_phi
-            t_eff_loo = jnp.exp(-tau_fields_loo)
-            attenuated_loo = (flux_per_line[:, None] * emission_phi * t_eff_loo).sum(
-                axis=0
-            )
-            cont_tau_loo = (cont_applies * tau_loo) @ absorption_phi
-            t_cont_loo = jnp.exp(-cont_tau_loo)
-            total_loo = attenuated_loo + t_cont_loo * continuum
+            # Rank-1 removal: removing tau j subtracts its contribution from
+            # tau_fields, which is equivalent to multiplying t_eff by
+            # exp(+contribution).  Avoids recomputing the full matmul.
+            contrib = applies_matrix[:, j, None] * (tau_per_line[j] * absorption_phi[j])
+            attenuated_loo = (attenuated_per_line * jnp.exp(contrib)).sum(axis=0)
+            cont_contrib = cont_applies[j] * (tau_per_line[j] * absorption_phi[j])
+            total_loo = attenuated_loo + t_cont * jnp.exp(cont_contrib) * continuum
             delta_j = total - total_loo
         else:
             # Emission: intrinsic profile contribution (no transmission factor).
