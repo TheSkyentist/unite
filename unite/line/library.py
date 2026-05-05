@@ -255,14 +255,6 @@ class Gaussian(Profile):
     def __repr__(self) -> str:
         return 'Gaussian()'
 
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Gaussian)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
-
 
 @_register
 class Cauchy(Profile):
@@ -314,14 +306,6 @@ class Cauchy(Profile):
     def __repr__(self) -> str:
         return 'Cauchy()'
 
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Cauchy)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
-
 
 @_register
 class PseudoVoigt(Profile):
@@ -370,14 +354,6 @@ class PseudoVoigt(Profile):
     def __repr__(self) -> str:
         return 'PseudoVoigt()'
 
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, PseudoVoigt)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
-
 
 @_register
 class Laplace(Profile):
@@ -424,14 +400,6 @@ class Laplace(Profile):
     @override
     def __repr__(self) -> str:
         return 'Laplace()'
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Laplace)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 @_register
@@ -482,14 +450,6 @@ class SEMG(Profile):
     @override
     def __repr__(self) -> str:
         return 'SEMG()'
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, SEMG)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 @_register
@@ -545,14 +505,6 @@ class GaussHermite(Profile):
     def __repr__(self) -> str:
         return 'GaussHermite()'
 
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, GaussHermite)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
-
 
 @_register
 class SplitNormal(Profile):
@@ -601,14 +553,6 @@ class SplitNormal(Profile):
     @override
     def __repr__(self) -> str:
         return 'SplitNormal()'
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, SplitNormal)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 @_register
@@ -663,14 +607,6 @@ class BoxGauss(Profile):
     @override
     def __repr__(self) -> str:
         return 'BoxGauss()'
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, BoxGauss)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 @_register
@@ -740,14 +676,6 @@ class SkewVoigt(Profile):
     @override
     def __repr__(self) -> str:
         return 'SkewVoigt()'
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, SkewVoigt)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(type(self))
 
 
 _PROFILE_ALIASES: dict[str, Profile] = {

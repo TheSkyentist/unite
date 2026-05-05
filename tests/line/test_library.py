@@ -1,9 +1,10 @@
-"""Tests for Profile class behaviour: serialization, equality, hashing, aliases."""
+"""Tests for Profile class behaviour: serialization, default priors, and aliases."""
 
 import pytest
 
 from unite.line.library import (
     SEMG,
+    BoxGauss,
     Cauchy,
     GaussHermite,
     Gaussian,
@@ -14,6 +15,7 @@ from unite.line.library import (
     profile_from_dict,
     resolve_profile,
 )
+from unite.prior import Prior
 
 # ---------------------------------------------------------------------------
 # Profile serialization: to_dict / from_dict
@@ -28,6 +30,7 @@ _ALL_PROFILES = [
     GaussHermite(),
     SplitNormal(),
     SkewVoigt(),
+    BoxGauss(),
 ]
 
 
@@ -44,38 +47,20 @@ class TestProfileSerialization:
 
 
 # ---------------------------------------------------------------------------
-# Profile equality and hashing
+# default_priors
 # ---------------------------------------------------------------------------
 
-_ALL_PROFILE_CLASSES = [
-    Gaussian,
-    Cauchy,
-    PseudoVoigt,
-    Laplace,
-    SEMG,
-    GaussHermite,
-    SplitNormal,
-    SkewVoigt,
-]
 
+class TestDefaultPriors:
+    @pytest.mark.parametrize('profile', _ALL_PROFILES)
+    def test_keys_match_param_names(self, profile):
+        priors = profile.default_priors()
+        assert set(priors.keys()) == set(profile.param_names())
 
-class TestProfileEqHash:
-    @pytest.mark.parametrize('profile_cls', _ALL_PROFILE_CLASSES)
-    def test_same_type_equal(self, profile_cls):
-        assert profile_cls() == profile_cls()
-
-    def test_different_types_not_equal(self):
-        assert Gaussian() != Cauchy()
-        assert PseudoVoigt() != Laplace()
-
-    @pytest.mark.parametrize('profile_cls', _ALL_PROFILE_CLASSES)
-    def test_hashable(self, profile_cls):
-        p = profile_cls()
-        assert isinstance(hash(p), int)
-
-    def test_can_be_used_as_dict_key(self):
-        d = {Gaussian(): 'gauss', Cauchy(): 'cauchy'}
-        assert d[Gaussian()] == 'gauss'
+    @pytest.mark.parametrize('profile', _ALL_PROFILES)
+    def test_values_are_priors(self, profile):
+        for v in profile.default_priors().values():
+            assert isinstance(v, Prior)
 
 
 # ---------------------------------------------------------------------------
@@ -83,18 +68,49 @@ class TestProfileEqHash:
 # ---------------------------------------------------------------------------
 
 
+def test_resolve_profile_returns_instance_unchanged():
+    g = Gaussian()
+    assert resolve_profile(g) is g
+
+
+@pytest.mark.parametrize(
+    ('alias', 'expected_type'),
+    [
+        ('gaussian', Gaussian),
+        ('normal', Gaussian),
+        ('cauchy', Cauchy),
+        ('lorentzian', Cauchy),
+        ('laplace', Laplace),
+        ('exponential', Laplace),
+        ('voigt', PseudoVoigt),
+        ('pseudovoigt', PseudoVoigt),
+        ('semg', SEMG),
+        ('exp-gaussian', SEMG),
+        ('hermite', GaussHermite),
+        ('gauss-hermite', GaussHermite),
+        ('split-normal', SplitNormal),
+        ('two-sided', SplitNormal),
+        ('skew-voigt', SkewVoigt),
+        ('skewvoigt', SkewVoigt),
+        ('boxgauss', BoxGauss),
+        ('box-gauss', BoxGauss),
+        ('boxcar', BoxGauss),
+    ],
+)
+def test_resolve_profile_valid_string(alias, expected_type):
+    assert isinstance(resolve_profile(alias), expected_type)
+
+
+def test_resolve_profile_case_insensitive():
+    assert isinstance(resolve_profile('Gaussian'), Gaussian)
+    assert isinstance(resolve_profile('CAUCHY'), Cauchy)
+
+
+def test_resolve_profile_invalid_string_raises():
+    with pytest.raises(ValueError, match='Unknown profile'):
+        resolve_profile('not_a_profile')
+
+
 def test_resolve_profile_invalid_type_raises():
     with pytest.raises(TypeError, match='str or Profile'):
         resolve_profile(42)
-
-
-# ---------------------------------------------------------------------------
-# default_priors
-# ---------------------------------------------------------------------------
-
-
-def test_semg_default_priors():
-    """SEMG.default_priors() returns a dict with fwhm_gauss and fwhm_exp."""
-    priors = SEMG().default_priors()
-    assert 'fwhm_gauss' in priors
-    assert 'fwhm_exp' in priors
