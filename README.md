@@ -16,7 +16,7 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 - **Three pixel-integration modes**: analytic (exact CDF-based, default), Gauss-Legendre quadrature (`n_nodes` sub-pixel points per pixel), and numerical LSF convolution (`n_super` uniform fine-grid points per pixel + banded wavelength-varying Gaussian convolution, correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` for absorption lines)
 - **Simultaneous multi-spectrum fitting** across gratings and instruments with shared kinematic parameters (redshift, FWHM)
 - **Multiple line profiles**: Gaussian, Cauchy, Pseudo-Voigt, Laplace, SEMG, Gauss-Hermite, Split-Normal, Skew-Voigt, Box-Gauss
-- **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)`, with configurable absorber position (`foreground`, `behind_lines`, `behind_continuum`)
+- **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)`, with per-component depth ordering (`zorder`) so each absorber selectively attenuates only the sources behind it
 - **Flexible continuum models**: Linear, Polynomial, Chebyshev, Bernstein, B-Spline, Power-Law, Blackbody, Modified Blackbody, Attenuated Blackbody — auto-generated from line configurations
 - **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
 - **YAML serialization** for reproducible, human-editable configurations

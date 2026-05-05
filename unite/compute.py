@@ -29,10 +29,9 @@ class SpectrumPrediction:
     All arrays are in original (un-normalized) flux units.
 
     For **emission lines**, each entry in :attr:`lines` is the intrinsic
-    (un-attenuated) flux profile: ``flux * profile``.  This equals the
-    observed contribution when no absorption is present, and ensures that
-    ``sum(pred.lines.values()) + sum(pred.continuum_regions.values()) == pred.total``
-    holds exactly for single-absorber models.
+    (un-attenuated) flux profile: ``flux * profile``.  Summing all line
+    contributions and continuum regions always reconstructs :attr:`total`
+    regardless of zorder configuration.
 
     For **absorption lines**, each entry in :attr:`lines` is the flux
     *removed* by that absorber (negative): ``total - total_without_j``.
@@ -255,8 +254,9 @@ def evaluate_model(
                         scaled_flux,
                         tau_per_line,
                         cm.is_tau,
+                        cm.applies_matrix,
+                        args.cont_applies,
                         cont,
-                        args.absorber_position,
                     )
                     return total, deltas
 
@@ -318,8 +318,9 @@ def evaluate_model(
                     scaled_flux,
                     tau_per_line,
                     cm.is_tau,
+                    cm.applies_matrix,
+                    args.cont_applies,
                     cont_fine_scaled,
-                    args.absorber_position,
                 )
 
                 # Convolve total and each per-line delta with the LSF.
@@ -348,8 +349,9 @@ def evaluate_model(
                     scaled_flux,
                     tau_per_line,
                     cm.is_tau,
+                    cm.applies_matrix,
+                    args.cont_applies,
                     cont_total_scaled,
-                    args.absorber_position,
                 )
 
             # Apply flux_scale to total and per-line contributions.

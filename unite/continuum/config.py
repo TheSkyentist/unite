@@ -334,10 +334,13 @@ class ContinuumConfiguration:
     >>> # → one 'pl_scale', one 'pl_beta', one 'pl_nw' site in the numpyro model
     """
 
-    def __init__(self, regions: list[ContinuumRegion] | None = None) -> None:
+    def __init__(
+        self, regions: list[ContinuumRegion] | None = None, *, zorder: int = 0
+    ) -> None:
         self._regions: list[ContinuumRegion] = sorted(
             list(regions) if regions else [], key=lambda r: r.low
         )
+        self.zorder: int = int(zorder)
         self._check_overlaps()
         self._check_duplicate_region_names()
         self._resolved_params: list[dict[str, Parameter]] = self._resolve_params()
@@ -469,6 +472,8 @@ class ContinuumConfiguration:
         wavelengths: u.Quantity,
         width: u.Quantity = 15_000.0 * u.km / u.s,
         form: ContinuumForm | None = None,
+        *,
+        zorder: int = 0,
     ) -> ContinuumConfiguration:
         """Auto-generate continuum regions from line wavelengths.
 
@@ -527,7 +532,7 @@ class ContinuumConfiguration:
             ContinuumRegion(low=lo * wl_q.unit, high=hi * wl_q.unit, form=form)
             for lo, hi in merged
         ]
-        return cls(regions)
+        return cls(regions, zorder=zorder)
 
     # ------------------------------------------------------------------
     # Serialization
@@ -594,11 +599,14 @@ class ContinuumConfiguration:
                 rd['name'] = region.name
             regions_section.append(rd)
 
-        return {
+        result: dict = {
             'params': params_section,
             'forms': forms_section,
             'regions': regions_section,
         }
+        if self.zorder != 0:
+            result['zorder'] = self.zorder
+        return result
 
     @classmethod
     def from_dict(cls, d: dict) -> ContinuumConfiguration:
@@ -663,7 +671,7 @@ class ContinuumConfiguration:
                     name=rd.get('name', None),
                 )
             )
-        return cls(regions)
+        return cls(regions, zorder=d.get('zorder', 0))
 
     # ------------------------------------------------------------------
     # YAML serialization
@@ -762,6 +770,14 @@ class ContinuumConfiguration:
         if not isinstance(other, ContinuumConfiguration):
             return NotImplemented
 
+        if self.zorder != other.zorder:
+            msg = (
+                f'Cannot add ContinuumConfigurations with different zorders '
+                f'({self.zorder} vs {other.zorder}). Set zorder explicitly on both '
+                f'before adding, or construct a single configuration with all regions.'
+            )
+            raise ValueError(msg)
+
         # Collect user-provided token names from each config (region.params only;
         # auto-created tokens are re-indexed on construction and never collide).
         self_names = {
@@ -784,7 +800,9 @@ class ContinuumConfiguration:
             )
             raise ValueError(msg)
 
-        return ContinuumConfiguration(list(self._regions) + list(other._regions))
+        return ContinuumConfiguration(
+            list(self._regions) + list(other._regions), zorder=self.zorder
+        )
 
     def __repr__(self) -> str:
         if not self._regions:
@@ -796,7 +814,7 @@ class ContinuumConfiguration:
             for tok in resolved.values():
                 seen_tok_ids.add(id(tok))
 
-        header = f'ContinuumConfiguration: {len(self._regions)} region(s), {len(seen_tok_ids)} parameter(s)'
+        header = f'ContinuumConfiguration: {len(self._regions)} region(s), {len(seen_tok_ids)} parameter(s), zorder={self.zorder}'
 
         # Build table.
         rows = []

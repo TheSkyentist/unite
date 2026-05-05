@@ -89,9 +89,10 @@ class ModelArgs:
     #: Human-readable column labels for each continuum region, parallel to ``cont_config``.
     #: Derived from form type and wavelength bounds.
     continuum_labels: list[str]
-    #: Absorber placement relative to emission and continuum sources.
-    #: One of ``'foreground'``, ``'behind_lines'``, or ``'behind_continuum'``.
-    absorber_position: str = 'foreground'
+    #: Boolean mask: which tau lines (by line index) attenuate the continuum.
+    #: ``cont_applies[k]`` is True when ``line_zorders[k] > cont_zorder`` and ``is_tau[k]``.
+    #: Shape ``(n_lines,)``.
+    cont_applies: jnp.ndarray
     #: Line integration mode: ``'analytic'`` (default) uses exact CDF-based
     #: integration for all line profiles individually;
     #: ``'quadrature'`` uses Gauss-Legendre quadrature to integrate the full
@@ -322,8 +323,9 @@ def unite_model(args: ModelArgs) -> None:
                     _scaled_flux,
                     tau_per_line,
                     cm.is_tau,
+                    cm.applies_matrix,
+                    args.cont_applies,
                     cont,
-                    args.absorber_position,
                 )
                 return _fs * total
 
@@ -367,8 +369,9 @@ def unite_model(args: ModelArgs) -> None:
                     _scaled_flux,
                     tau_per_line,
                     cm.is_tau,
+                    cm.applies_matrix,
+                    args.cont_applies,
                     cont,
-                    args.absorber_position,
                 )
 
             model_fine_intrinsic = _conv_eval(x_flat)  # (n_super * n_pixels,)
@@ -400,8 +403,9 @@ def unite_model(args: ModelArgs) -> None:
                 scaled_flux,
                 tau_per_line,
                 cm.is_tau,
+                cm.applies_matrix,
+                args.cont_applies,
                 cont,
-                args.absorber_position,
             )
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(
@@ -556,7 +560,6 @@ class ModelBuilder:
     def build(
         self,
         *,
-        absorber_position: str = 'foreground',
         integration_mode: str = 'analytic',
         n_nodes: int = 7,
         n_super: int = 10,
@@ -566,19 +569,6 @@ class ModelBuilder:
 
         Parameters
         ----------
-        absorber_position : str, optional
-            Where the absorber sits relative to emission lines and
-            continuum.  One of:
-
-            * ``'foreground'`` (default) — absorbs both emission and
-              continuum.
-            * ``'behind_lines'`` — absorbs only the continuum (the
-              absorber is between the continuum source and the emission
-              region).
-            * ``'behind_continuum'`` — absorbs only emission lines (the
-              absorber is between the emission region and the observer,
-              but behind the continuum source).
-
         integration_mode : str, optional
             How line profiles are integrated over pixels.  One of:
 
@@ -626,17 +616,8 @@ class ModelBuilder:
         Raises
         ------
         ValueError
-            If *absorber_position* or *integration_mode* is not one of
-            the valid values.
+            If *integration_mode* is not one of the valid values.
         """
-        valid_positions = ('foreground', 'behind_lines', 'behind_continuum')
-        if absorber_position not in valid_positions:
-            msg = (
-                f'absorber_position must be one of {valid_positions}, '
-                f'got {absorber_position!r}.'
-            )
-            raise ValueError(msg)
-
         valid_modes = ('analytic', 'quadrature', 'convolution')
         if integration_mode not in valid_modes:
             msg = (
@@ -781,6 +762,11 @@ class ModelBuilder:
             else []
         )
 
+        # cont_applies[k] = True when tau line k (zorder_k > cont_zorder) attenuates the continuum.
+        cm = self._matrices
+        cont_zorder = self._cont_config.zorder if self._cont_config is not None else 0
+        cont_applies = (cm.line_zorders > cont_zorder) & cm.is_tau
+
         args = ModelArgs(
             matrices=self._matrices,
             spectra=trimmed_spectra,
@@ -809,7 +795,7 @@ class ModelBuilder:
             continuum_scale_quantity=cont_scale_qty,
             line_labels=line_labels,
             continuum_labels=continuum_labels,
-            absorber_position=absorber_position,
+            cont_applies=cont_applies,
             integration_mode=integration_mode,
             quadrature_nodes=quadrature_nodes,
             quadrature_weights=quadrature_weights,
@@ -825,7 +811,6 @@ class ModelBuilder:
         num_chains: int = 1,
         seed: int = 0,
         progress_bar: bool = True,
-        absorber_position: str = 'foreground',
         integration_mode: str = 'analytic',
         n_nodes: int = 7,
         n_super: int = 10,
@@ -849,10 +834,6 @@ class ModelBuilder:
             Random seed for JAX's PRNG (default: 0).
         progress_bar : bool, optional
             Whether to display a progress bar (default: True).
-        absorber_position : str, optional
-            Where the absorber sits relative to emission lines and
-            continuum (default: ``'foreground'``).  See
-            :meth:`build` for details.
         integration_mode : str, optional
             Line integration mode (default: ``'analytic'``).  See
             :meth:`build` for details.
@@ -878,10 +859,7 @@ class ModelBuilder:
         from numpyro import infer
 
         model_fn, model_args = self.build(
-            absorber_position=absorber_position,
-            integration_mode=integration_mode,
-            n_nodes=n_nodes,
-            n_super=n_super,
+            integration_mode=integration_mode, n_nodes=n_nodes, n_super=n_super
         )
         mcmc = infer.MCMC(
             infer.NUTS(model_fn, dense_mass=True),

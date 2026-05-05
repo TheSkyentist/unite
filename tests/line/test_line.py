@@ -312,6 +312,47 @@ class TestLineConfigurationRoundTrip:
         assert isinstance(config2._entries[0].redshift.prior, Fixed)
         assert config2._entries[0].redshift.prior.value == pytest.approx(0.0)
 
+    def test_zorder_emission_default_roundtrip(self):
+        config = LineConfiguration()
+        config.add_line('Ha', 6564.61 * u.AA)
+        d = config.to_dict()
+        config2 = LineConfiguration.from_dict(d)
+        assert config2._entries[0].zorder == 0
+
+    def test_zorder_tau_default_roundtrip(self):
+        config = LineConfiguration()
+        config.add_line('NaD', 5893.0 * u.AA, tau=Tau('tau_nad'))
+        d = config.to_dict()
+        config2 = LineConfiguration.from_dict(d)
+        assert config2._entries[0].zorder == 1
+
+    def test_zorder_explicit_roundtrip(self):
+        config = LineConfiguration()
+        config.add_line('Ha', 6564.61 * u.AA, zorder=2)
+        config.add_line('NaD', 5893.0 * u.AA, tau=Tau('tau_nad'), zorder=3)
+        d = config.to_dict()
+        config2 = LineConfiguration.from_dict(d)
+        assert config2._entries[0].zorder == 2
+        assert config2._entries[1].zorder == 3
+
+    def test_zorder_in_dict_when_nondefault(self):
+        config = LineConfiguration()
+        config.add_line('Ha', 6564.61 * u.AA, zorder=5)
+        d = config.to_dict()
+        assert d['lines'][0]['zorder'] == 5
+
+    def test_zorder_default_omitted_from_dict(self):
+        # Default zorder values are omitted from the dict but survive round-trip
+        config = LineConfiguration()
+        config.add_line('Ha', 6564.61 * u.AA)                       # default 0
+        config.add_line('NaD', 5893.0 * u.AA, tau=Tau('tau_nad'))  # default 1
+        d = config.to_dict()
+        assert 'zorder' not in d['lines'][0]
+        assert 'zorder' not in d['lines'][1]
+        config2 = LineConfiguration.from_dict(d)
+        assert config2._entries[0].zorder == 0
+        assert config2._entries[1].zorder == 1
+
 
 # ---------------------------------------------------------------------------
 # add_lines

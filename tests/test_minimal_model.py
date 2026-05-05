@@ -1191,20 +1191,8 @@ class TestAbsorptionModel:
         total5 = pred5.total[0, center_idx]
         assert total5 < total0
 
-    def test_invalid_absorber_position_raises(self):
-        """Invalid absorber_position should raise ValueError."""
-        spec = _create_absorption_spectrum()
-        lc = line.LineConfiguration()
-        lc.add_line('Ha', 6563.0 * u.AA)
-        spectra = Spectra([spec], redshift=0.0)
-        spectra.prepare(lc)
-        spectra.compute_scales(spectra.prepared_line_config)
-        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
-        with pytest.raises(ValueError, match='absorber_position must be one of'):
-            builder.build(absorber_position='invalid')
-
-    def test_absorber_positions(self):
-        """All three absorber positions build and run without error."""
+    def test_zorder_defaults(self):
+        """Default zorders: emission=0, tau=1; tau absorbs emission and continuum."""
         from unite.line.library import Gaussian
 
         spec = _create_absorption_spectrum()
@@ -1222,18 +1210,83 @@ class TestAbsorptionModel:
             fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
             tau=line.Tau(prior=prior.Fixed(2.0)),
         )
-        for pos in ('foreground', 'behind_lines', 'behind_continuum'):
-            spectra = Spectra([spec], redshift=0.0)
-            model_fn, args = _prepare_and_build(lc, None, spectra)
-            # Rebuild with specific absorber_position
-            spectra2 = Spectra([spec], redshift=0.0)
-            spectra2.prepare(lc)
-            spectra2.compute_scales(spectra2.prepared_line_config)
-            builder = model.ModelBuilder(spectra2.prepared_line_config, None, spectra2)
-            model_fn, args = builder.build(absorber_position=pos)
-            assert args.absorber_position == pos
-            samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
-            assert 'obs_abs_spec' in samples
+        spectra = Spectra([spec], redshift=0.0)
+        model_fn, args = _prepare_and_build(lc, None, spectra)
+
+        cm = args.matrices
+        # Emission line zorder=0, tau line zorder=1 by default.
+        assert int(cm.line_zorders[0]) == 0  # emission
+        assert int(cm.line_zorders[1]) == 1  # tau
+        # applies_matrix[emission_j, tau_k] = True (tau at 1 > emission at 0)
+        assert bool(cm.applies_matrix[0, 1])
+        # tau line does not absorb itself
+        assert not bool(cm.applies_matrix[1, 1])
+        # cont_applies: tau absorbs continuum (zorder 1 > default cont zorder 0)
+        assert bool(args.cont_applies[1])
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+        assert 'obs_abs_spec' in samples
+
+    def test_zorder_tau_does_not_absorb_higher_emission(self):
+        """Emission line with zorder > tau zorder is not attenuated."""
+        from unite.line.library import Gaussian
+
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'Ha',
+            6563.0 * u.AA,
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+            zorder=2,  # emission is in front of the absorber
+        )
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(2.0)),
+            # tau default zorder=1, emission zorder=2: tau does NOT absorb emission
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        model_fn, args = _prepare_and_build(lc, None, spectra)
+
+        cm = args.matrices
+        # applies_matrix[emission_j=0, tau_k=1]: tau zorder 1 NOT > emission zorder 2
+        assert not bool(cm.applies_matrix[0, 1])
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+        assert 'obs_abs_spec' in samples
+
+    def test_zorder_tau_does_not_absorb_continuum_when_behind(self):
+        """Tau absorber with zorder <= cont zorder does not attenuate continuum."""
+        from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
+        from unite.continuum.library import Linear
+        from unite.line.library import Gaussian
+
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(2.0)),
+            zorder=0,  # absorber behind continuum and emission — absorbs nothing
+        )
+        cc = ContinuumConfiguration(
+            [ContinuumRegion(6400.0 * u.AA, 6700.0 * u.AA, form=Linear())], zorder=0
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        spectra.prepare(lc, cc)
+        spectra.line_scale = 1.0 * u.Unit('1e-17 erg / (s cm2)')
+        spectra.continuum_scale = 1.0 * u.Unit('1e-17 erg / (s cm2 AA)')
+        model_fn, args = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        ).build()
+
+        # tau at zorder 0, continuum at zorder 0: 0 > 0 is False → no attenuation
+        assert not bool(args.cont_applies[0])
+        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
+        assert 'obs_abs_spec' in samples
 
     def test_absorption_only_model(self):
         """Model with only absorption lines (no emission) builds and runs."""

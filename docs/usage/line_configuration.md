@@ -542,6 +542,45 @@ lc.add_line('Ha', 6563.0 * u.AA)  # emission (Gaussian by default)
 lc.add_line('HI_abs', 6563.0 * u.AA, tau=line.Tau())  # absorption
 ```
 
+### Depth Ordering (`zorder`)
+
+Each line carries an integer `zorder` that determines which tau absorbers attenuate
+it.  A tau absorber at depth `Z` only absorbs components with `zorder < Z` — i.e.
+sources *behind* it.
+
+**Defaults** (no arguments required for the common foreground-screen geometry):
+
+| Line type | Default `zorder` |
+|---|---|
+| Emission (`Flux`) | `0` |
+| Absorption (`Tau`) | `1` |
+
+With these defaults every tau absorber sits in front of all emission lines.
+
+Pass `zorder` explicitly to `add_line()` to break from the default geometry:
+
+```python
+# Absorber at zorder=1 (default) — absorbs Ha (zorder=0) but not AGN (zorder=2)
+lc = line.LineConfiguration()
+lc.add_line('Ha',     6563.0 * u.AA)                    # emission, zorder=0
+lc.add_line('AGN_Ha', 6563.0 * u.AA, zorder=2)          # emission, zorder=2 — behind absorber
+lc.add_line('NaD',    5893.0 * u.AA, tau=line.Tau())    # absorber, zorder=1 (default)
+```
+
+The `zorder` column is visible when you print the configuration:
+
+```
+  Name     Wavelength  Profile   Redshift  Params  Flux/Tau  zorder  Strength
+  -------  ----------  --------  --------  ------  --------  ------  --------
+  Ha       6563.00     Gaussian  z         fwhm    ha        0       1.00
+  AGN_Ha   6563.00     Gaussian  z         fwhm    ha_agn    2       1.00
+  NaD      5893.00     Gaussian  z         fwhm    tau_nad   1       1.00
+```
+
+See {ref}`component-depth-ordering-zorder` in the model-building guide for the
+full mapping from `zorder` values to physical geometry, including how to reproduce
+the three classic absorber-position scenarios.
+
 ---
 
 ## Serialization

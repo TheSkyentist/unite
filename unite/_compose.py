@@ -12,9 +12,20 @@ import jax.numpy as jnp
 
 
 def compose_from_profiles(
-    profiles, flux_per_line, tau_per_line, is_tau, continuum, absorber_position
+    profiles,
+    flux_per_line,
+    tau_per_line,
+    is_tau,
+    applies_matrix,
+    cont_applies,
+    continuum,
 ):
     """Compose the total model from pre-evaluated profiles and continuum.
+
+    Each emission/continuum component has its own effective transmission
+    determined by which tau absorbers have a higher zorder (i.e. are in
+    front of it).  ``applies_matrix[j, k]`` encodes this: True when tau
+    line *k* applies to component *j*.
 
     Parameters
     ----------
@@ -28,37 +39,60 @@ def compose_from_profiles(
         Optical depth per line (zero for flux-parametrized lines).
     is_tau : jnp.ndarray, shape ``(n_lines,)``
         Boolean mask: True for tau-parametrized lines.
+    applies_matrix : jnp.ndarray, shape ``(n_lines, n_lines)``
+        Static boolean matrix.  ``applies_matrix[j, k]`` is True when tau
+        line *k* applies to emission line *j* (i.e. ``zorder_k > zorder_j``
+        and ``is_tau[k]``).
+    cont_applies : jnp.ndarray, shape ``(n_lines,)``
+        Boolean mask: True for tau lines whose zorder exceeds the
+        continuum zorder (i.e. they attenuate the continuum).
     continuum : jnp.ndarray, shape ``(n_points,)``
         Continuum flux density at each point.
-    absorber_position : str
-        One of ``'foreground'``, ``'behind_lines'``, ``'behind_continuum'``.
 
     Returns
     -------
     jnp.ndarray, shape ``(n_points,)``
         Total model flux density (before ``flux_scale`` and normalisation).
     """
-    emission, transmission = _emission_and_transmission(
-        profiles, flux_per_line, tau_per_line, is_tau
-    )
-    return _combine(emission, transmission, continuum, absorber_position)
+    emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)  # (n_lines, n_points)
+    absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)  # (n_lines, n_points)
+
+    # Per-component effective tau field:
+    # tau_fields[j, p] = sum_k applies_matrix[j,k] * tau_per_line[k] * absorption_phi[k,p]
+    tau_fields = (
+        applies_matrix * tau_per_line[None, :]
+    ) @ absorption_phi  # (n_lines, n_points)
+    t_eff = jnp.exp(-tau_fields)  # (n_lines, n_points)
+
+    attenuated_emission = (flux_per_line[:, None] * emission_phi * t_eff).sum(axis=0)
+
+    cont_tau = (cont_applies * tau_per_line) @ absorption_phi  # (n_points,)
+    t_cont = jnp.exp(-cont_tau)  # (n_points,)
+
+    return attenuated_emission + t_cont * continuum
 
 
 def compose_leave_one_out(
-    profiles, flux_per_line, tau_per_line, is_tau, continuum, absorber_position
+    profiles,
+    flux_per_line,
+    tau_per_line,
+    is_tau,
+    applies_matrix,
+    cont_applies,
+    continuum,
 ):
     """Compose the total model and per-line contributions.
 
     For **emission** lines, ``per_line_delta[j] = flux_per_line[j] * profiles[j]``
     — the intrinsic (un-attenuated) profile contribution.  Using intrinsic
-    emission ensures that ``sum(per_line_delta) + continuum == total`` for
-    models with a single absorber; using the leave-one-out difference
-    (``T * flux_j * phi_j``) would break this identity because the
-    absorption delta already accounts for the absorber's effect on emission.
+    emission preserves the identity
+    ``sum(per_line_delta) + continuum == total`` for all zorder configurations,
+    because the absorption delta absorbs the difference between total and
+    the no-absorber baseline.
 
     For **absorption** lines, ``per_line_delta[j] = total - total_without_j``
-    — the exact flux removed by that absorber (negative).  Profile
-    evaluation is shared; only the transmission is recomputed per absorber.
+    — the exact flux removed by that absorber (negative).  Removing tau *j*
+    changes all effective transmissions that depend on it.
 
     Parameters
     ----------
@@ -70,96 +104,52 @@ def compose_leave_one_out(
         Optical depth per line (zero for flux-parametrized lines).
     is_tau : jnp.ndarray, shape ``(n_lines,)``
         Boolean mask: True for tau-parametrized lines.
+    applies_matrix : jnp.ndarray, shape ``(n_lines, n_lines)``
+        Static boolean matrix (see :func:`compose_from_profiles`).
+    cont_applies : jnp.ndarray, shape ``(n_lines,)``
+        Boolean mask: tau lines that attenuate the continuum.
     continuum : jnp.ndarray, shape ``(n_points,)``
         Continuum flux density at each point.
-    absorber_position : str
-        One of ``'foreground'``, ``'behind_lines'``, ``'behind_continuum'``.
 
     Returns
     -------
     total : jnp.ndarray, shape ``(n_points,)``
         Full model flux density.
     per_line_delta : jnp.ndarray, shape ``(n_lines, n_points)``
-        Per-line contribution.  Emission lines: intrinsic flux profile
+        Per-line contribution.  Emission lines: attenuated flux profile
         (positive).  Absorption lines: flux removed (negative).
     """
-    emission, transmission = _emission_and_transmission(
-        profiles, flux_per_line, tau_per_line, is_tau
-    )
-    total = _combine(emission, transmission, continuum, absorber_position)
+    emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)  # (n_lines, n_points)
+    absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)  # (n_lines, n_points)
+
+    tau_fields = (applies_matrix * tau_per_line[None, :]) @ absorption_phi
+    t_eff = jnp.exp(-tau_fields)  # (n_lines, n_points)
+
+    attenuated_emission = (flux_per_line[:, None] * emission_phi * t_eff).sum(axis=0)
+    cont_tau = (cont_applies * tau_per_line) @ absorption_phi
+    t_cont = jnp.exp(-cont_tau)
+    total = attenuated_emission + t_cont * continuum
 
     n_lines = profiles.shape[0]
     per_line_delta = jnp.zeros_like(profiles)
 
     for j in range(n_lines):
         if bool(is_tau[j]):
-            # Absorption: leave-one-out difference = flux removed by this absorber.
-            # Emission is unchanged when tau_j is zeroed, so reuse it directly.
+            # Absorption: leave-one-out — zero this tau and recompute everything.
             tau_loo = tau_per_line.at[j].set(0.0)
-            _, transmission_loo = _emission_and_transmission(
-                profiles, flux_per_line, tau_loo, is_tau
+            tau_fields_loo = (applies_matrix * tau_loo[None, :]) @ absorption_phi
+            t_eff_loo = jnp.exp(-tau_fields_loo)
+            attenuated_loo = (flux_per_line[:, None] * emission_phi * t_eff_loo).sum(
+                axis=0
             )
-            total_loo = _combine(
-                emission, transmission_loo, continuum, absorber_position
-            )
+            cont_tau_loo = (cont_applies * tau_loo) @ absorption_phi
+            t_cont_loo = jnp.exp(-cont_tau_loo)
+            total_loo = attenuated_loo + t_cont_loo * continuum
             delta_j = total - total_loo
         else:
             # Emission: intrinsic profile contribution (no transmission factor).
-            delta_j = flux_per_line[j] * profiles[j]
+            # Preserves: sum(deltas) + continuum == total for all zorder configs.
+            delta_j = flux_per_line[j] * emission_phi[j]
         per_line_delta = per_line_delta.at[j].set(delta_j)
 
     return total, per_line_delta
-
-
-# -------------------------------------------------------------------
-# Internal helpers
-# -------------------------------------------------------------------
-
-
-def _emission_and_transmission(profiles, flux_per_line, tau_per_line, is_tau):
-    """Compute emission sum and combined transmission from profiles.
-
-    Parameters
-    ----------
-    profiles : jnp.ndarray, shape ``(n_lines, n_points)``
-    flux_per_line : jnp.ndarray, shape ``(n_lines,)``
-    tau_per_line : jnp.ndarray, shape ``(n_lines,)``
-    is_tau : jnp.ndarray, shape ``(n_lines,)``
-
-    Returns
-    -------
-    emission : jnp.ndarray, shape ``(n_points,)``
-        Sum of flux-weighted emission profiles.
-    transmission : jnp.ndarray, shape ``(n_points,)``
-        Product of per-line transmissions ``exp(-tau_j * phi_j)``.
-    """
-    emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)
-    emission = (flux_per_line[:, None] * emission_phi).sum(axis=0)
-
-    absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)
-    total_tau = (tau_per_line[:, None] * absorption_phi).sum(axis=0)
-    transmission = jnp.exp(-total_tau)
-
-    return emission, transmission
-
-
-def _combine(emission, transmission, continuum, absorber_position):
-    """Combine emission, transmission, and continuum by absorber position.
-
-    Parameters
-    ----------
-    emission : jnp.ndarray, shape ``(n_points,)``
-    transmission : jnp.ndarray, shape ``(n_points,)``
-    continuum : jnp.ndarray, shape ``(n_points,)``
-    absorber_position : str
-
-    Returns
-    -------
-    jnp.ndarray, shape ``(n_points,)``
-    """
-    if absorber_position == 'foreground':
-        return transmission * (emission + continuum)
-    elif absorber_position == 'behind_lines':
-        return emission + transmission * continuum
-    else:  # behind_continuum
-        return transmission * emission + continuum

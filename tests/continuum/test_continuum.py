@@ -711,6 +711,36 @@ class TestSerializationRoundTrip:
         assert isinstance(resolved['norm_wav'].prior, Fixed)
         assert resolved['norm_wav'].prior.value == pytest.approx(3.5)
 
+    def test_zorder_default_roundtrip(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())]
+        )
+        d = config.to_dict()
+        config2 = ContinuumConfiguration.from_dict(d)
+        assert config2.zorder == 0
+
+    def test_zorder_nonzero_roundtrip(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())], zorder=2
+        )
+        d = config.to_dict()
+        config2 = ContinuumConfiguration.from_dict(d)
+        assert config2.zorder == 2
+
+    def test_zorder_in_dict_when_nonzero(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())], zorder=3
+        )
+        d = config.to_dict()
+        assert d['zorder'] == 3
+
+    def test_zorder_omitted_from_dict_when_default(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())]
+        )
+        d = config.to_dict()
+        assert 'zorder' not in d
+
 
 # ---------------------------------------------------------------------------
 # form_from_dict dispatch
