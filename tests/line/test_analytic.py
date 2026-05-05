@@ -6,6 +6,7 @@ import pytest
 from unite.line import functions
 from unite.line.library import (
     SEMG,
+    BoxGauss,
     Cauchy,
     GaussHermite,
     Gaussian,
@@ -97,6 +98,39 @@ class TestIntegrationNormalization:
         )
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
 
+    def test_boxGauss(self):
+        result = functions.integrate_boxGauss(
+            self.low,
+            self.high,
+            self.center,
+            self.lsf_fwhm,
+            jnp.array([300.0]),
+            jnp.array([100.0]),
+        )
+        assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
+
+    def test_boxGauss_wide_box(self):
+        result = functions.integrate_boxGauss(
+            self.low,
+            self.high,
+            self.center,
+            self.lsf_fwhm,
+            jnp.array([500.0]),
+            jnp.array([0.0]),
+        )
+        assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
+
+    def test_boxGauss_large_gauss(self):
+        result = functions.integrate_boxGauss(
+            self.low,
+            self.high,
+            self.center,
+            self.lsf_fwhm,
+            jnp.array([0.1]),
+            jnp.array([500.0]),
+        )
+        assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
+
 
 # ---------------------------------------------------------------------------
 # Profile.integrate() method dispatch
@@ -111,6 +145,7 @@ _PROFILE_PARAMS = [
     (GaussHermite(), {'fwhm_gauss': 80.0, 'h3': 0.1, 'h4': 0.05}),
     (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
     (SkewVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0, 'alpha': 2.0}),
+    (BoxGauss(), {'fwhm_box': 300.0, 'fwhm_gauss': 100.0}),
 ]
 
 

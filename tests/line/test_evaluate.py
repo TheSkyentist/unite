@@ -11,6 +11,7 @@ from unite.line import functions
 from unite.line.compute import evaluate_lines
 from unite.line.library import (
     SEMG,
+    BoxGauss,
     Cauchy,
     GaussHermite,
     Gaussian,
@@ -88,6 +89,13 @@ class TestEvaluateNormalization:
     def test_gaussHermite(self):
         vals = functions.evaluate_gaussHermite(
             self.wavelength, self.center, self.lsf_fwhm, 80.0, 0.1, 0.05
+        )
+        integral = jnp.trapezoid(vals, self.wavelength)
+        assert float(integral) == pytest.approx(1.0, rel=1e-3)
+
+    def test_boxGauss(self):
+        vals = functions.evaluate_boxGauss(
+            self.wavelength, self.center, self.lsf_fwhm, 300.0, 100.0
         )
         integral = jnp.trapezoid(vals, self.wavelength)
         assert float(integral) == pytest.approx(1.0, rel=1e-3)
@@ -173,6 +181,14 @@ class TestEvaluateIntegrateConsistency:
             (self.center, self.lsf_fwhm, 80.0, 0.1, 0.05),
         )
 
+    def test_boxGauss(self):
+        self._check_convergence(
+            functions.integrate_boxGauss,
+            functions.evaluate_boxGauss,
+            (self.center, self.lsf_fwhm, 300.0, 100.0),
+            (self.center, self.lsf_fwhm, 300.0, 100.0),
+        )
+
 
 # ---------------------------------------------------------------------------
 # Symmetry
@@ -201,6 +217,15 @@ class TestEvaluateSymmetry:
         )
         right = functions.evaluate_voigt(
             self.center + self.offsets, self.center, self.lsf_fwhm, 80.0, 50.0
+        )
+        assert jnp.allclose(left, right, rtol=1e-10)
+
+    def test_boxGauss_symmetric(self):
+        left = functions.evaluate_boxGauss(
+            self.center - self.offsets, self.center, self.lsf_fwhm, 300.0, 100.0
+        )
+        right = functions.evaluate_boxGauss(
+            self.center + self.offsets, self.center, self.lsf_fwhm, 300.0, 100.0
         )
         assert jnp.allclose(left, right, rtol=1e-10)
 
@@ -422,6 +447,7 @@ _PROFILE_EVALUATE_PARAMS = [
     (GaussHermite(), {'fwhm_gauss': 80.0, 'h3': 0.1, 'h4': 0.05}),
     (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
     (SkewVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0, 'alpha': 0.5}),
+    (BoxGauss(), {'fwhm_box': 300.0, 'fwhm_gauss': 100.0}),
 ]
 
 
@@ -533,3 +559,46 @@ class TestIntegrateSkewVoigt:
         )
         # Midpoint skew approximation has ~2% discretization error for large alpha_eff
         assert float(jnp.sum(result)) == pytest.approx(1.0, rel=0.05)
+
+
+# ---------------------------------------------------------------------------
+# BoxGauss limits
+# ---------------------------------------------------------------------------
+
+
+class TestBoxGaussLimits:
+    """BoxGauss profile limit behavior and edge cases."""
+
+    center = 5000.0
+    lsf_fwhm = 0.0
+    edges = jnp.linspace(4900.0, 5100.0, 1001)
+    lo, hi = edges[:-1], edges[1:]
+
+    def test_gaussian_limit(self):
+        """As fwhm_box → 0, boxcar → delta; boxgauss reduces to pure Gaussian."""
+        box = functions.integrate_boxGauss(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 1e-3, 100.0
+        )
+        gauss = functions.integrate_gaussian(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 100.0
+        )
+        assert jnp.allclose(box, gauss, rtol=1e-3)
+
+    def test_boxcar_limit(self):
+        """As sigma → 0, boxgauss reduces to rectangular CDF difference."""
+        result = functions.integrate_boxGauss(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 100.0, 1e-3
+        )
+        # Exact boxcar CDF over pixel: clamp((hi-c)/w + 0.5, 0, 1) - clamp((lo-c)/w + 0.5, 0, 1)
+        w = 100.0
+        cdf_hi = jnp.clip((self.hi - self.center) / w + 0.5, 0.0, 1.0)
+        cdf_lo = jnp.clip((self.lo - self.center) / w + 0.5, 0.0, 1.0)
+        expected = cdf_hi - cdf_lo
+        assert jnp.allclose(result, expected, atol=1e-4)
+
+    def test_normalization(self):
+        """BoxGauss sums to 1 over full range."""
+        edges_wide = jnp.linspace(0.0, 10000.0, 2001)
+        lo, hi = edges_wide[:-1], edges_wide[1:]
+        result = functions.integrate_boxGauss(lo, hi, self.center, 10.0, 300.0, 100.0)
+        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=1e-5)
