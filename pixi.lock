@@ -7843,8 +7843,8 @@ packages:
   timestamp: 1770909728445
 - pypi: ./
   name: unite
-  version: 2.6.0
-  sha256: 1fd03ca7a1c400cf43811648c2d5d6f583912fd77418559cac8296368f1363b8
+  version: 2.7.0
+  sha256: d0b19300b7d7be4a52bd6bb9f8bbd2cdd7d64fbb9fa31c284d0dc4093a65e5db
   requires_dist:
   - numpyro>=0.20.0,<0.21
   - astropy>=7.2.0,<8
