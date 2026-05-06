@@ -50,6 +50,11 @@ class SpectrumPrediction:
     #: (e.g. ``'linear_6400_6700'``, ``'powerlaw_0.95_2.5'``).
     #: Shape ``(n_samples, n_pixels)`` each.
     continuum_regions: dict[str, np.ndarray]
+    #: LSF-convolved optical depth profiles ``tau_j * phi_j(λ)`` for absorption
+    #: lines, evaluated at pixel midpoints.  Dimensionless and non-negative.
+    #: Keyed by line label; empty dict for emission-only models.
+    #: Shape ``(n_samples, n_pixels)`` each.
+    tau_profiles: dict[str, np.ndarray]
 
 
 def evaluate_model(
@@ -208,6 +213,18 @@ def evaluate_model(
             # Scaled line fluxes for this spectrum.
             scaled_flux = flux_per_line * _line_scale
 
+            # --- Optical depth profiles at pixel midpoints (mode-independent) ---
+            # Evaluate LSF-convolved profile at pixel centres for all lines, then
+            # mask to absorption lines only.  This is the same phi the analytic
+            # integration mode uses for exp(-tau*phi), so it is consistent with
+            # what the model actually computes.
+            phi_mid = evaluate_lines(
+                wavelength, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
+            )
+            tau_profiles_arr = jnp.where(
+                cm.is_tau[:, None], tau_per_line[:, None] * phi_mid, 0.0
+            )
+
             # --- Continuum (per-region for decomposition) ---
             # For analytic/quadrature: evaluate at pixel centres with LSF.
             # For convolution: evaluated on the fine grid inside the branch below.
@@ -338,7 +355,7 @@ def evaluate_model(
                     -1, n_super, n_pixels
                 ).mean(axis=1)  # (n_lines, n_pixels)
 
-                return total, line_contribs, cont_regions_scaled
+                return total, line_contribs, cont_regions_scaled, tau_profiles_arr
             else:
                 # Analytic: CDF-based per-line integration, then compose.
                 pixints = integrate_lines(
@@ -358,14 +375,15 @@ def evaluate_model(
             total = flux_scale_val * total
             line_contribs = flux_scale_val * line_contribs
 
-            return total, line_contribs, cont_regions_scaled
+            return total, line_contribs, cont_regions_scaled, tau_profiles_arr
 
         # Vectorise over the leading sample axis of every parameter in context.
         # JAX treats the dict as a pytree and maps axis 0 of each leaf.
-        total_arr, line_arr, cont_arr = jax.vmap(_single)(context)
+        total_arr, line_arr, cont_arr, tau_arr = jax.vmap(_single)(context)
         # total_arr:  (n_samples, n_pix)
         # line_arr:   (n_samples, n_lines, n_pix)
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
+        # tau_arr:    (n_samples, n_lines, n_pix)
 
         lines_dict: dict[str, np.ndarray] = {
             args.line_labels[j]: np.asarray(line_arr[:, j, :]) for j in range(n_lines)
@@ -375,12 +393,20 @@ def evaluate_model(
             for k in range(len(args.cont_config)):
                 cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
 
+        is_abs = np.asarray(cm.is_tau)
+        tau_dict: dict[str, np.ndarray] = {
+            args.line_labels[j]: np.asarray(tau_arr[:, j, :])
+            for j in range(n_lines)
+            if is_abs[j]
+        }
+
         results.append(
             SpectrumPrediction(
                 wavelength=wl_out,
                 total=np.asarray(total_arr),
                 lines=lines_dict,
                 continuum_regions=cont_dict,
+                tau_profiles=tau_dict,
             )
         )
 

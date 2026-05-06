@@ -348,6 +348,10 @@ def make_spectra_tables(
                     _compute_percentiles(arr[:, pixel_mask], percentiles).T,
                     unit=spec_flux_unit,
                 )
+            for name, arr in pred.tau_profiles.items():
+                t[f'od_{name}'] = _compute_percentiles(
+                    arr[:, pixel_mask], percentiles
+                ).T
         else:
             # (n_samples, n_pixels) → trim → transpose to (n_pixels, n_samples)
             t['model_total'] = u.Quantity(
@@ -357,6 +361,8 @@ def make_spectra_tables(
                 t[name] = u.Quantity(arr[:, pixel_mask].T, unit=spec_flux_unit)
             for name, arr in pred.continuum_regions.items():
                 t[name] = u.Quantity(arr[:, pixel_mask].T, unit=spec_flux_unit)
+            for name, arr in pred.tau_profiles.items():
+                t[f'od_{name}'] = arr[:, pixel_mask].T
 
         # Add observed data columns.
         t['observed_flux'] = u.Quantity(
