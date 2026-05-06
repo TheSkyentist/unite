@@ -222,7 +222,7 @@ def evaluate_model(
                 wavelength, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
             )
             tau_profiles_arr = jnp.where(
-                cm.is_absorption[:, None], tau_per_line[:, None] * phi_mid, 0.0
+                cm.is_tau[:, None], tau_per_line[:, None] * phi_mid, 0.0
             )
 
             # --- Continuum (per-region for decomposition) ---
@@ -393,7 +393,7 @@ def evaluate_model(
             for k in range(len(args.cont_config)):
                 cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
 
-        is_abs = np.asarray(cm.is_absorption)
+        is_abs = np.asarray(cm.is_tau)
         tau_dict: dict[str, np.ndarray] = {
             args.line_labels[j]: np.asarray(tau_arr[:, j, :])
             for j in range(n_lines)
