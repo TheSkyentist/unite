@@ -563,7 +563,7 @@ Pass `zorder` explicitly to `add_line()` to break from the default geometry:
 # Absorber at zorder=1 (default) — absorbs Ha (zorder=0) but not AGN (zorder=2)
 lc = line.LineConfiguration()
 lc.add_line('Ha',     6563.0 * u.AA)                    # emission, zorder=0
-lc.add_line('AGN_Ha', 6563.0 * u.AA, zorder=2)          # emission, zorder=2 — behind absorber
+lc.add_line('AGN_Ha', 6563.0 * u.AA, zorder=2)          # emission, zorder=2 - not absorbed
 lc.add_line('NaD',    5893.0 * u.AA, tau=line.Tau())    # absorber, zorder=1 (default)
 ```
 
