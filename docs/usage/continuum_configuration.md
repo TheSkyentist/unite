@@ -81,6 +81,42 @@ cc2 = ContinuumConfiguration.load('continuum2.yaml')
 cc_combined = cc1 + cc2
 ```
 
+Both configurations must share the same `zorder`; combining configurations with
+different zorders raises `ValueError`.
+
+### Depth Ordering (`zorder`)
+
+`ContinuumConfiguration` accepts a `zorder` integer that controls which tau
+absorbers attenuate the continuum.  A tau absorber at depth `Z` only absorbs
+components with `zorder < Z`.
+
+The default is `zorder=0`, which means any tau line at the default `zorder=1`
+will attenuate the continuum (the classic foreground-screen geometry).
+
+```python
+# Default: continuum at zorder=0, absorbed by any tau at zorder >= 1
+cc = ContinuumConfiguration.from_lines(lc)
+
+# Continuum at zorder=2: a tau absorber at zorder=1 does NOT attenuate the continuum
+cc = ContinuumConfiguration.from_lines(lc, zorder=2)
+
+# Manual regions also accept zorder
+cc = ContinuumConfiguration(regions, zorder=2)
+```
+
+The `zorder` is shown in the configuration header when you print the object:
+
+```
+ContinuumConfiguration: 2 region(s), 4 parameter(s), zorder=0
+  Range            Unit  Form     Parameters
+  ---------------  ----  -------  --------------------
+  [6400.0, 6700.0] AA    Linear   scale_red, angle_red
+  [4800.0, 5100.0] AA    PowerLaw scale_blue, beta_blue
+```
+
+See {ref}`component-depth-ordering-zorder` in the model-building guide for the
+full mapping from `zorder` values to physical geometry.
+
 ---
 
 ## Continuum Parameters and Priors

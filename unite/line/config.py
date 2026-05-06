@@ -286,6 +286,14 @@ class ConfigMatrices:
     #: Boolean mask indicating which lines are absorption lines. Shape ``(n_lines,)``.
     is_tau: jnp.ndarray
 
+    #: Depth-ordering integer for each line. Shape ``(n_lines,)``.
+    #: Tau absorbers at zorder Z attenuate components with zorder < Z.
+    line_zorders: jnp.ndarray
+    #: Static boolean matrix encoding which tau lines attenuate which emission lines.
+    #: ``applies_matrix[j, k]`` is True when ``line_zorders[k] > line_zorders[j]``
+    #: and ``is_tau[k]``.  Shape ``(n_lines, n_lines)``.
+    applies_matrix: jnp.ndarray
+
     priors: dict[str, Prior]
 
 
@@ -368,6 +376,9 @@ class _LineEntry:
     flux: Flux | None = None  # set for emission lines
     tau: Tau | None = None  # set for absorption lines
     strength: int | float = 1.0
+    zorder: int = (
+        0  # depth ordering: tau absorbers at zorder Z absorb components with zorder < Z
+    )
 
 
 # ------------------------------------------------------------------
@@ -420,6 +431,7 @@ class LineConfiguration:
         flux: Flux | None = None,
         tau: Tau | None = None,
         strength: int | float = 1.0,
+        zorder: int | None = None,
         **param_kwargs: Parameter | None,
     ) -> None:
         r"""Add one spectral line.
@@ -447,6 +459,11 @@ class LineConfiguration:
         strength : float or sequence of float, optional
             Relative flux strength.  For multiplets, broadcast to match
             the number of centers.  Default ``1.0``.
+        zorder : int, optional
+            Depth-ordering integer.  Tau absorbers at zorder *Z* attenuate
+            all components (emission lines and continuum) with zorder < *Z*.
+            Defaults to ``1`` for absorption lines (``tau`` token supplied)
+            and ``0`` for emission lines.
         profile : str or Profile, optional
             Line profile.  Default ``'gaussian'``.
         \*\*param_kwargs : Parameter
@@ -523,6 +540,12 @@ class LineConfiguration:
         if tau_tok is not None:
             self._register_token(tau_tok, 'tau', hint_label=name)
 
+        # Default zorder: 1 for absorption lines, 0 for emission lines.
+        if zorder is None:
+            resolved_zorder = 1 if tau_tok is not None else 0
+        else:
+            resolved_zorder = int(zorder)
+
         self._used_line_names.add(name)
         self._entries.append(
             _LineEntry(
@@ -534,6 +557,7 @@ class LineConfiguration:
                 flux=flux_tok,
                 tau=tau_tok,
                 strength=strength,
+                zorder=resolved_zorder,
             )
         )
 
@@ -547,6 +571,7 @@ class LineConfiguration:
         flux: Flux | Sequence[Flux | None] | None = None,
         tau: Tau | Sequence[Tau | None] | None = None,
         strength: int | float | Sequence[int | float] = 1.0,
+        zorder: int | None = None,
         **param_kwargs,
     ) -> None:
         r"""Add multiple lines, each with an independent name.
@@ -621,6 +646,7 @@ class LineConfiguration:
                 flux=fluxes[i],
                 tau=taus[i],
                 strength=strengths[i],
+                zorder=zorder,
                 **kw,
             )
 
@@ -733,6 +759,15 @@ class LineConfiguration:
 
         is_tau = jnp.array([e.tau is not None for e in self], dtype=bool)
 
+        line_zorders_np = np.array([e.zorder for e in self], dtype=np.int32)
+        line_zorders = jnp.array(line_zorders_np)
+        # applies_matrix[j, k] = True when tau k applies to component j
+        #                       = is_tau[k] AND line_zorders[k] > line_zorders[j]
+        is_tau_np = np.array([e.tau is not None for e in self], dtype=bool)
+        applies_matrix = jnp.array(
+            (line_zorders_np[None, :] > line_zorders_np[:, None]) & is_tau_np[None, :]
+        )
+
         z_names, z_matrix = _token_matrix(self._entries, lambda e: e.redshift, n)
 
         # Assign profile params to slots based on each profile's param_names() order.
@@ -787,6 +822,8 @@ class LineConfiguration:
             tau_names=tau_names,
             tau_matrix=tau_matrix,
             is_tau=is_tau,
+            line_zorders=line_zorders,
+            applies_matrix=applies_matrix,
             priors=priors,
         )
 
@@ -857,6 +894,9 @@ class LineConfiguration:
             item['profile'] = entry.profile.to_dict()
             if entry.strength != 1.0:
                 item['strength'] = entry.strength
+            default_zorder = 1 if entry.tau is not None else 0
+            if entry.zorder != default_zorder:
+                item['zorder'] = entry.zorder
             lines.append(item)
 
         result['lines'] = lines
@@ -896,6 +936,7 @@ class LineConfiguration:
                     flux=entry.flux,
                     tau=entry.tau,
                     strength=entry.strength,
+                    zorder=entry.zorder,
                     **entry.fwhms,
                 )
         return new
@@ -980,6 +1021,8 @@ class LineConfiguration:
             tau_tok = (
                 section_tokens['tau'][line_data['tau']] if 'tau' in line_data else None
             )
+            # Backward-compatible default: 1 for tau lines, 0 for emission lines.
+            default_zorder = 1 if 'tau' in line_data else 0
             config.add_line(
                 line_data['name'],
                 line_data['wavelength'] * u.Unit(line_data['wavelength_unit']),
@@ -990,6 +1033,7 @@ class LineConfiguration:
                 flux=cast(Flux | None, flux_tok),
                 tau=cast(Tau | None, tau_tok),
                 strength=line_data.get('strength', 1.0),
+                zorder=line_data.get('zorder', default_zorder),
                 **param_kwargs,
             )
 
@@ -1135,6 +1179,7 @@ class LineConfiguration:
                 flux=entry.flux,
                 tau=entry.tau,
                 strength=entry.strength,
+                zorder=entry.zorder,
                 **entry.fwhms,
             )
         for entry in other._entries:
@@ -1156,6 +1201,7 @@ class LineConfiguration:
                 flux=remapped_flux,
                 tau=remapped_tau,
                 strength=entry.strength,
+                zorder=entry.zorder,
                 **remapped_fwhms,
             )
         return merged
@@ -1199,7 +1245,7 @@ class LineConfiguration:
         header = f'LineConfiguration: {len(self._entries)} lines, {n_flux} flux / {n_z} z / {n_params} profile params'
 
         # --- Line table ---
-        rows: list[tuple[str, str, str, str, str, str, str]] = []
+        rows: list[tuple[str, str, str, str, str, str, str, str]] = []
         for entry in self._entries:
             prof_name = type(entry.profile).__name__
             # Tokens are always named after add_line registration
@@ -1221,6 +1267,7 @@ class LineConfiguration:
                     entry.redshift.name,
                     fwhm_display,
                     flux_or_tau,
+                    str(entry.zorder),
                     f'{entry.strength:.2f}',
                 )
             )
@@ -1232,6 +1279,7 @@ class LineConfiguration:
             'Redshift',
             'Params',
             'Flux/Tau',
+            'zorder',
             'Strength',
         )
         widths = [len(h) for h in headers]

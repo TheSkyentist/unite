@@ -277,49 +277,86 @@ The auto-computed value satisfies `half_width ≥ ceil(4 × max_sigma / min_dx_f
 which captures at least 4σ of the broadest kernel.  The dominant cost is
 `O(n_pixels × n_super × 2 × conv_half_width)` per spectrum per model evaluation.
 
-### Absorber Position
+(component-depth-ordering-zorder)=
+### Component Depth Ordering (`zorder`)
 
-When your line configuration includes absorption lines, the `absorber_position`
-parameter on `build()` controls where the absorbing material sits relative to
-the emission and continuum sources.  This affects the model equation:
+When your model includes absorption lines, the `zorder` integer on each
+component controls which absorbers attenuate which sources.  A tau absorber
+at depth `Z` only absorbs components with `zorder < Z` — i.e. sources
+behind it.
+
+**Defaults** (no arguments needed for the common case):
+
+| Component | Default `zorder` |
+|---|---|
+| Emission lines | `0` |
+| Continuum | `0` |
+| Tau (absorption) lines | `1` |
+
+With these defaults every tau absorber sits in front of all emission lines
+and the continuum, which reproduces the classic foreground-screen geometry.
+
+#### Setting `zorder` on lines
+
+Pass `zorder` to `add_line()`.  Omitting it uses the default (0 for emission,
+1 for tau):
 
 ```python
-# Default: absorber in front of everything
-model_fn, args = builder.build(absorber_position='foreground')
+from unite.line.config import LineConfiguration, Redshift, FWHM, Flux, Tau
 
-# Absorber between continuum source and emission region
-model_fn, args = builder.build(absorber_position='behind_lines')
+lc = LineConfiguration()
 
-# Absorber between emission region and observer, behind continuum
-model_fn, args = builder.build(absorber_position='behind_continuum')
+# Emission line at default zorder=0
+lc.add_line('Ha', 0.6563, flux=Flux('ha'), redshift=Redshift('z'), fwhm=FWHM('v'))
+
+# Tau absorber at default zorder=1 — absorbs everything with zorder < 1
+lc.add_line('NaD', 0.5893, tau=Tau('tau_nad'), redshift=Redshift('z'), fwhm=FWHM('v_abs'))
+
+# Emission line at zorder=2 — the tau absorber (zorder=1) does NOT attenuate this line
+lc.add_line('AGN', 0.6563, flux=Flux('ha_agn'), redshift=Redshift('z'), fwhm=FWHM('v_agn'),
+            zorder=2)
 ```
 
-The three options correspond to different physical geometries:
+#### Setting `zorder` on the continuum
 
-| Position | Model equation | Physical meaning |
+Pass `zorder` to `ContinuumConfiguration`:
+
+```python
+from unite.continuum.config import ContinuumConfiguration
+
+# Default: continuum at zorder=0, absorbed by any tau at zorder >= 1
+cc = ContinuumConfiguration.from_lines(lc)
+
+# Continuum at zorder=2: tau at zorder=1 does NOT attenuate the continuum
+cc_behind = ContinuumConfiguration.from_lines(lc, zorder=2)
+```
+
+#### Mapping from the old `absorber_position` modes
+
+The three modes from the previous API translate directly to zorder choices:
+
+| Old mode | New zorder configuration | Equation |
 |---|---|---|
-| `'foreground'` | `T × (emission + continuum)` | Absorber in front of lines and continua |
-| `'behind_lines'` | `emission + T × continuum` | Absorber between continua and lines |
-| `'behind_continuum'` | `T × emission + continuum` | Absorber between lines and continua |
+| `'foreground'` | emission=0, continuum=0, tau=1 (all defaults) | `T × (emission + continuum)` |
+| `'behind_lines'` | emission=2, continuum=0, tau=1 | `emission + T × continuum` |
+| `'behind_continuum'` | emission=0, continuum=2, tau=1 | `T × emission + continuum` |
 
-where `T = exp(-τ·φ(λ))` is the transmission spectrum.
+where `T = exp(-τ·φ(λ))` is the transmission of the absorber.
 
-When no absorption lines are present, `T = 1` everywhere and the model reduces
-to the standard emission + continuum equation regardless of `absorber_position`.
+When no absorption lines are present all transmissions are 1 and the model
+reduces to the standard emission + continuum equation regardless of zorders.
 
-Both `absorber_position` and `integration_mode` can be passed to the `fit()`
-convenience method:
+`integration_mode` can be passed to both `build()` and the `fit()` convenience
+method:
 
 ```python
 samples, args = builder.fit(
-    absorber_position='foreground',
     integration_mode='quadrature',
     n_nodes=7,
 )
 
 # Or with convolution mode:
 samples, args = builder.fit(
-    absorber_position='foreground',
     integration_mode='convolution',
     n_super=10,
 )

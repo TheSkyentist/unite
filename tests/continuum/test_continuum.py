@@ -711,6 +711,36 @@ class TestSerializationRoundTrip:
         assert isinstance(resolved['norm_wav'].prior, Fixed)
         assert resolved['norm_wav'].prior.value == pytest.approx(3.5)
 
+    def test_zorder_default_roundtrip(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())]
+        )
+        d = config.to_dict()
+        config2 = ContinuumConfiguration.from_dict(d)
+        assert config2.zorder == 0
+
+    def test_zorder_nonzero_roundtrip(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())], zorder=2
+        )
+        d = config.to_dict()
+        config2 = ContinuumConfiguration.from_dict(d)
+        assert config2.zorder == 2
+
+    def test_zorder_in_dict_when_nonzero(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())], zorder=3
+        )
+        d = config.to_dict()
+        assert d['zorder'] == 3
+
+    def test_zorder_omitted_from_dict_when_default(self):
+        config = ContinuumConfiguration(
+            [ContinuumRegion(4600.0 * u.AA, 5200.0 * u.AA, Linear())]
+        )
+        d = config.to_dict()
+        assert 'zorder' not in d
+
 
 # ---------------------------------------------------------------------------
 # form_from_dict dispatch
@@ -1482,6 +1512,26 @@ class TestContinuumConfigurationAdd:
         cc2 = ContinuumConfiguration()
         merged = cc1 + cc2
         assert len(merged) == 1
+
+    def test_add_matching_zorder_succeeds(self):
+        cc1 = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um)], zorder=2
+        )
+        cc2 = ContinuumConfiguration(
+            [ContinuumRegion(3.0 * u.um, 4.0 * u.um)], zorder=2
+        )
+        merged = cc1 + cc2
+        assert merged.zorder == 2
+
+    def test_add_mismatched_zorder_raises(self):
+        cc1 = ContinuumConfiguration(
+            [ContinuumRegion(1.0 * u.um, 2.0 * u.um)], zorder=0
+        )
+        cc2 = ContinuumConfiguration(
+            [ContinuumRegion(3.0 * u.um, 4.0 * u.um)], zorder=2
+        )
+        with pytest.raises(ValueError, match='zorder'):
+            cc1 + cc2
 
 
 # ---------------------------------------------------------------------------
