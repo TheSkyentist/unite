@@ -1107,94 +1107,114 @@ def evaluate_gaussHermite(
 
 
 # -------------------------------------------------------------------
-# Skew Gaussian
+# Skew Normal kernel
 # -------------------------------------------------------------------
-
-
-# def _owens_t(h, a):
-#     """
-#     Owen's T function T(h, a) implemented in JAX.
-
-#     Parameters
-#     ----------
-#     h : array_like
-#         Real-valued input.
-#     a : array_like
-#         Real-valued input.
-
-#     Returns
-#     -------
-#     T : array_like
-#         Value of Owen's T function.
-#     """
-#     h = jnp.asarray(h)
-#     a = jnp.asarray(a)
-
-#     # Constants
-#     inv_2pi = 1.0 / (2.0 * jnp.pi)
-
-#     # Handle special cases
-#     def case_a_zero(_):
-#         return jnp.zeros_like(h)
-
-#     def case_h_zero(_):
-#         return jnp.arctan(a) * inv_2pi
-
-#     def general_case(_):
-#         abs_h = jnp.abs(h)
-#         abs_a = jnp.abs(a)
-
-#         # Use symmetry: T(-h, a) = T(h, a)
-#         h0 = abs_h
-#         a0 = abs_a
-
-#         # Series expansion for small a
-#         def series_small_a(h, a):
-#             # Power series expansion
-#             max_iter = 50
-
-#             def body_fun(i, val):
-#                 term, summation = val
-#                 new_term = term * (-a * a * h * h) / (2 * i + 1)
-#                 summation = summation + new_term / (2 * i + 1)
-#                 return (new_term, summation)
-
-#             term0 = a * jnp.exp(-0.5 * h * h)
-#             sum0 = term0
-
-#             _, summation = lax.fori_loop(1, max_iter, body_fun, (term0, sum0))
-
-#             return summation * inv_2pi
-
-#         # Approximation using Gaussian CDF relation
-#         def asymptotic_large_a(h, a):
-#             # T(h, a) ≈ 0.5 * Φ(h) * (1 - Φ(a h))
-#             phi_h = 0.5 * (1.0 + erf(h / jnp.sqrt(2.0)))
-#             phi_ah = 0.5 * (1.0 + erf(a * h / jnp.sqrt(2.0)))
-#             return 0.5 * phi_h * (1.0 - phi_ah)
-
-#         # Switch strategy
-#         use_series = a0 <= 1.0
-
-#         result = jnp.where(
-#             use_series, series_small_a(h0, a0), asymptotic_large_a(h0, a0)
-#         )
-
-#         # Restore sign symmetry: T(h, -a) = -T(h, a)
-#         result = jnp.where(a < 0, -result, result)
-
-#         return result
-
-#     return lax.cond(
-#         jnp.all(a == 0),
-#         case_a_zero,
-#         lambda _: lax.cond(jnp.all(h == 0), case_h_zero, general_case, operand=None),
-#         operand=None,
-#     )
 
 
 def _skew(x: ArrayLike, alpha: ArrayLike, scale: ArrayLike) -> Array:
     return 1 + erf(alpha * x / scale)
+
+
+def _alpha_eff_skewnormal(
+    lsf_fwhm: ArrayLike, fwhm_g: ArrayLike, alpha: ArrayLike
+) -> Array:
+    """Exact effective skewness after convolving a skew-normal with a Gaussian LSF.
+
+    The convolution of a skew-normal with a Gaussian LSF is exactly another
+    skew-normal; the shape parameter rescales as derived in
+    docs/derivations/skew-normal.md.
+    """
+    return alpha * fwhm_g / jnp.sqrt(fwhm_g**2 + (1.0 + alpha**2) * lsf_fwhm**2)
+
+
+@jit
+def integrate_skewNormal(
+    low: ArrayLike,
+    high: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_g: ArrayLike,
+    alpha: ArrayLike,
+) -> Array:
+    """Integrate a skew-normal profile over wavelength bins.
+
+    Uses the exact skew-normal CDF ``Phi(z) - 2 T(z, alpha_eff)``, where T is
+    Owen's T function and ``z = (x - center) / sigma_tot``.  The LSF convolution
+    is exact — the shape parameter rescales analytically with no approximation.
+    See docs/derivations/skew-normal.md for the full derivation.
+
+    Parameters
+    ----------
+    low : ArrayLike
+        Lower bin edges.
+    high : ArrayLike
+        Upper bin edges.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm_g : ArrayLike
+        Intrinsic Gaussian FWHM.
+    alpha : ArrayLike
+        Skewness parameter; positive values shift flux redward.
+
+    Returns
+    -------
+    Array
+        Integrated fraction per bin.
+    """
+    fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
+    sigma_tot = _fwhm_to_sigma(fwhm_tot)
+    alpha_eff = _alpha_eff_skewnormal(lsf_fwhm, fwhm_g, alpha)
+
+    z_lo = (low - center) / sigma_tot
+    z_hi = (high - center) / sigma_tot
+
+    gaussian_cdf = 0.5 * (erf(z_hi / _SQRT2) - erf(z_lo / _SQRT2))
+    owens_correction = owens_t(z_hi, alpha_eff) - owens_t(z_lo, alpha_eff)
+    return gaussian_cdf - 2.0 * owens_correction
+
+
+@jit
+def evaluate_skewNormal(
+    wavelength: ArrayLike,
+    center: ArrayLike,
+    lsf_fwhm: ArrayLike,
+    fwhm_g: ArrayLike,
+    alpha: ArrayLike,
+) -> Array:
+    """Evaluate a normalised skew-normal profile at wavelength points.
+
+    Evaluates ``G_tot(x) * [1 + erf(alpha_eff * (x - center) / w0)]`` where
+    ``G_tot`` is the LSF-convolved Gaussian and ``alpha_eff`` is the exact
+    effective skewness after convolution.
+
+    Parameters
+    ----------
+    wavelength : ArrayLike
+        Wavelength points at which to evaluate the profile.
+    center : ArrayLike
+        Line center wavelength.
+    lsf_fwhm : ArrayLike
+        Instrumental line spread function FWHM at the line center.
+    fwhm_g : ArrayLike
+        Intrinsic Gaussian FWHM.
+    alpha : ArrayLike
+        Skewness parameter; positive values shift flux redward.
+
+    Returns
+    -------
+    Array
+        Normalised profile value at each wavelength point (1/wavelength units).
+    """
+    fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
+    sigma_tot = _fwhm_to_sigma(fwhm_tot)
+    alpha_eff = _alpha_eff_skewnormal(lsf_fwhm, fwhm_g, alpha)
+    w0p = sigma_tot * _SQRT2
+
+    gauss = _gaussian_pdf(wavelength - center, sigma_tot)
+    skew = _skew(wavelength - center, alpha_eff, w0p)
+    return gauss * skew
 
 
 # -------------------------------------------------------------------
@@ -1350,110 +1370,3 @@ def evaluate_skewVoigt(
 
     skew = _skew(wavelength - center, a_eff, w0)
     return voigt_pdf * skew
-
-
-# -------------------------------------------------------------------
-# Skew Normal kernel
-# -------------------------------------------------------------------
-
-
-def _alpha_eff_skewnormal(
-    lsf_fwhm: ArrayLike, fwhm_g: ArrayLike, alpha: ArrayLike
-) -> Array:
-    """Exact effective skewness after convolving a skew-normal with a Gaussian LSF.
-
-    The convolution of a skew-normal with a Gaussian LSF is exactly another
-    skew-normal; the shape parameter rescales as derived in
-    docs/derivations/skew-normal.md.
-    """
-    return alpha * fwhm_g / jnp.sqrt(fwhm_g**2 + (1.0 + alpha**2) * lsf_fwhm**2)
-
-
-@jit
-def integrate_skewNormal(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
-    lsf_fwhm: ArrayLike,
-    fwhm_g: ArrayLike,
-    alpha: ArrayLike,
-) -> Array:
-    """Integrate a skew-normal profile over wavelength bins.
-
-    Uses the exact skew-normal CDF ``Phi(z) - 2 T(z, alpha_eff)``, where T is
-    Owen's T function and ``z = (x - center) / sigma_tot``.  The LSF convolution
-    is exact — the shape parameter rescales analytically with no approximation.
-    See docs/derivations/skew-normal.md for the full derivation.
-
-    Parameters
-    ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
-    center : ArrayLike
-        Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
-    fwhm_g : ArrayLike
-        Intrinsic Gaussian FWHM.
-    alpha : ArrayLike
-        Skewness parameter; positive values shift flux redward.
-
-    Returns
-    -------
-    Array
-        Integrated fraction per bin.
-    """
-    fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
-    sigma_tot = _fwhm_to_sigma(fwhm_tot)
-    alpha_eff = _alpha_eff_skewnormal(lsf_fwhm, fwhm_g, alpha)
-
-    z_lo = (low - center) / sigma_tot
-    z_hi = (high - center) / sigma_tot
-
-    gaussian_cdf = 0.5 * (erf(z_hi / _SQRT2) - erf(z_lo / _SQRT2))
-    owens_correction = owens_t(z_hi, alpha_eff) - owens_t(z_lo, alpha_eff)
-    return gaussian_cdf - 2.0 * owens_correction
-
-
-@jit
-def evaluate_skewNormal(
-    wavelength: ArrayLike,
-    center: ArrayLike,
-    lsf_fwhm: ArrayLike,
-    fwhm_g: ArrayLike,
-    alpha: ArrayLike,
-) -> Array:
-    """Evaluate a normalised skew-normal profile at wavelength points.
-
-    Evaluates ``G_tot(x) * [1 + erf(alpha_eff * (x - center) / w0)]`` where
-    ``G_tot`` is the LSF-convolved Gaussian and ``alpha_eff`` is the exact
-    effective skewness after convolution.
-
-    Parameters
-    ----------
-    wavelength : ArrayLike
-        Wavelength points at which to evaluate the profile.
-    center : ArrayLike
-        Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
-    fwhm_g : ArrayLike
-        Intrinsic Gaussian FWHM.
-    alpha : ArrayLike
-        Skewness parameter; positive values shift flux redward.
-
-    Returns
-    -------
-    Array
-        Normalised profile value at each wavelength point (1/wavelength units).
-    """
-    fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
-    sigma_tot = _fwhm_to_sigma(fwhm_tot)
-    alpha_eff = _alpha_eff_skewnormal(lsf_fwhm, fwhm_g, alpha)
-    w0p = sigma_tot * _SQRT2
-
-    gauss = _gaussian_pdf(wavelength - center, sigma_tot)
-    skew = _skew(wavelength - center, alpha_eff, w0p)
-    return gauss * skew
