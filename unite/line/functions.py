@@ -15,9 +15,7 @@ from typing import Final
 
 import jax.numpy as jnp
 from jax import Array, config, jit
-
-# owens_t is not yet in JAX; replace with the real implementation once it lands
-from jax.scipy.special import erf, erfc, owens_t  # type: ignore[attr-defined]
+from jax.scipy.special import erf, erfc, owens_t
 from jax.typing import ArrayLike
 
 # Conversion: FWHM to sigma for the half-variance parametrization of erf.
