@@ -556,6 +556,67 @@ class SplitNormal(Profile):
 
 
 @_register
+class SkewNormal(Profile):
+    """Skew-normal line profile.
+
+    A Gaussian (with LSF) modulated by an erf skew factor
+    ``[1 + erf(alpha_eff * (x - c) / w0)]``.  For ``alpha = 0`` this reduces
+    exactly to a Gaussian.
+
+    Unlike :class:`SkewVoigt`, the convolution with the Gaussian LSF is
+    **exact**: the shape parameter rescales analytically as
+    ``alpha_eff = alpha * sigma_g / sqrt(sigma_g^2 + (1 + alpha^2) sigma_lsf^2)``,
+    with no numerical correction required.  Pixel integration uses the
+    closed-form skew-normal CDF ``Phi(z) - 2 T(z, alpha_eff)`` via Owen's T
+    function.  See ``docs/derivations/skew-normal.md`` for the full derivation.
+
+    Requires two parameters: ``fwhm_gauss`` for the intrinsic Gaussian FWHM
+    and ``alpha`` for the skewness (positive values shift flux redward).
+    """
+
+    code = 9
+
+    @override
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm_gauss', 'alpha')
+
+    @override
+    def default_priors(self) -> dict[str, Prior]:
+        return {
+            'fwhm_gauss': Uniform(0, 1000),
+            'alpha': TruncatedNormal(loc=0, scale=100, low=-300, high=300),
+        }
+
+    @override
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss, p1 = alpha
+            return functions.integrate_skewNormal(lo, hi, c, lsf, p0, p1)
+
+        return _fn
+
+    @override
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            return functions.evaluate_skewNormal(wavelength, c, lsf, p0, p1)
+
+        return _fn
+
+    @override
+    def to_dict(self) -> dict:
+        return {'type': 'SkewNormal'}
+
+    @classmethod
+    @override
+    def from_dict(cls, d: dict) -> SkewNormal:
+        return cls()
+
+    @override
+    def __repr__(self) -> str:
+        return 'SkewNormal()'
+
+
+@_register
 class BoxGauss(Profile):
     """Boxcar distribution convolved with a Gaussian.
 
@@ -692,6 +753,8 @@ _PROFILE_ALIASES: dict[str, Profile] = {
     'two-sided': SplitNormal(),
     'skew-voigt': SkewVoigt(),
     'skewvoigt': SkewVoigt(),
+    'skew-normal': SkewNormal(),
+    'skewnormal': SkewNormal(),
     'boxgauss': BoxGauss(),
     'box-gauss': BoxGauss(),
     'boxcar': BoxGauss(),

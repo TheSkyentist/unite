@@ -12,6 +12,7 @@ from unite.line.library import (
     Gaussian,
     Laplace,
     PseudoVoigt,
+    SkewNormal,
     SkewVoigt,
     SplitNormal,
 )
@@ -109,6 +110,17 @@ class TestIntegrationNormalization:
         )
         assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
 
+    def test_skewNormal(self):
+        result = functions.integrate_skewNormal(
+            self.low,
+            self.high,
+            self.center,
+            self.lsf_fwhm,
+            jnp.array([80.0]),
+            jnp.array([2.0]),
+        )
+        assert jnp.isclose(jnp.sum(result), 1.0, rtol=1e-5)
+
     def test_boxGauss_wide_box(self):
         result = functions.integrate_boxGauss(
             self.low,
@@ -146,6 +158,7 @@ _PROFILE_PARAMS = [
     (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
     (SkewVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0, 'alpha': 2.0}),
     (BoxGauss(), {'fwhm_box': 300.0, 'fwhm_gauss': 100.0}),
+    (SkewNormal(), {'fwhm_gauss': 80.0, 'alpha': 2.0}),
 ]
 
 
@@ -170,3 +183,70 @@ class TestProfileIntegrateMethod:
             low, high, center=5000.0, lsf_fwhm=5.0, **extra_kwargs
         )
         assert jnp.all(result >= 0.0)
+
+
+# ---------------------------------------------------------------------------
+# integrate_skewNormal
+# ---------------------------------------------------------------------------
+
+
+class TestIntegrateSkewNormal:
+    """Tests for the public integrate_skewNormal kernel."""
+
+    center = 5000.0
+    lsf_fwhm = 5.0
+    edges = jnp.linspace(4000.0, 6000.0, 2001)
+    lo, hi = edges[:-1], edges[1:]
+
+    def test_alpha_zero_matches_gaussian(self):
+        """integrate_skewNormal with alpha=0 is identical to integrate_gaussian."""
+        skew = functions.integrate_skewNormal(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 0.0
+        )
+        gauss = functions.integrate_gaussian(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0
+        )
+        assert jnp.allclose(skew, gauss, rtol=1e-6)
+
+    def test_normalization_positive_alpha(self):
+        """integrate_skewNormal sums to 1 for positive alpha."""
+        result = functions.integrate_skewNormal(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 3.0
+        )
+        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=1e-5)
+
+    def test_normalization_negative_alpha(self):
+        """integrate_skewNormal sums to 1 for negative alpha."""
+        result = functions.integrate_skewNormal(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, -3.0
+        )
+        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=1e-5)
+
+    def test_skew_shifts_mass(self):
+        """Positive alpha shifts mass to the red side of center."""
+        result_pos = functions.integrate_skewNormal(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 5.0
+        )
+        result_neg = functions.integrate_skewNormal(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, -5.0
+        )
+        red_mask = self.hi > self.center
+        assert float(jnp.sum(result_pos[red_mask])) > float(
+            jnp.sum(result_neg[red_mask])
+        )
+
+    def test_alpha_antisymmetry(self):
+        """Flipping the sign of alpha mirrors the profile: f(x; +alpha) = f(-x; -alpha)."""
+        result_pos = functions.integrate_skewNormal(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 3.0
+        )
+        result_neg = functions.integrate_skewNormal(
+            # Mirror the bins about center
+            2 * self.center - self.hi,
+            2 * self.center - self.lo,
+            self.center,
+            self.lsf_fwhm,
+            80.0,
+            -3.0,
+        )
+        assert jnp.allclose(result_pos, result_neg, rtol=1e-6)

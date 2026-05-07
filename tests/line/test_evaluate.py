@@ -17,6 +17,7 @@ from unite.line.library import (
     Gaussian,
     Laplace,
     PseudoVoigt,
+    SkewNormal,
     SkewVoigt,
     SplitNormal,
 )
@@ -96,6 +97,13 @@ class TestEvaluateNormalization:
     def test_boxGauss(self):
         vals = functions.evaluate_boxGauss(
             self.wavelength, self.center, self.lsf_fwhm, 300.0, 100.0
+        )
+        integral = jnp.trapezoid(vals, self.wavelength)
+        assert float(integral) == pytest.approx(1.0, rel=1e-3)
+
+    def test_skewNormal(self):
+        vals = functions.evaluate_skewNormal(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0, 2.0
         )
         integral = jnp.trapezoid(vals, self.wavelength)
         assert float(integral) == pytest.approx(1.0, rel=1e-3)
@@ -187,6 +195,14 @@ class TestEvaluateIntegrateConsistency:
             functions.evaluate_boxGauss,
             (self.center, self.lsf_fwhm, 300.0, 100.0),
             (self.center, self.lsf_fwhm, 300.0, 100.0),
+        )
+
+    def test_skewNormal(self):
+        self._check_convergence(
+            functions.integrate_skewNormal,
+            functions.evaluate_skewNormal,
+            (self.center, self.lsf_fwhm, 80.0, 2.0),
+            (self.center, self.lsf_fwhm, 80.0, 2.0),
         )
 
 
@@ -448,6 +464,7 @@ _PROFILE_EVALUATE_PARAMS = [
     (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
     (SkewVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0, 'alpha': 0.5}),
     (BoxGauss(), {'fwhm_box': 300.0, 'fwhm_gauss': 100.0}),
+    (SkewNormal(), {'fwhm_gauss': 80.0, 'alpha': 2.0}),
 ]
 
 
@@ -602,3 +619,54 @@ class TestBoxGaussLimits:
         lo, hi = edges_wide[:-1], edges_wide[1:]
         result = functions.integrate_boxGauss(lo, hi, self.center, 10.0, 300.0, 100.0)
         assert float(jnp.sum(result)) == pytest.approx(1.0, rel=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# evaluate_skewNormal
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateSkewNormal:
+    """Tests for the public evaluate_skewNormal kernel."""
+
+    center = 5000.0
+    lsf_fwhm = 5.0
+    wavelength = jnp.linspace(4000.0, 6000.0, 10000)
+
+    def test_alpha_zero_matches_gaussian(self):
+        """evaluate_skewNormal with alpha=0 is identical to evaluate_gaussian."""
+        skew = functions.evaluate_skewNormal(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0, 0.0
+        )
+        gauss = functions.evaluate_gaussian(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0
+        )
+        assert jnp.allclose(skew, gauss, rtol=1e-6)
+
+    def test_skew_antisymmetry(self):
+        """Evaluating at mirrored wavelengths with negated alpha gives the same profile."""
+        alpha = 3.0
+        pos = functions.evaluate_skewNormal(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0, alpha
+        )
+        neg_mirrored = functions.evaluate_skewNormal(
+            2 * self.center - self.wavelength, self.center, self.lsf_fwhm, 80.0, -alpha
+        )
+        assert jnp.allclose(pos, neg_mirrored, rtol=1e-6)
+
+    def test_lsf_reduces_skew(self):
+        """Larger LSF should produce a smaller effective skewness (less asymmetry)."""
+        alpha = 5.0
+        fwhm_g = 80.0
+
+        def red_fraction(lsf):
+            vals = functions.evaluate_skewNormal(
+                self.wavelength, self.center, lsf, fwhm_g, alpha
+            )
+            red = jnp.trapezoid(
+                jnp.where(self.wavelength > self.center, vals, 0.0), self.wavelength
+            )
+            return float(red)
+
+        # Larger LSF → alpha_eff closer to 0 → red fraction closer to 0.5
+        assert red_fraction(5.0) > red_fraction(200.0)

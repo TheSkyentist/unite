@@ -262,6 +262,7 @@ Profiles are set via the `profile` argument (case-insensitive strings or class i
 | `'semg'`, `'exp-gaussian'` | `SEMG` | `fwhm_gauss`, `fwhm_exp` | | analytic |
 | `'hermite'`, `'gauss-hermite'` | `GaussHermite` | `fwhm_gauss` | `h3`, `h4` | analytic |
 | `'split-normal'`, `'two-sided'` | `SplitNormal` | `fwhm_blue`, `fwhm_red` | | analytic |
+| `'skew-normal'`, `'skewnormal'` | `SkewNormal` | `fwhm_gauss` | `alpha` | analytic |
 | `'skew-voigt'`, `'skewvoigt'` | `SkewVoigt` | `fwhm_gauss`, `fwhm_lorentz` | `alpha` | midpoint rule |
 | `'boxgauss'`, `'box-gauss'`, `'boxcar'` | `BoxGauss` | `fwhm_box`, `fwhm_gauss` | | analytic |
 
@@ -363,6 +364,29 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='SplitNormal',
             redshift=z,
             fwhm_blue=line.FWHM('b', prior=prior.Uniform(50, 500)),
             fwhm_red=line.FWHM('r',  prior=prior.Uniform(50, 500)),
+            flux=flux)
+```
+
+### SkewNormal
+
+A Gaussian (with LSF) multiplied by an erf skew factor
+$[1 + \text{erf}(\alpha_\text{eff}(x-c)/w_0')]$.  For `alpha = 0` the profile
+reduces exactly to a Gaussian.
+
+Unlike `SkewVoigt`, the convolution with the Gaussian LSF is **exact** — the
+shape parameter rescales analytically as
+$\alpha_\text{eff} = \alpha\sigma_g / \sqrt{\sigma_g^2 + (1+\alpha^2)\sigma_\text{lsf}^2}$,
+with no numerical correction.  Pixel integration uses the closed-form
+skew-normal CDF $\Phi(z) - 2T(z, \alpha_\text{eff})$ via Owen's T function.
+See {doc}`/derivations/skew-normal` for the full derivation.
+
+**Parameters:** `fwhm_gauss` (km/s), `alpha` (dimensionless)
+
+```python
+lc.add_line('H_alpha', 6563.0 * u.AA, profile='SkewNormal',
+            redshift=z,
+            fwhm_gauss=line.FWHM('fwhm', prior=prior.Uniform(50, 500)),
+            alpha=line.LineShape('alpha', prior=prior.TruncatedNormal(0, 2, -10, 10)),
             flux=flux)
 ```
 

@@ -10,6 +10,7 @@ from unite.line.library import (
     Gaussian,
     Laplace,
     PseudoVoigt,
+    SkewNormal,
     SkewVoigt,
     SplitNormal,
     profile_from_dict,
@@ -31,6 +32,7 @@ _ALL_PROFILES = [
     SplitNormal(),
     SkewVoigt(),
     BoxGauss(),
+    SkewNormal(),
 ]
 
 
@@ -92,6 +94,8 @@ def test_resolve_profile_returns_instance_unchanged():
         ('two-sided', SplitNormal),
         ('skew-voigt', SkewVoigt),
         ('skewvoigt', SkewVoigt),
+        ('skew-normal', SkewNormal),
+        ('skewnormal', SkewNormal),
         ('boxgauss', BoxGauss),
         ('box-gauss', BoxGauss),
         ('boxcar', BoxGauss),
