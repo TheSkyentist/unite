@@ -5,8 +5,8 @@ The skew-normal profile is the standard skew-normal distribution (Azzalini 1985)
 expressed in the `unite` erf parametrisation.  Unlike the skew-Voigt, the
 convolution with a Gaussian LSF is **exact**: the convolved profile is again a
 skew-normal with a rescaled shape parameter, requiring no numerical correction.
-The pixel integral follows analytically from Owen's T function, evaluated by
-Gauss-Legendre quadrature.  This document derives both results and connects them
+The pixel integral follows analytically from Owen's T function.
+This document derives both results and connects them
 to {func}`~unite.line.functions.integrate_skewNormal`.
 
 ---
@@ -151,31 +151,6 @@ requires evaluating Owen's T at the two bin edges.
 
 ---
 
-## Numerical Evaluation of Owen's T
-
-JAX provides no built-in implementation of Owen's T, so it is computed by
-Gauss-Legendre (GL) quadrature.  Substituting $t = \tan\theta$ in the definition
-collapses the unbounded upper limit to a finite domain:
-
-$$
-T(h, a) = \frac{1}{2\pi}\int_0^{\arctan a}\exp\!\left(\frac{-h^2}{2\cos^2\!\theta}\right)d\theta.
-$$
-
-Mapping $\theta = s\arctan(a)$ to the unit interval $s \in [0, 1]$:
-
-$$
-T(h, a) = \frac{\arctan(a)}{2\pi}\int_0^1
-\exp\!\left(\frac{-h^2\,[1 + \tan^2(s\arctan a)]}{2}\right)ds.
-$$
-
-For any finite $\alpha$, $\arctan(\alpha) \in (-\pi/2, \pi/2)$, so the
-integration domain is always bounded and the integrand is smooth; GL converges
-exponentially fast in the number of nodes.  The odd symmetry
-$T(h, -a) = -T(h, a)$ is applied analytically so that quadrature is only ever
-performed for $a \geq 0$.
-
----
-
 ## Connection to the Code
 
 In {func}`~unite.line.functions.integrate_skewNormal`, the halfvar coordinate
@@ -194,6 +169,4 @@ $$
 $$
 
 where $t = (x - c)/(\sigma_\text{tot}\sqrt{2})$ and $z = t\sqrt{2}$.
-Owen's T is evaluated by `_owens_t(h, a)` using a fixed set of precomputed
-GL nodes and weights on $[0, 1]$ with the $\arctan$ change of variables
-described above.
+Owen's T is called directly from `jax.scipy.special.owens_t`.
