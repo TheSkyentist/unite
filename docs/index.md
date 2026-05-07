@@ -70,6 +70,7 @@ derivations/gauss-hermite
 derivations/semg
 derivations/polynomial
 derivations/skew-voigt
+derivations/skew-normal
 ```
 
 ## Indices and Tables
