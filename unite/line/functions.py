@@ -22,6 +22,12 @@ from jax.typing import ArrayLike
 # sigma = FWHM / (2 sqrt(2 ln 2)); erf uses sqrt(2)*sigma, so the factor is:
 _HALFVAR_SIGMA_TO_FWHM: Final[Array] = 2 * jnp.sqrt(jnp.log(2))
 
+# Thompson et al. (1987) Voigt FWHM approximation: Γ_V = C1*Γ_l + sqrt(C2*Γ_l² + Γ_g²).
+# δ = 0.099 ln 2 gives C1 + sqrt(C2) = 1 exactly, so the Lorentzian limit is exact.
+_THOMPSON_DELTA: Final[Array] = 0.099 * jnp.log(2)
+_THOMPSON_C1: Final[Array] = (1 + _THOMPSON_DELTA) / 2
+_THOMPSON_C2: Final[Array] = ((1 - _THOMPSON_DELTA) / 2) ** 2
+
 # Conversion factor from exponential (Laplace) scale to FWHM
 # pdf = (1/(2*b)) * exp(-|x - μ|/b)
 # max(pdf) = 1/(2*b), half max = 1/(4*b)
@@ -48,6 +54,11 @@ def _combine_fwhm(fwhm1: ArrayLike, fwhm2: ArrayLike) -> Array:
 def _fwhm_to_sigma(fwhm: ArrayLike) -> Array:
     """Gaussian sigma from FWHM: ``sigma = FWHM / (2 sqrt(2 ln 2))``."""
     return fwhm / (_HALFVAR_SIGMA_TO_FWHM * _SQRT2)
+
+
+def _thompson_fwhm(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
+    """Voigt FWHM via Thompson et al. (1987); exact at both Gaussian and Lorentzian limits."""
+    return _THOMPSON_C1 * fwhm_l + jnp.sqrt(_THOMPSON_C2 * fwhm_l**2 + fwhm_g**2)
 
 
 def _gaussian_pdf(dx: ArrayLike, sigma: ArrayLike) -> Array:
@@ -1191,16 +1202,16 @@ def _skew(x: ArrayLike, alpha: ArrayLike, scale: ArrayLike) -> Array:
 # -------------------------------------------------------------------
 
 
-# FXIG boost-correction parameters from numerical fit over (lor, alpha, eta) grid.
-# log_boost = k * xi^a * eta^b / (1 + q*xi^c) / (1 + r*|alpha|^d)
+# FXIG2 boost-correction parameters from numerical fit over (lor, alpha, eta) grid.
+# log_boost = k * xi^a * eta^b / (1 + q*xi^c) / |alpha|^d
 # where xi = gamma/sigma_lsf, eta = sigma_lsf/sigma_g, gamma = fwhm_l/2.
-_FXIG_K: Final[float] = 9.9126
-_FXIG_A: Final[float] = 0.43576
-_FXIG_B: Final[float] = 0.97281
-_FXIG_C: Final[float] = 2.1469
-_FXIG_Q: Final[float] = 2.3396
-_FXIG_R: Final[float] = 26.449
-_FXIG_D: Final[float] = 0.36404
+# w0 uses the Thompson FWHM erf scale; see docs/derivations/skew-voigt.md.
+_FXIG_K: Final[float] = 0.27045
+_FXIG_A: Final[float] = 0.53872
+_FXIG_B: Final[float] = 1.0461
+_FXIG_C: Final[float] = 1.7778
+_FXIG_Q: Final[float] = 1.1286
+_FXIG_D: Final[float] = 0.34693
 
 
 def _alpha_eff(
@@ -1209,28 +1220,33 @@ def _alpha_eff(
     """Effective skewness after convolving a skew Voigt with a Gaussian LSF.
 
     Applies the Gaussian-body exact formula as a base, then multiplies by the
-    FXIG boost correction that accounts for the Lorentzian component.
+    FXIG2 boost correction that accounts for the Lorentzian component.
     """
     sigma_g = _fwhm_to_sigma(fwhm_g)
     sigma_lsf = _fwhm_to_sigma(lsf_fwhm)
     gamma = fwhm_l / 2
 
-    w0 = _combine_fwhm(fwhm_g, fwhm_l)
-    w0p = _combine_fwhm(_combine_fwhm(fwhm_g, lsf_fwhm), fwhm_l)
+    fwhm_cg = _combine_fwhm(fwhm_g, lsf_fwhm)
+    w0 = _thompson_fwhm(fwhm_g, fwhm_l) / _HALFVAR_SIGMA_TO_FWHM
+    w0p = _thompson_fwhm(fwhm_cg, fwhm_l) / _HALFVAR_SIGMA_TO_FWHM
 
     # Gaussian-body exact formula
     a_gauss = alpha * w0 / jnp.sqrt(w0p**2 + 2 * alpha**2 * sigma_lsf**2)
 
-    # FXIG boost correction for Lorentzian component
+    # FXIG2 boost correction for Lorentzian component
     lor = gamma / (sigma_g + 1e-30)
     eta = sigma_lsf / (sigma_g + 1e-30)
     xi = lor / (eta + 1e-30)
+    # Safe |alpha|^d: replace 0 with 1 so the power is finite; a_gauss=0 when alpha=0
+    # so the boost value doesn't matter, but NaN must be avoided (0*exp(NaN)=NaN).
+    abs_alpha = jnp.abs(alpha)
+    safe_alpha = jnp.where(abs_alpha > 0, abs_alpha, jnp.ones_like(abs_alpha))
     log_boost = (
         _FXIG_K
         * xi**_FXIG_A
         * eta**_FXIG_B
         / (1 + _FXIG_Q * xi**_FXIG_C)
-        / (1 + _FXIG_R * jnp.abs(alpha) ** _FXIG_D)
+        / safe_alpha**_FXIG_D
     )
 
     return a_gauss * jnp.exp(log_boost)
@@ -1268,7 +1284,7 @@ def integrate_skewVoigt(
     fwhm_l : ArrayLike
         Lorentzian component FWHM.
     alpha : ArrayLike
-        Skewness parameter relative to sqrt(fwhm_g**2 + fwhm_l**2).
+        Skewness parameter; erf scale is w0 = Gamma_V / (2 sqrt(ln 2)).
 
     Returns
     -------
@@ -1280,7 +1296,7 @@ def integrate_skewVoigt(
 
     # Get effective skew
     fwhm_g_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
-    w0 = _combine_fwhm(fwhm_g_tot, fwhm_l)
+    w0 = _thompson_fwhm(fwhm_g_tot, fwhm_l) / _HALFVAR_SIGMA_TO_FWHM
     a_eff = _alpha_eff(lsf_fwhm, fwhm_g, fwhm_l, alpha)
 
     # Evaluate skew correction at bin center (midpoint of low and high)
@@ -1318,7 +1334,7 @@ def evaluate_skewVoigt(
     fwhm_l : ArrayLike
         Lorentzian component FWHM.
     alpha : ArrayLike
-        Skewness parameter relative to sqrt(fwhm_g**2 + fwhm_l**2).
+        Skewness parameter; erf scale is w0 = Gamma_V / (2 sqrt(ln 2)).
 
     Returns
     -------
@@ -1329,9 +1345,8 @@ def evaluate_skewVoigt(
 
     # Get effective skew
     fwhm_g_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
-    w0 = _combine_fwhm(fwhm_g_tot, fwhm_l)
+    w0 = _thompson_fwhm(fwhm_g_tot, fwhm_l) / _HALFVAR_SIGMA_TO_FWHM
     a_eff = _alpha_eff(lsf_fwhm, fwhm_g, fwhm_l, alpha)
 
-    # Evaluate skew correction at bin center (midpoint of low and high)
-    skew = _skew(wavelength - center, _alpha_eff(lsf_fwhm, fwhm_g, fwhm_l, a_eff), w0)
+    skew = _skew(wavelength - center, a_eff, w0)
     return voigt_pdf * skew

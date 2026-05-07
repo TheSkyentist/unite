@@ -614,21 +614,18 @@ class SkewVoigt(Profile):
     r"""Skew pseudo-Voigt line profile.
 
     A pseudo-Voigt profile multiplied by a skew factor
-    ``[1 + erf(alpha * (x - c) / (sqrt(2) * sigma_g))]``, where
-    ``sigma_g`` is the standard deviation of the Gaussian component.
-    The profile integrates to 1 for any value of ``alpha`` because the
-    skew factor is odd and the pseudo-Voigt is even.
+    ``[1 + erf(alpha * (x - c) / w0)]``, where
+    ``w0 = Gamma_V / (2 sqrt(ln 2)) = sigma_V * sqrt(2)`` is the erf scale
+    derived from the Thompson et al. Voigt FWHM ``Gamma_V``.  For a pure
+    Gaussian (``fwhm_lorentz = 0``) this reduces to the standard skew-normal
+    with shape parameter ``alpha`` and dispersion ``sigma_g``.  The profile
+    integrates to 1 for any value of ``alpha`` because the skew factor is odd
+    and the pseudo-Voigt is even.
 
-    Convolution with the Gaussian LSF rescales the skewness parameter to
-
-    .. math::
-
-        \\alpha_\\text{eff} = \\frac{\\alpha\\,\\sigma_g}
-            {\\sqrt{\\sigma_\\text{tot}^2 + \\alpha^2\\sigma_\\text{lsf}^2}}
-
-    where :math:`\\sigma_\\text{tot} = \\sqrt{\\sigma_g^2 + \\sigma_\\text{lsf}^2}`.
-    The skewness is reduced by the LSF and vanishes entirely when
-    ``fwhm_gauss = 0`` (no intrinsic Gaussian component).
+    Convolution with the Gaussian LSF rescales the skewness to an effective
+    :math:`\\alpha_\\text{eff}` via the Gaussian-body exact formula with an
+    FXIG2 boost correction for the Lorentzian component.  See
+    ``docs/derivations/skew-voigt.md`` for the full derivation.
 
     Requires three parameters: ``fwhm_gauss`` for the Gaussian component,
     ``fwhm_lorentz`` for the Lorentzian component, and ``alpha`` for the
@@ -646,7 +643,7 @@ class SkewVoigt(Profile):
         return {
             'fwhm_gauss': Uniform(0, 1000),
             'fwhm_lorentz': Uniform(0, 1000),
-            'alpha': TruncatedNormal(loc=0, scale=100, low=-300, high=300),
+            'alpha': TruncatedNormal(loc=0, scale=1, low=-5, high=5),
         }
 
     @override

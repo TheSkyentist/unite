@@ -369,7 +369,10 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='SplitNormal',
 ### SkewVoigt
 
 A pseudo-Voigt profile multiplied by a skew factor
-$[1 + \text{erf}(\alpha(x-c)/(\sqrt{2}\,\sigma_g))]$. The profile integrates to 1 for
+$[1 + \text{erf}(\alpha(x-c)/w_0)]$ where $w_0 = \Gamma_V/(2\sqrt{\ln 2}) = \sigma_V\sqrt{2}$
+is the erf scale derived from the Thompson et al. Voigt FWHM $\Gamma_V$.  For a
+pure Gaussian ($\Gamma_l = 0$) this reduces to the standard skew-normal with shape
+parameter $\alpha$ and dispersion $\sigma_g$.  The profile integrates to 1 for
 any `alpha` because the skew factor is odd and the pseudo-Voigt is even. Convolution
 with the Gaussian LSF rescales the skewness to an effective $\alpha_\text{eff}$
 (see {doc}`/derivations/skew-voigt`).
