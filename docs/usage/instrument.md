@@ -295,6 +295,23 @@ This is the right loader for:
 
 An optional `name` argument overrides the disperser name on the resulting spectrum.
 
+**Bad-pixel masking** — pass a boolean `mask` array to exclude pixels before the
+spectrum is constructed.  `True` marks a pixel as bad (excluded); `False` keeps it.
+This follows the same convention as {class}`numpy.ma.MaskedArray`.
+
+```python
+# Flag two known bad pixels by index
+bad = np.zeros(len(low), dtype=bool)
+bad[42] = True
+bad[137] = True
+
+spectrum = from_arrays(low, high, flux, err, disperser=disperser, mask=bad)
+```
+
+The masked pixels are removed from the arrays before the {class}`~unite.spectrum.Spectrum`
+is created, so the resulting spectrum is simply shorter — there is no sentinel value or
+weight-zero pixel kept in the data.
+
 ---
 
 ### from_DJA

@@ -29,6 +29,7 @@ def from_arrays(
     disperser: Disperser,
     *,
     name: str = '',
+    mask: np.ndarray | None = None,
 ) -> Spectrum:
     """Construct a :class:`~unite.spectrum.Spectrum` from pre-loaded arrays.
 
@@ -51,11 +52,34 @@ def from_arrays(
         calibration tokens (``r_scale``, ``flux_scale``, ``pix_offset``).
     name : str, optional
         Human-readable label.  Defaults to ``disperser.name``.
+    mask : numpy.ndarray, optional
+        Boolean bad-pixel mask of shape ``(npix,)``.  ``True`` marks a pixel
+        as bad (excluded); ``False`` keeps it.  Follows the same convention as
+        :class:`numpy.ma.MaskedArray`.  ``None`` (default) keeps all pixels.
 
     Returns
     -------
     Spectrum
+
+    Raises
+    ------
+    ValueError
+        If *mask* is not 1-D or its length does not match *low*.
     """
+    if mask is not None:
+        mask_arr = np.asarray(mask, dtype=bool)
+        if mask_arr.ndim != 1:
+            msg = f'mask must be 1-D, got shape {mask_arr.shape}.'
+            raise ValueError(msg)
+        if len(mask_arr) != len(low):
+            msg = f'mask length ({len(mask_arr)}) does not match the number of pixels ({len(low)}).'
+            raise ValueError(msg)
+        good = ~mask_arr
+        low = low[good]
+        high = high[good]
+        flux = flux[good]
+        error = error[good]
+
     return Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
     )

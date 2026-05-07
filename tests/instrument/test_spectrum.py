@@ -8,7 +8,7 @@ import pytest
 from unite import line, prior
 from unite.continuum import ContinuumConfiguration, Linear
 from unite.instrument.generic import SimpleDisperser
-from unite.spectrum import Spectra, Spectrum
+from unite.spectrum import Spectra, Spectrum, from_arrays
 
 
 def _make_spectrum(
@@ -860,3 +860,73 @@ class TestLinedetWidth:
         # Even with huge lindet_width, Ha is close to spectrum center
         # so it should likely be covered
         assert len(fl_huge) == 1
+
+
+# ---------------------------------------------------------------------------
+# from_arrays mask parameter
+# ---------------------------------------------------------------------------
+
+
+def _raw_arrays(npix: int = 50):
+    """Return minimal (low, high, flux, error, disperser) for from_arrays tests."""
+    wl = np.linspace(6500.0, 6600.0, npix) * u.AA
+    disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='test')
+    half = 0.5 * np.gradient(wl)
+    low = wl - half
+    high = wl + half
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = np.arange(npix, dtype=float) * flux_unit
+    error = np.ones(npix) * flux_unit
+    return low, high, flux, error, disperser
+
+
+class TestFromArraysMask:
+    """Tests for the mask parameter of from_arrays."""
+
+    def test_mask_removes_pixels(self):
+        """Pixels flagged True in mask are excluded from the resulting Spectrum."""
+        low, high, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[10] = True
+        bad[20] = True
+        spec = from_arrays(low, high, flux, error, disperser=disperser, mask=bad)
+        assert spec.npix == 48
+        # Pixel 10 had flux value 10.0 — verify it is absent
+        assert not np.any(np.isclose(spec.flux, 10.0))
+        assert not np.any(np.isclose(spec.flux, 20.0))
+
+    def test_mask_none_no_op(self):
+        """mask=None (default) keeps all pixels unchanged."""
+        low, high, flux, error, disperser = _raw_arrays(npix=50)
+        spec_no_mask = from_arrays(low, high, flux, error, disperser=disperser)
+        spec_none = from_arrays(low, high, flux, error, disperser=disperser, mask=None)
+        assert spec_no_mask.npix == spec_none.npix
+        np.testing.assert_array_equal(spec_no_mask.flux, spec_none.flux)
+
+    def test_mask_all_false_no_op(self):
+        """All-False mask keeps all pixels."""
+        low, high, flux, error, disperser = _raw_arrays(npix=50)
+        mask = np.zeros(50, dtype=bool)
+        spec = from_arrays(low, high, flux, error, disperser=disperser, mask=mask)
+        assert spec.npix == 50
+
+    def test_mask_all_true_empty(self):
+        """All-True mask produces a zero-pixel Spectrum."""
+        low, high, flux, error, disperser = _raw_arrays(npix=50)
+        mask = np.ones(50, dtype=bool)
+        spec = from_arrays(low, high, flux, error, disperser=disperser, mask=mask)
+        assert spec.npix == 0
+
+    def test_mask_wrong_length_raises(self):
+        """mask whose length differs from npix raises ValueError."""
+        low, high, flux, error, disperser = _raw_arrays(npix=50)
+        bad_mask = np.zeros(30, dtype=bool)
+        with pytest.raises(ValueError, match='mask length'):
+            from_arrays(low, high, flux, error, disperser=disperser, mask=bad_mask)
+
+    def test_mask_not_1d_raises(self):
+        """2-D mask raises ValueError."""
+        low, high, flux, error, disperser = _raw_arrays(npix=50)
+        bad_mask = np.zeros((50, 1), dtype=bool)
+        with pytest.raises(ValueError, match='1-D'):
+            from_arrays(low, high, flux, error, disperser=disperser, mask=bad_mask)

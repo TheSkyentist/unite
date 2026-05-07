@@ -139,6 +139,8 @@ half = 0.5 * dlam_pix
 low_q = (wl - half) * u.AA
 high_q = (wl + half) * u.AA
 
+# from_arrays(low_q, high_q, flux_q, error_q, disperser) is equivalent and also
+# accepts an optional mask= array (True = bad pixel) to exclude flagged pixels.
 spec = Spectrum(
     low=low_q,
     high=high_q,
