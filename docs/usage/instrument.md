@@ -23,9 +23,9 @@ A disperser describes an instrument's spectral characteristics:
 
 For a given instrument the user can optionally attach calibration tokens with associated priors:
 
-- {class}`~unite.instrument.RScale`: Resolution scaling factor (e.g. R_eff = R_nominal × RScale)
-- {class}`~unite.instrument.FluxScale`: Flux scaling factor (e.g. F_eff = F_model × FluxScale)
-- {class}`~unite.instrument.PixOffset`: Detector pixel displacement (e.g. λ_eff = λ_model − (dλ/dpix)(λ_model) × PixOffset)
+- {class}`~unite.instrument.RScale`: Resolution scaling factor (e.g. R_eff = R_nominal x RScale)
+- {class}`~unite.instrument.FluxScale`: Flux scaling factor (e.g. F_eff = F_model x FluxScale)
+- {class}`~unite.instrument.PixOffset`: Detector pixel displacement (e.g. λ_eff = λ_model − (dλ/dpix)(λ_model) x PixOffset)
 
 These absorb calibration offsets and uncertainties between instruments.
 
@@ -65,7 +65,7 @@ f = FluxScale(prior=prior.Uniform(0.5, 2.0))
 
 Encodes the displacement of the spectrum on the detector relative to the wavelength calibration,
 in pixels. A positive value means the spectrum is displaced toward longer wavelengths: the model
-subtracts `pix_offset × (dλ/dpix)` from the calibrated pixel-edge wavelengths, shifting them
+subtracts `pix_offset x (dλ/dpix)` from the calibrated pixel-edge wavelengths, shifting them
 blueward to compensate.
 
 For example, if a disperser consistently returns redshifts that are too high compared to a

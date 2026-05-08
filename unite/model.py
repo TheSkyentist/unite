@@ -24,11 +24,7 @@ from unite._compose import compose_from_profiles
 from unite._utils import C_KMS, _get_conversion_factor
 from unite.continuum.compute import eval_continuum, integrate_continuum
 from unite.continuum.config import ContinuumConfiguration
-from unite.line.compute import (
-    evaluate_lines,
-    evaluate_lines_at_own_centers,
-    integrate_lines,
-)
+from unite.line.compute import _peak_to_area_tau, evaluate_lines, integrate_lines
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum import Spectra, Spectrum
@@ -225,30 +221,11 @@ def unite_model(args: ModelArgs) -> None:
     else:
         p2 = jnp.zeros(n_lines)
 
-    # --- 2b. Convert amplitude tau to area-tau ---
-    # Tau tokens parametrize the peak optical depth of the intrinsic (pre-LSF)
-    # profile: tau_0 = tau(lambda_center).  The compose path expects area-tau
-    # (implicit wavelength units, equal to integral of tau(lambda) dlambda).
-    # Convert: area_tau = tau_0 / phi_intrinsic(center).
-    #
-    # A negligible stand-in LSF (1e-10) avoids 0/0 singularities in EMG-based
-    # profiles (Laplace, SEMG) while leaving phi numerically equal to the
-    # intrinsic limit.  Using the intrinsic peak (not the LSF-convolved one)
-    # keeps tau_0 an instrument-independent physical property of the absorber.
-    #
-    # Note: for asymmetric profiles (GaussHermite with h3≠0, SkewVoigt with
-    # large alpha), the profile maximum may lie away from the nominal center
-    # wavelength.  tau_0 is defined as the optical depth at the nominal center,
-    # not the absolute maximum; document this for users of those profiles.
+    # --- 2b. Convert peak-tau to area-tau ---
     if cm.tau_names:
-        _tiny_lsf = jnp.full_like(centers, 1e-10)
-        # Evaluate each line at its own center only — n_lines evaluations rather
-        # than the n_lines² produced by evaluate_lines + jnp.diag.
-        _phi_center = evaluate_lines_at_own_centers(
-            centers, centers, _tiny_lsf, p0, p1, p2, cm.profile_codes
+        tau_per_line = _peak_to_area_tau(
+            tau_per_line, centers, p0, p1, p2, cm.profile_codes, cm.is_tau
         )
-        _phi_safe = jnp.where(cm.is_tau, _phi_center, 1.0)
-        tau_per_line = tau_per_line / _phi_safe
 
     # --- 3. Per-spectrum likelihood ---
     for i, spectrum in enumerate(args.spectra):
@@ -384,17 +361,13 @@ def unite_model(args: ModelArgs) -> None:
 
             model_fine_intrinsic = _conv_eval(x_flat)  # (n_super * n_pixels,)
 
-            # Compute wavelength-varying LSF sigma at each fine-grid point.
-            lsf_fwhm_fine = x_flat / (disp.R(x_flat * inv_wl_scale) * r_scale)
-            sigma_fine = lsf_fwhm_fine * _FWHM_TO_SIGMA
-
-            # Convolve intrinsic model with the spatially-varying Gaussian LSF.
-            model_conv = _lsf_convolve(
-                x_flat, model_fine_intrinsic, sigma_fine, half_width
-            )
-
-            # Apply flux_scale and pixel-average: reshape → (n_super, n_pixels).
-            model = flux_scale * model_conv.reshape(n_super, n_pixels).mean(axis=0)
+            # Pixel-average the intrinsic model then convolve at pixel resolution.
+            # Equivalent to fine-grid convolution when sigma_lsf ≥ dlam; reduces cost
+            # from O(n_super² x N x sigma/dlam) to O(n_super x N + N x sigma/dlam).
+            model_pix = model_fine_intrinsic.reshape(n_super, n_pixels).mean(axis=0)
+            sigma_pix = cont_lsf_fwhm * _FWHM_TO_SIGMA
+            model_conv = _lsf_convolve(pix_mid, model_pix, sigma_pix, half_width)
+            model = flux_scale * model_conv
         else:
             # Analytic: integrate each line profile individually via CDF,
             # then combine.  Exact for flux-parametrized lines; approximate
@@ -689,7 +662,7 @@ class ModelBuilder:
         if integration_mode == 'convolution':
             if conv_half_width is None:
                 max_lsf_fwhm = 0.0
-                min_dx_fine = float('inf')
+                min_dlam = float('inf')
                 for s in trimmed_spectra:
                     wl_scale = _get_conversion_factor(s.unit, self._canonical_unit)
                     pix_mid_disp = (s.low + s.high) / 2.0
@@ -697,9 +670,9 @@ class ModelBuilder:
                     lsf = jnp.asarray(pix_mid_disp * wl_scale) / r_arr
                     max_lsf_fwhm = max(max_lsf_fwhm, float(jnp.max(lsf)))
                     pix_widths = (s.high - s.low) * wl_scale
-                    min_dx_fine = min(min_dx_fine, float(jnp.min(pix_widths)) / n_super)
+                    min_dlam = min(min_dlam, float(jnp.min(pix_widths)))
                 max_sigma = max_lsf_fwhm * _FWHM_TO_SIGMA
-                conv_half_width = max(1, math.ceil(4.0 * max_sigma / min_dx_fine * 1.5))
+                conv_half_width = max(1, math.ceil(4.0 * max_sigma / min_dlam))
             n_super_val: int | None = n_super
             conv_half_width_val: int | None = conv_half_width
         else:

@@ -273,9 +273,9 @@ model_fn, args = builder.build(
 )
 ```
 
-The auto-computed value satisfies `half_width ≥ ceil(4 × max_sigma / min_dx_fine × 1.5)`,
-which captures at least 4σ of the broadest kernel.  The dominant cost is
-`O(n_pixels × n_super × 2 × conv_half_width)` per spectrum per model evaluation.
+The auto-computed value satisfies `half_width ≥ ceil(4 x max_sigma / min_dx_fine x 1.5)`,
+which captures at least 4 sigma of the broadest kernel.  The dominant cost is
+`O(n_pixels x n_super x 2 x conv_half_width)` per spectrum per model evaluation.
 
 (component-depth-ordering-zorder)=
 ### Component Depth Ordering (`zorder`)
@@ -337,9 +337,9 @@ The three modes from the previous API translate directly to zorder choices:
 
 | Old mode | New zorder configuration | Equation |
 |---|---|---|
-| `'foreground'` | emission=0, continuum=0, tau=1 (all defaults) | `T × (emission + continuum)` |
-| `'behind_lines'` | emission=2, continuum=0, tau=1 | `emission + T × continuum` |
-| `'behind_continuum'` | emission=0, continuum=2, tau=1 | `T × emission + continuum` |
+| `'foreground'` | emission=0, continuum=0, tau=1 (all defaults) | `T x (emission + continuum)` |
+| `'behind_lines'` | emission=2, continuum=0, tau=1 | `emission + T x continuum` |
+| `'behind_continuum'` | emission=0, continuum=2, tau=1 | `T x emission + continuum` |
 
 where `T = exp(-τ·φ(λ))` is the transmission of the absorber.
 

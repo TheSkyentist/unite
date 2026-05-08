@@ -17,7 +17,7 @@ from unite._compose import compose_leave_one_out
 from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
 from unite._utils import C_KMS
 from unite.continuum.compute import eval_continuum, eval_continuum_regions
-from unite.line.compute import evaluate_lines, integrate_lines
+from unite.line.compute import _peak_to_area_tau, evaluate_lines, integrate_lines
 from unite.model import ModelArgs
 from unite.prior import Fixed
 
@@ -188,6 +188,12 @@ def evaluate_model(
                 else jnp.zeros(n_lines)
             )
 
+            # --- Convert peak-tau to area-tau ---
+            if cm.tau_names:
+                tau_per_line = _peak_to_area_tau(
+                    tau_per_line, centers, p0, p1, p2, cm.profile_codes, cm.is_tau
+                )
+
             # --- Calibration ---
             r_scale = params[_disp.r_scale.name] if _disp.r_scale is not None else 1.0
             flux_scale_val = (
@@ -309,18 +315,21 @@ def evaluate_model(
                     x_flat, centers, zero_lsf, p0, p1, p2, cm.profile_codes
                 )
 
-                # Per-region continuum on fine grid (lsf_fwhm=0), then convolve
-                # and pixel-average for the decomposition output.
-                lsf_fwhm_fine = x_flat / (_disp.R(x_flat * _inv_wl_scale) * r_scale)
-                sigma_fine = lsf_fwhm_fine * _FWHM_TO_SIGMA
+                # LSF sigma at pixel centres (reuse cont_lsf_fwhm computed above).
+                sigma_pix = cont_lsf_fwhm * _FWHM_TO_SIGMA
 
+                # Per-region continuum on fine grid (lsf_fwhm=0): pixel-average
+                # then convolve at pixel resolution.
                 cont_regions_fine = eval_continuum_regions(
                     x_flat, args, params, z_sys, 0.0
                 )
                 cont_regions_scaled = [
-                    _lsf_convolve(x_flat, r * _cont_scale, sigma_fine, half_width)
-                    .reshape(n_super, n_pixels)
-                    .mean(axis=0)
+                    _lsf_convolve(
+                        wavelength,
+                        (r * _cont_scale).reshape(n_super, n_pixels).mean(axis=0),
+                        sigma_pix,
+                        half_width,
+                    )
                     * flux_scale_val
                     for r in cont_regions_fine
                 ]
@@ -343,20 +352,18 @@ def evaluate_model(
                     has_tau=has_tau,
                 )
 
-                # Convolve total and each per-line delta with the LSF.
-                # Convolution is linear: LSF⊗(total - total_without_j) =
-                # (LSF⊗total) - (LSF⊗total_without_j).
-                total_conv = _lsf_convolve(x_flat, total_fine, sigma_fine, half_width)
-                deltas_conv = jax.vmap(
-                    lambda d: _lsf_convolve(x_flat, d, sigma_fine, half_width)
-                )(deltas_fine)  # (n_lines, N)
+                # Pixel-average first, then convolve at pixel resolution.
+                # Cost: O(n_super * N + N * sigma/dlam) vs O(n_super² * N * sigma/dlam).
+                total_pix = total_fine.reshape(n_super, n_pixels).mean(axis=0)
+                total_conv = _lsf_convolve(wavelength, total_pix, sigma_pix, half_width)
 
-                total = flux_scale_val * total_conv.reshape(n_super, n_pixels).mean(
-                    axis=0
-                )
-                line_contribs = flux_scale_val * deltas_conv.reshape(
-                    -1, n_super, n_pixels
-                ).mean(axis=1)  # (n_lines, n_pixels)
+                deltas_pix = deltas_fine.reshape(-1, n_super, n_pixels).mean(axis=1)
+                deltas_conv = jax.vmap(
+                    lambda d: _lsf_convolve(wavelength, d, sigma_pix, half_width)
+                )(deltas_pix)  # (n_lines, n_pixels)
+
+                total = flux_scale_val * total_conv
+                line_contribs = flux_scale_val * deltas_conv
 
                 return total, line_contribs, cont_regions_scaled, tau_profiles_arr
             else:

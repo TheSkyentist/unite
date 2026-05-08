@@ -946,14 +946,14 @@ class BSpline(ContinuumForm):
             [jnp.array([1.0])]
             + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._n_basis)]
         )
-        shape = bspline_eval(u, shape_coeffs, knots_norm, self._degree)  # ty: ignore[invalid-argument-type, too-many-positional-arguments]
+        shape = bspline_eval(u, shape_coeffs, knots_norm, self._degree)
         _snw = bspline_eval(
-            jnp.atleast_1d(u_nw),  # ty: ignore[invalid-argument-type]
-            shape_coeffs,  # ty: ignore[too-many-positional-arguments]
+            jnp.atleast_1d(u_nw),
+            shape_coeffs,
             knots_norm,
             self._degree,
         )
-        shape_nw = _snw[0]  # ty: ignore[not-subscriptable]
+        shape_nw = _snw[0]
         return params['scale'] * shape / shape_nw
 
     @override

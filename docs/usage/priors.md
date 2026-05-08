@@ -142,7 +142,7 @@ Both bounds **and** `loc` can be parameter expressions:
 ```python
 fwhm_narrow = line.FWHM('n', prior=prior.Uniform(50, 500))
 
-# Broad component centerd at 2× narrow, with scatter
+# Broad component centerd at 2x narrow, with scatter
 fwhm_broad = line.FWHM('b', prior=prior.TruncatedNormal(
     loc=fwhm_narrow * 2,
     scale=50,

@@ -623,7 +623,7 @@ def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:
     t : jnp.ndarray
         Normalized distance from center
     a : jnp.ndarray
-        Convolution parameter (σλ/2)
+        Convolution parameter (sigma *λ/2)
 
     Returns
     -------

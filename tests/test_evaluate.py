@@ -362,3 +362,110 @@ class TestEvaluateAbsorption:
         samples, args, _ = simple_setup
         pred = evaluate_model(samples, args)[0]
         assert pred.tau_profiles == {}
+
+    def test_absorption_transmission_ground_truth(self):
+        """evaluate_model transmission at line center must equal exp(-tau_0).
+
+        Regression guard for the peak-to-area-tau conversion: if the conversion
+        is missing, the predicted absorption depth is ~12x too shallow.
+
+        Uses a flat unit continuum so the absorbed flux at line center is
+        simply exp(-tau_0), with a tolerance of 1% for the LSF broadening
+        difference between the intrinsic and convolved profiles.
+        """
+        from unite.continuum.config import ContShape, Scale
+        from unite.line.config import Tau
+        from unite.line.library import Gaussian
+
+        tau_0 = 1.5
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        wl = np.linspace(6490, 6640, 100) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='gt_abs')
+        low = wl - 0.5 * np.gradient(wl)
+        high = wl + 0.5 * np.gradient(wl)
+        spec = Spectrum(
+            low=low,
+            high=high,
+            flux=np.ones(len(wl)) * flux_unit,
+            error=np.full(len(wl), 0.05) * flux_unit,
+            disperser=disperser,
+            name='gt_abs',
+        )
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(500.0)),
+            tau=Tau(prior=prior.Fixed(tau_0)),
+        )
+        region = ContinuumRegion(6480.0 * u.AA, 6650.0 * u.AA, form=Linear())
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        region.params['angle'] = ContShape(prior=prior.Fixed(0.0))
+        cc = ContinuumConfiguration([region])
+
+        spectra = Spectra([spec], redshift=0.0)
+        lc_prep, cc_prep = spectra.prepare(lc, cc)
+        # Set scales directly so the continuum model evaluates to 1.0 in flux units.
+        spectra.line_scale = 1.0 * flux_unit * u.AA
+        spectra.continuum_scale = 1.0 * flux_unit
+        _, args = model.ModelBuilder(lc_prep, cc_prep, spectra).build()
+
+        pred = evaluate_model({}, args)[0]
+        center_idx = int(np.argmin(np.abs(pred.wavelength - 6563.0)))
+        # rtol=0.05: the LSF slightly widens the absorbed profile (~4% effect at
+        # R=3000), so exact exp(-tau_0) isn't achievable; the tolerance just needs
+        # to be tight enough to catch the ~4x wrong answer produced by the bug.
+        np.testing.assert_allclose(pred.total[0, center_idx], np.exp(-tau_0), rtol=0.05)
+
+    def test_evaluate_matches_numpyro_model(self):
+        """evaluate_model and unite_model must produce the same pixel-level predictions.
+
+        Cross-validates the two code paths (unite_model vs _single in compute.py)
+        so that any future divergence in the tau normalization convention is
+        caught immediately.  Uses handlers.trace to extract the model mean
+        (fn.loc) rather than noisy Predictive samples.
+        """
+        from numpyro import handlers
+
+        from unite.continuum.config import ContShape, Scale
+        from unite.line.config import Tau
+        from unite.line.library import Gaussian
+
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+        spec = _make_spectrum(name='xval_abs')
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=Tau(prior=prior.Fixed(1.0)),
+        )
+        # All continuum params must be Fixed so evaluate_model works with {}.
+        region = ContinuumRegion(6490.0 * u.AA, 6620.0 * u.AA, form=Linear())
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        region.params['angle'] = ContShape(prior=prior.Fixed(0.0))
+        cc = ContinuumConfiguration([region])
+
+        spectra = Spectra([spec], redshift=0.0)
+        lc_prep, cc_prep = spectra.prepare(lc, cc)
+        spectra.line_scale = 1.0 * flux_unit * u.AA
+        spectra.continuum_scale = (
+            5.0 * flux_unit
+        )  # rough background level in _make_spectrum
+        model_fn, args = model.ModelBuilder(lc_prep, cc_prep, spectra).build()
+
+        # Extract the model mean from numpyro via trace (fn.loc is normalised).
+        trace = handlers.trace(handlers.seed(model_fn, rng_seed=42)).get_trace(args)
+        npyro_loc = None
+        for site in trace.values():
+            if site['type'] == 'sample' and site.get('is_observed', False):
+                npyro_loc = np.asarray(site['fn'].loc) * args.norm_factors[0]
+                break
+        assert npyro_loc is not None, 'no observed site found in trace'
+
+        pred = evaluate_model({}, args)[0]
+        np.testing.assert_allclose(pred.total[0], npyro_loc, rtol=1e-4)

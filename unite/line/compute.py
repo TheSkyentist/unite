@@ -64,6 +64,47 @@ of evaluating every profile at every center.
 """
 
 
+def _peak_to_area_tau(tau_per_line, centers, p0, p1, p2, profile_codes, is_tau):
+    """Convert peak optical depth τ₀ to area-tau for :func:`~unite._compose.compose_from_profiles`.
+
+    Tau tokens parametrize the peak optical depth of the *intrinsic* (pre-LSF)
+    profile at the nominal line center.  The compose path expects area-tau
+    (equal to the integral of the optical-depth profile over wavelength), so
+    each value must be divided by the intrinsic profile peak φ_intrinsic(center).
+
+    A tiny stand-in LSF of 1e-10 avoids 0/0 singularities in EMG-based
+    profiles (Laplace, SEMG) while leaving φ numerically equal to the
+    intrinsic limit.  Only tau-parametrized lines are converted; emission
+    lines (is_tau=False) pass through unchanged via the ``jnp.where`` mask.
+
+    Parameters
+    ----------
+    tau_per_line : jnp.ndarray, shape ``(n_lines,)``
+        Raw optical depths as sampled (peak-tau convention).
+    centers : jnp.ndarray, shape ``(n_lines,)``
+        Observed-frame line centers in canonical wavelength units.
+    p0, p1, p2 : jnp.ndarray, shape ``(n_lines,)``
+        Per-line profile parameter slots in canonical wavelength units.
+    profile_codes : jnp.ndarray, shape ``(n_lines,)``
+        Integer dispatch codes from :attr:`~unite.line.library.Profile.code`.
+    is_tau : jnp.ndarray, shape ``(n_lines,)``
+        Boolean mask — True for absorption lines.
+
+    Returns
+    -------
+    jnp.ndarray, shape ``(n_lines,)``
+        Area-tau per line (emission lines unchanged).
+    """
+    import jax.numpy as jnp
+
+    _tiny_lsf = jnp.full_like(centers, 1e-10)
+    _phi_center = evaluate_lines_at_own_centers(
+        centers, centers, _tiny_lsf, p0, p1, p2, profile_codes
+    )
+    _phi_safe = jnp.where(is_tau, _phi_center, 1.0)
+    return tau_per_line / _phi_safe
+
+
 # -------------------------------------------------------------------
 # Analytic (CDF-based) integration
 # -------------------------------------------------------------------
