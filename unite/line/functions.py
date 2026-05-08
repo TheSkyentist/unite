@@ -14,32 +14,21 @@ from __future__ import annotations
 from typing import Final
 
 import jax.numpy as jnp
-from jax import Array, config, jit
-from jax.scipy.special import erf, erfc, owens_t
+import numpy as np
+from jax import Array, config, jit, lax
+from jax.scipy.special import erf, erfc
 from jax.typing import ArrayLike
 
 # Conversion: FWHM to sigma for the half-variance parametrization of erf.
 # sigma = FWHM / (2 sqrt(2 ln 2)); erf uses sqrt(2)*sigma, so the factor is:
-_HALFVAR_SIGMA_TO_FWHM: Final[Array] = 2 * jnp.sqrt(jnp.log(2))
-
-# Thompson et al. (1987) Voigt FWHM approximation: Γ_V = C1*Γ_l + sqrt(C2*Γ_l² + Γ_g²).
-# δ = 0.099 ln 2 gives C1 + sqrt(C2) = 1 exactly, so the Lorentzian limit is exact.
-_THOMPSON_DELTA: Final[Array] = 0.099 * jnp.log(2)
-_THOMPSON_C1: Final[Array] = (1 + _THOMPSON_DELTA) / 2
-_THOMPSON_C2: Final[Array] = ((1 - _THOMPSON_DELTA) / 2) ** 2
+_HALFVAR_SIGMA_TO_FWHM: Final[float] = 2 * np.sqrt(np.log(2))
 
 # Conversion factor from exponential (Laplace) scale to FWHM
 # pdf = (1/(2*b)) * exp(-|x - μ|/b)
 # max(pdf) = 1/(2*b), half max = 1/(4*b)
 # 1/(4*b) = 1/(2*b) * exp(-|x - μ|/b) => exp(-|x - μ|/b) = 1/2
 # => |x - μ|/b = ln(2) => FWHM = 2*b*ln(2)
-_EXP_SCALE_TO_FWHM: Final[Array] = 2 * jnp.log(2)
-
-# Precompute constants
-_INV_SQRt2PI: Final[Array] = 1.0 / jnp.sqrt(2.0 * jnp.pi)
-_SQRT2: Final[Array] = jnp.sqrt(2.0)
-_SQRT6: Final[Array] = jnp.sqrt(6.0)
-_SQRt24: Final[Array] = jnp.sqrt(24.0)
+_EXP_SCALE_TO_FWHM: Final[float] = 2 * np.log(2)
 
 # -------------------------------------------------------------------
 # Private helpers
@@ -53,7 +42,14 @@ def _combine_fwhm(fwhm1: ArrayLike, fwhm2: ArrayLike) -> Array:
 
 def _fwhm_to_sigma(fwhm: ArrayLike) -> Array:
     """Gaussian sigma from FWHM: ``sigma = FWHM / (2 sqrt(2 ln 2))``."""
-    return fwhm / (_HALFVAR_SIGMA_TO_FWHM * _SQRT2)
+    return fwhm / (_HALFVAR_SIGMA_TO_FWHM * np.sqrt(2))
+
+
+# Thompson et al. (1987) Voigt FWHM approximation: Γ_V = C1*Γ_l + sqrt(C2*Γ_l² + Γ_g²).
+# δ = 0.099 ln 2 gives C1 + sqrt(C2) = 1 exactly, so the Lorentzian limit is exact.
+_THOMPSON_DELTA: Final[float] = 0.099 * np.log(2)
+_THOMPSON_C1: Final[float] = (1 + _THOMPSON_DELTA) / 2
+_THOMPSON_C2: Final[float] = ((1 - _THOMPSON_DELTA) / 2) ** 2
 
 
 def _thompson_fwhm(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
@@ -63,7 +59,7 @@ def _thompson_fwhm(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
 
 def _gaussian_pdf(dx: ArrayLike, sigma: ArrayLike) -> Array:
     """Normalised Gaussian PDF at displacement *dx* wi_absth standard deviation *sigma*."""
-    return jnp.exp(-0.5 * (dx * dx / (sigma * sigma))) * _INV_SQRt2PI / sigma
+    return jnp.exp(-0.5 * (dx * dx / (sigma * sigma))) / (sigma * np.sqrt(2.0 * np.pi))
 
 
 def _gaussian_cdf_diff(low: ArrayLike, high: ArrayLike, total_fwhm: ArrayLike) -> Array:
@@ -74,7 +70,7 @@ def _gaussian_cdf_diff(low: ArrayLike, high: ArrayLike, total_fwhm: ArrayLike) -
 
 def _cauchy_pdf(dx: ArrayLike, hwhm: ArrayLike) -> Array:
     """Normalised Cauchy (Lorentzian) PDF at displacement *dx* wi_absth half-wi_absdth *hwhm*."""
-    return jnp.asarray((hwhm / jnp.pi) / (dx * dx + hwhm * hwhm))
+    return jnp.asarray((hwhm / np.pi) / (dx * dx + hwhm * hwhm))
 
 
 def _cauchy_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
@@ -82,7 +78,7 @@ def _cauchy_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
     inv_hwhm = 2 / fwhm
     t_low = low * inv_hwhm
     t_high = high * inv_hwhm
-    return (jnp.arctan(t_high) - jnp.arctan(t_low)) / jnp.pi
+    return (jnp.arctan(t_high) - jnp.arctan(t_low)) / np.pi
 
 
 # Don't need this but keeping anyways just in case
@@ -170,8 +166,8 @@ def evaluate_gaussian(
 # -------------------------------------------------------------------
 
 # Pseudo-Voigt polynomial coefficients — Thompson, Cox & Hastings (1987)
-_VOIGT_FWHM_CS: Final[Array] = jnp.array([1, 2.69268, 2.42843, 4.47163, 0.07842, 1])
-_VOIGT_ETA_CS: Final[Array] = jnp.array([1.33603, -0.47719, 0.11116])
+_VOIGT_FWHM_CS: Final[np.ndarray] = np.array([1, 2.69268, 2.42843, 4.47163, 0.07842, 1])
+_VOIGT_ETA_CS: Final[np.ndarray] = np.array([1.33603, -0.47719, 0.11116])
 
 
 def _voigt_params_thompson(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> tuple[Array, Array]:
@@ -209,41 +205,41 @@ def _voigt_thompson_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> A
 # Extended pseudo-Voigt polynomial coefficients — Ida, Ando & Toraya (2000), Table 1.
 # Coefficients ordered i = 0 ... 6 (lowest to highest power of rho).
 # wG = 1 - rho * sum(A * rho^i)
-_IDA_A: Final[Array] = jnp.array(
+_IDA_A: Final[np.ndarray] = np.array(
     [0.66000, 0.15021, -1.24984, 4.74052, -9.48291, 8.48252, -2.95553]
 )
 # wL = 1 - (1-rho) * sum(B * rho^i)
-_IDA_B: Final[Array] = jnp.array(
+_IDA_B: Final[np.ndarray] = np.array(
     [-0.42179, -1.25693, 10.30003, -23.45651, 29.14158, -16.50453, 3.19974]
 )
 # wI = sum(C * rho^i)
-_IDA_C: Final[Array] = jnp.array(
+_IDA_C: Final[np.ndarray] = np.array(
     [1.19913, 1.43021, -15.36331, 47.06071, -73.61822, 57.92559, -17.80614]
 )
 # wP = sum(D * rho^i)
-_IDA_D: Final[Array] = jnp.array(
+_IDA_D: Final[np.ndarray] = np.array(
     [1.10186, -0.47745, -0.68688, 2.76622, -4.55466, 4.05475, -1.26571]
 )
 # eta_L = rho * [1 + (1-rho) * sum(F * rho^i)]
-_IDA_F: Final[Array] = jnp.array(
+_IDA_F: Final[np.ndarray] = np.array(
     [-0.30165, -1.38927, 9.31550, -24.10743, 34.96491, -21.18862, 3.70290]
 )
 # eta_I = rho * (1-rho) * sum(G * rho^i)
-_IDA_G: Final[Array] = jnp.array(
+_IDA_G: Final[np.ndarray] = np.array(
     [0.25437, -0.14107, 3.23653, -11.09215, 22.10544, -24.12407, 9.76947]
 )
 # eta_P = rho * (1-rho) * sum(H * rho^i)
-_IDA_H: Final[Array] = jnp.array(
+_IDA_H: Final[np.ndarray] = np.array(
     [1.01579, 1.50429, -9.21815, 23.59717, -39.71134, 32.83023, -10.02142]
 )
 
 # Conversion: irrational-function gamma_I to FWHM: W_I = 2*(2^(2/3) - 1)^(1/2) * gamma_I
 # So gamma_I = W_I / (2*(2^(2/3) - 1)^(1/2))
-_IRRAT_FWHM_TO_GAMMA: Final[Array] = 0.5 / jnp.sqrt(2.0 ** (2.0 / 3.0) - 1.0)
+_IRRAT_FWHM_TO_GAMMA: Final[float] = 0.5 / np.sqrt(2.0 ** (2.0 / 3.0) - 1.0)
 
 # Conversion: hyperbolic-function gamma_P to FWHM: W_P = 2*ln(sqrt(2) + 1) * gamma_P
 # So gamma_P = W_P / (2*ln(sqrt(2) + 1))
-_HYPER_FWHM_TO_GAMMA: Final[Array] = 0.5 / jnp.log(jnp.sqrt(2.0) + 1.0)
+_HYPER_FWHM_TO_GAMMA: Final[float] = 0.5 / np.log(np.sqrt(2.0) + 1.0)
 
 
 # Intermediate function fl
@@ -508,11 +504,11 @@ def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> A
     gamma_l = 0.5 * fwhm_l
 
     # Voigt complex argument: z = (dx + i*gamma) / (sigma * sqrt(2))
-    denom = sigma_g * _SQRT2
+    denom = sigma_g * np.sqrt(2)
     z = (x + 1j * gamma_l) / denom
 
     # Voigt profile: V(x) = Re[w(z)] / (sigma * sqrt(2*pi))
-    return jnp.real(_faddeeva_humlicek(z)) * _INV_SQRt2PI / sigma_g
+    return jnp.real(_faddeeva_humlicek(z)) / (sigma_g * np.sqrt(2.0 * np.pi))
 
 
 # -------------------------------------------------------------------
@@ -730,8 +726,8 @@ def evaluate_gaussianLaplace(
     # where u = (x - center) / (sigma * sqrt(2)), a = lam * sigma / sqrt(2).
     # Uses the same overflow-protection pattern as _integrandGL.
     t = (wavelength - center) / sigma
-    a = lam * sigma / jnp.sqrt(2.0)
-    u_abs = jnp.abs(t) / jnp.sqrt(2.0)
+    a = lam * sigma / np.sqrt(2.0)
+    u_abs = jnp.abs(t) / np.sqrt(2.0)
     ua = u_abs + a
     two_ua = 2 * u_abs * a
 
@@ -849,7 +845,7 @@ def evaluate_split_normal(
     sigma_red = _fwhm_to_sigma(total_fwhm_red)
 
     # Normalisation: integral = sqrt(pi/2) * (sigma_blue + sigma_red)
-    norm = (sigma_blue + sigma_red) * jnp.sqrt(jnp.pi / 2.0)
+    norm = (sigma_blue + sigma_red) * np.sqrt(np.pi / 2.0)
     dx = wavelength - center
     dx2 = dx * dx
     val_blue = jnp.exp(-0.5 * dx2 / (sigma_blue * sigma_blue))
@@ -907,8 +903,8 @@ def integrate_boxGauss(
         # Antiderivative of Phi((x+a)/sigma) w.r.t. x:
         # F(x, a) = (x+a)*Phi((x+a)/sigma) + sigma*phi((x+a)/sigma)
         u = (x + a) / sigma
-        cdf = 0.5 * (1.0 + erf(u / _SQRT2))
-        sigma_pdf = sigma * _INV_SQRt2PI * jnp.exp(-0.5 * u * u)
+        cdf = 0.5 * (1.0 + erf(u / np.sqrt(2)))
+        sigma_pdf = sigma * jnp.exp(-0.5 * u * u) / np.sqrt(2.0 * np.pi)
         return (x + a) * cdf + sigma_pdf
 
     return (
@@ -951,7 +947,7 @@ def evaluate_boxGauss(
     x = wavelength - center
     sigma = _fwhm_to_sigma(_combine_fwhm(lsf_fwhm, fwhm_gauss))
     hw = fwhm_box / 2.0
-    inv_sqrt2_sigma = 1.0 / (sigma * _SQRT2)
+    inv_sqrt2_sigma = 1.0 / (sigma * np.sqrt(2))
     cdf_hi = 0.5 * (1.0 + erf((x + hw) * inv_sqrt2_sigma))
     cdf_lo = 0.5 * (1.0 + erf((x - hw) * inv_sqrt2_sigma))
     return (cdf_hi - cdf_lo) / fwhm_box
@@ -986,7 +982,7 @@ def _integrandGH(t_halfvar: ArrayLike, h3_eff: ArrayLike, h4_eff: ArrayLike) -> 
     jnp.ndarray
         Antiderivative value.
     """
-    t = t_halfvar * _SQRT2
+    t = t_halfvar * np.sqrt(2)
     t2 = t * t
     g = jnp.exp(-0.5 * t2)
     # He_2(y) = y²-1,  He_3(y) = y(y²-3)
@@ -1039,8 +1035,8 @@ def integrate_gaussHermite(
     r3 = r * r * r
 
     # GH coefficients scaled by sigma ratio (moment theorem for Gaussian convolution)
-    c3 = h3 * r3 / _SQRT6
-    c4 = h4 * r3 * r / _SQRt24
+    c3 = h3 * r3 / np.sqrt(6)
+    c4 = h4 * r3 * r / np.sqrt(24)
 
     # Normalized bin edges (halfvar parametrisation for consistency wi_absth erf CDF)
     inv_sigma_tot = _HALFVAR_SIGMA_TO_FWHM / fwhm_tot
@@ -1049,7 +1045,7 @@ def integrate_gaussHermite(
 
     gaussian_cdf = 0.5 * (erf(t_high) - erf(t_low))
     gh_correction = _integrandGH(t_high, c3, c4) - _integrandGH(t_low, c3, c4)
-    return gaussian_cdf - _INV_SQRt2PI * gh_correction
+    return gaussian_cdf - gh_correction / np.sqrt(2.0 * np.pi)
 
 
 @jit
@@ -1091,8 +1087,8 @@ def evaluate_gaussHermite(
     r3 = r * r * r
 
     # GH coefficients scaled by sigma ratio
-    c3 = h3 * r3 / _SQRT6
-    c4 = h4 * r3 * r / _SQRt24
+    c3 = h3 * r3 / np.sqrt(6)
+    c4 = h4 * r3 * r / np.sqrt(24)
 
     # Standard coordinate
     y = (wavelength - center) / sigma_tot
@@ -1125,6 +1121,91 @@ def _alpha_eff_skewnormal(
     docs/derivations/skew-normal.md.
     """
     return alpha * fwhm_g / jnp.sqrt(fwhm_g**2 + (1.0 + alpha**2) * lsf_fwhm**2)
+
+
+_OWENS_T_QUAD_PTS = np.array(
+    [
+        0.0035082039676451715,
+        0.031279042338030754,
+        0.085266826283219451,
+        0.16245071730812277,
+        0.25851196049125435,
+        0.36807553840697534,
+        0.48501092905604697,
+        0.60277514152618577,
+        0.71477884217753227,
+        0.81475510988760099,
+        0.89711029755948966,
+        0.95723808085944262,
+        0.99178832974629704,
+    ]
+)
+
+_OWENS_T_QUAD_WTS = np.array(
+    [
+        0.018831438115323503,
+        0.018567086243977649,
+        0.018042093461223386,
+        0.017263829606398753,
+        0.016243219975989857,
+        0.014994592034116705,
+        0.013535474469662088,
+        0.011886351605820165,
+        0.010070377242777432,
+        0.0081130545742299587,
+        0.0060419009528470239,
+        0.0038862217010742058,
+        0.0016793031084546090,
+    ]
+)
+
+
+def _owens_t_quadrature(h, a):
+    r = jnp.square(a)[..., None] * _OWENS_T_QUAD_PTS
+    integrand = jnp.exp(-0.5 * jnp.square(h)[..., None] * (1.0 + r)) / (1.0 + r)
+    return a * jnp.sum(integrand * _OWENS_T_QUAD_WTS, axis=-1)
+
+
+def _owens_t(h, a):
+    h = jnp.abs(h)
+    abs_a = jnp.abs(a)
+
+    modified_a = jnp.where(abs_a <= 1.0, abs_a, jnp.reciprocal(abs_a))
+    modified_h = jnp.where(abs_a <= 1.0, h, abs_a * h)
+
+    result = _owens_t_quadrature(modified_h, modified_a)
+
+    # Exact values for h=0 and a=1, which are not captured by the quadrature
+    result = jnp.where(modified_h == 0.0, jnp.arctan(modified_a) / (2 * np.pi), result)
+    result = jnp.where(
+        modified_a == 1.0,
+        0.125
+        * lax.erfc(-modified_h / np.sqrt(2.0))
+        * lax.erfc(modified_h / np.sqrt(2.0)),
+        result,
+    )
+
+    # Reciprocal correction for |a| > 1
+    normh = lax.erfc(h / np.sqrt(2.0))
+    normah = lax.erfc(abs_a * h / np.sqrt(2.0))
+    result = jnp.where(
+        abs_a > 1.0,
+        jnp.where(
+            abs_a * h <= 0.67,
+            (
+                0.25
+                - 0.25 * lax.erf(h / np.sqrt(2.0)) * lax.erf(abs_a * h / np.sqrt(2.0))
+                - result
+            ),
+            0.25 * (normh + normah - normh * normah) - result,
+        ),
+        result,
+    )
+
+    result = lax.sign(a) * result
+    return jnp.where(
+        jnp.isnan(a) | jnp.isnan(h), jnp.full_like(result, jnp.nan), result
+    )
 
 
 @jit
@@ -1170,8 +1251,8 @@ def integrate_skewNormal(
     z_lo = (low - center) / sigma_tot
     z_hi = (high - center) / sigma_tot
 
-    gaussian_cdf = 0.5 * (erf(z_hi / _SQRT2) - erf(z_lo / _SQRT2))
-    owens_correction = owens_t(z_hi, alpha_eff) - owens_t(z_lo, alpha_eff)
+    gaussian_cdf = 0.5 * (erf(z_hi / np.sqrt(2)) - erf(z_lo / np.sqrt(2)))
+    owens_correction = _owens_t(z_hi, alpha_eff) - _owens_t(z_lo, alpha_eff)
     return gaussian_cdf - 2.0 * owens_correction
 
 
@@ -1210,7 +1291,7 @@ def evaluate_skewNormal(
     fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
     sigma_tot = _fwhm_to_sigma(fwhm_tot)
     alpha_eff = _alpha_eff_skewnormal(lsf_fwhm, fwhm_g, alpha)
-    w0p = sigma_tot * _SQRT2
+    w0p = sigma_tot * np.sqrt(2)
 
     gauss = _gaussian_pdf(wavelength - center, sigma_tot)
     skew = _skew(wavelength - center, alpha_eff, w0p)

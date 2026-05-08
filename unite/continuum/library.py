@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast, override
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from astropy import units as u
 from jax import Array
 from jax.typing import ArrayLike
@@ -22,9 +23,6 @@ from unite.prior import Fixed, Prior, Uniform
 
 if TYPE_CHECKING:
     pass
-
-# FWHM to sigma conversion: sigma = FWHM / (2 * sqrt(2 * ln2))
-_FWHM_TO_SIGMA = 1.0 / (2.0 * jnp.sqrt(2.0 * jnp.log(2.0)))
 
 
 def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
@@ -64,7 +62,7 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
     Array, shape ``(n+1,)``
         Convolved polynomial coefficients, same descending-order convention.
     """
-    sigma2 = (jnp.asarray(lsf_fwhm) * _FWHM_TO_SIGMA) ** 2
+    sigma2 = (jnp.asarray(lsf_fwhm) / (2.0 * np.sqrt(2.0 * np.log(2.0)))) ** 2
     n = coeffs.shape[0] - 1  # polynomial degree
 
     # Pre-compute even moments of N(0, s^2): M[j] = (2j-1)!! s^{2j}.
@@ -513,7 +511,7 @@ class Linear(ContinuumForm):
     def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
         return {
             'scale': Uniform(0, 2),
-            'angle': Uniform(-jnp.pi / 2, jnp.pi / 2),
+            'angle': Uniform(-np.pi / 2, np.pi / 2),
             'norm_wav': Fixed(region_center),
         }
 
