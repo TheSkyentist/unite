@@ -274,8 +274,8 @@ def unite_model(args: ModelArgs) -> None:
         if disp.pix_offset is not None:
             mid_disp = (spectrum.low + spectrum.high) / 2.0  # disperser unit
             shift = pix_offset * disp.dlam_dpix(mid_disp) * wl_scale
-            low = low + shift
-            high = high + shift
+            low = low - shift
+            high = high - shift
 
         n_pixels = low.shape[0]
 

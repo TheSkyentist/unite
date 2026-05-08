@@ -25,7 +25,7 @@ For a given instrument the user can optionally attach calibration tokens with as
 
 - {class}`~unite.instrument.RScale`: Resolution scaling factor (e.g. R_eff = R_nominal × RScale)
 - {class}`~unite.instrument.FluxScale`: Flux scaling factor (e.g. F_eff = F_model × FluxScale)
-- {class}`~unite.instrument.PixOffset`: Linear pixel offset (e.g. λ_eff = λ_model + (dλ/dpix)(λ_model) × PixOffset)
+- {class}`~unite.instrument.PixOffset`: Detector pixel displacement (e.g. λ_eff = λ_model − (dλ/dpix)(λ_model) × PixOffset)
 
 These absorb calibration offsets and uncertainties between instruments.
 
@@ -63,7 +63,13 @@ f = FluxScale(prior=prior.Uniform(0.5, 2.0))
 
 #### PixOffset — Wavelength Offset
 
-Shifts the wavelength solution by a number of pixels. A value of 0.0 means no correction.
+Encodes the displacement of the spectrum on the detector relative to the wavelength calibration,
+in pixels. A positive value means the spectrum is displaced toward longer wavelengths: the model
+subtracts `pix_offset × (dλ/dpix)` from the calibrated pixel-edge wavelengths, shifting them
+blueward to compensate.
+
+For example, if a disperser consistently returns redshifts that are too high compared to a
+reference (the calibrated wavelengths are too long), set a positive `PixOffset` to correct it:
 
 ```python
 p = PixOffset(prior=prior.Uniform(-2, 2))

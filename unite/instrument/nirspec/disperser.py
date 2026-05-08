@@ -149,7 +149,7 @@ class NIRSpecDisperser(Disperser):
     flux_scale : FluxScale, optional
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
-        Token for the pixel shift.
+        Token for the detector pixel displacement.
 
     Notes
     -----
@@ -284,7 +284,7 @@ def _make_grating_class(grating: str, class_name: str) -> type[NIRSpecDisperser]
     flux_scale : FluxScale, optional
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
-        Token for the pixel shift.
+        Token for the detector pixel displacement.
 
     Examples
     --------

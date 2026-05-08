@@ -4,9 +4,9 @@ description = "Unified liNe Integration Turbo Engine"
 readme = "README.md"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
-version = "2.8.1"
+version = "2.8.2"
 dependencies = [
-  "numpyro>=0.20.0,<0.21",
+  "numpyro>=0.21.0,<0.22",
   "astropy>=7.2.0,<8",
   "pyyaml>=6.0.1,<7",
   ]
@@ -40,7 +40,7 @@ docs = [
 ]
 test-lowest = [
   "unite[test]",
-  "numpyro==0.20.0",
+  "numpyro==0.21.0",
   "astropy==7.2.0",
   "pyyaml==6.0.1",
 ]

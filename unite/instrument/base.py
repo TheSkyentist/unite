@@ -59,10 +59,17 @@ class FluxScale(Parameter):
 
 
 class PixOffset(Parameter):
-    """Additive pixel shift in the wavelength solution.
+    """Pixel displacement of the spectrum on the detector relative to the wavelength calibration.
 
-    Nominal value is 0 (no shift).  The model shifts pixel bin edges by
-    ``pix_offset`` pixels.
+    Nominal value is 0 (no displacement).  A positive value indicates the
+    spectrum is displaced toward longer wavelengths on the detector: the model
+    subtracts ``pix_offset * dlam_dpix`` from the calibrated pixel-edge
+    wavelengths, shifting them blueward to compensate.
+
+    For example, if a disperser consistently returns redshifts that are too
+    high compared to a reference, the spectrum is displaced redward by some
+    number of pixels — set ``pix_offset`` to that (positive) number to correct
+    the wavelength solution.
 
     Parameters
     ----------
@@ -70,7 +77,7 @@ class PixOffset(Parameter):
         Human-readable label.  When attached to a :class:`Disperser`, the
         site name is auto-derived as ``'pix_offset_{disperser_name}'`` if not provided.
     prior : Prior, optional
-        Prior on the pixel offset.  Defaults to ``Fixed(0.0)`` (no shift).
+        Prior on the pixel offset.  Defaults to ``Fixed(0.0)`` (no displacement).
     """
 
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
@@ -97,7 +104,7 @@ class Disperser(ABC):
 
     * ``r_scale`` — multiplicative scale on resolving power (*R*).
     * ``flux_scale`` — multiplicative flux normalisation.
-    * ``pix_offset`` — additive pixel shift in the wavelength solution.
+    * ``pix_offset`` — pixel displacement of the spectrum on the detector (positive = redward; wavelength grid is corrected blueward).
 
     ``None`` on any slot means that parameter is absent from the model
     entirely (equivalent to a fixed nominal value but without a token).
@@ -122,7 +129,7 @@ class Disperser(ABC):
     flux_scale : FluxScale, optional
         Token for the flux normalisation.  ``None`` → not in model.
     pix_offset : PixOffset, optional
-        Token for the wavelength-solution pixel shift.  ``None`` → not in model.
+        Token for the detector pixel displacement.  ``None`` → not in model.
     """
 
     def __init__(
