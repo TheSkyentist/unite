@@ -83,6 +83,7 @@ def evaluate_model(
     cm = args.matrices
     z_sys = args.redshift
     n_lines = cm.wavelengths.shape[0]
+    has_tau = bool(cm.tau_names)
 
     # --- Build parameter dict with a uniform (n_samples,) leading axis ---
     context: dict[str, jnp.ndarray] = {}
@@ -274,6 +275,7 @@ def evaluate_model(
                         cm.applies_matrix,
                         args.cont_applies,
                         cont,
+                        has_tau=has_tau,
                     )
                     return total, deltas
 
@@ -338,6 +340,7 @@ def evaluate_model(
                     cm.applies_matrix,
                     args.cont_applies,
                     cont_fine_scaled,
+                    has_tau=has_tau,
                 )
 
                 # Convolve total and each per-line delta with the LSF.
@@ -369,6 +372,7 @@ def evaluate_model(
                     cm.applies_matrix,
                     args.cont_applies,
                     cont_total_scaled,
+                    has_tau=has_tau,
                 )
 
             # Apply flux_scale to total and per-line contributions.

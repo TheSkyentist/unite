@@ -73,8 +73,11 @@ def _lsf_convolve(
         wm = jax.lax.dynamic_slice(m_pad, (j,), (w,))
         dx = wx - x_pad[j + pad]
         sigma_j = s_pad[j + pad]
-        kernel = jnp.exp(-0.5 * (dx / sigma_j) ** 2)
-        kernel = kernel / jnp.sum(kernel)  # normalize → flux-conserving
-        return jnp.dot(kernel, wm)
+        # Compute exponent without per-element division: dx*dx * (-1 / (2*sigma*sigma)).
+        neg_inv_two_sigma_sq = -0.5 / (sigma_j * sigma_j)
+        kernel = jnp.exp(dx * dx * neg_inv_two_sigma_sq)
+        # Normalise via a single scalar division at the end (flux-conserving),
+        # avoiding the broadcast division of every kernel element.
+        return jnp.dot(kernel, wm) / jnp.sum(kernel)
 
     return jax.vmap(_at)(jnp.arange(len(x_fine)))

@@ -52,6 +52,18 @@ Output shape: ``(n_lines, n_points)``.
 """
 
 
+evaluate_lines_at_own_centers = jax.vmap(
+    _evaluate_single_line, in_axes=(0, 0, 0, 0, 0, 0, 0)
+)
+"""Evaluate each line at its own center wavelength.
+
+Each input has shape ``(n_lines,)``; line *j* is evaluated only at
+``wavelength[j]``.  Output shape: ``(n_lines,)``.  Cheaper than calling
+:data:`evaluate_lines` and taking the diagonal — avoids the O(n²) work
+of evaluating every profile at every center.
+"""
+
+
 # -------------------------------------------------------------------
 # Analytic (CDF-based) integration
 # -------------------------------------------------------------------

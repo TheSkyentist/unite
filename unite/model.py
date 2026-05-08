@@ -24,7 +24,11 @@ from unite._compose import compose_from_profiles
 from unite._utils import C_KMS, _get_conversion_factor
 from unite.continuum.compute import eval_continuum, integrate_continuum
 from unite.continuum.config import ContinuumConfiguration
-from unite.line.compute import evaluate_lines, integrate_lines
+from unite.line.compute import (
+    evaluate_lines,
+    evaluate_lines_at_own_centers,
+    integrate_lines,
+)
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum import Spectra, Spectrum
@@ -146,6 +150,7 @@ def unite_model(args: ModelArgs) -> None:
     cm = args.matrices
     z_sys = args.redshift
     n_lines = cm.wavelengths.shape[0]
+    has_tau = bool(cm.tau_names)
 
     # --- 1. Sample all parameters in dependency order ---
     # Two parallel dicts are maintained:
@@ -237,10 +242,11 @@ def unite_model(args: ModelArgs) -> None:
     # not the absolute maximum; document this for users of those profiles.
     if cm.tau_names:
         _tiny_lsf = jnp.full_like(centers, 1e-10)
-        _phi_all = evaluate_lines(
+        # Evaluate each line at its own center only — n_lines evaluations rather
+        # than the n_lines² produced by evaluate_lines + jnp.diag.
+        _phi_center = evaluate_lines_at_own_centers(
             centers, centers, _tiny_lsf, p0, p1, p2, cm.profile_codes
-        )  # (n_lines, n_lines): row j = line j evaluated at all centers
-        _phi_center = jnp.diag(_phi_all)  # (n_lines,): phi_j(center_j)
+        )
         _phi_safe = jnp.where(cm.is_tau, _phi_center, 1.0)
         tau_per_line = tau_per_line / _phi_safe
 
@@ -326,6 +332,7 @@ def unite_model(args: ModelArgs) -> None:
                     cm.applies_matrix,
                     args.cont_applies,
                     cont,
+                    has_tau=has_tau,
                 )
                 return _fs * total
 
@@ -372,6 +379,7 @@ def unite_model(args: ModelArgs) -> None:
                     cm.applies_matrix,
                     args.cont_applies,
                     cont,
+                    has_tau=has_tau,
                 )
 
             model_fine_intrinsic = _conv_eval(x_flat)  # (n_super * n_pixels,)
@@ -406,6 +414,7 @@ def unite_model(args: ModelArgs) -> None:
                 cm.applies_matrix,
                 args.cont_applies,
                 cont,
+                has_tau=has_tau,
             )
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(

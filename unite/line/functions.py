@@ -313,8 +313,16 @@ def _voigt_ida_params(
     rho = fwhm_l / fwhm_total
     one_minus_rho = 1.0 - rho
 
-    # Powers [rho^0, ..., rho^6] for polynomial evaluation
-    rho_pows = rho ** jnp.arange(7)
+    # Powers [rho^0, ..., rho^6] via cumulative multiplication.
+    # Faster and more amenable to fusion than ``rho ** jnp.arange(7)``,
+    # which can dispatch to a generic pow() for non-integer exponents.
+    r1 = rho
+    r2 = r1 * rho
+    r3 = r2 * rho
+    r4 = r3 * rho
+    r5 = r4 * rho
+    r6 = r5 * rho
+    rho_pows = jnp.stack([jnp.ones_like(rho), r1, r2, r3, r4, r5, r6])
 
     # Effective FWHM scaling parameters (eqs. 20-23)
     wg = 1.0 - rho * jnp.dot(_IDA_A, rho_pows)
