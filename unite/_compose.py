@@ -136,7 +136,7 @@ def compose_leave_one_out(
     total = attenuated_emission + t_cont * continuum
 
     n_lines = profiles.shape[0]
-    per_line_delta = jnp.zeros_like(profiles)
+    delta_list = []
 
     for j in range(n_lines):
         if bool(is_tau[j]):
@@ -147,11 +147,10 @@ def compose_leave_one_out(
             attenuated_loo = (attenuated_per_line * jnp.exp(contrib)).sum(axis=0)
             cont_contrib = cont_applies[j] * (tau_per_line[j] * absorption_phi[j])
             total_loo = attenuated_loo + t_cont * jnp.exp(cont_contrib) * continuum
-            delta_j = total - total_loo
+            delta_list.append(total - total_loo)
         else:
             # Emission: intrinsic profile contribution (no transmission factor).
             # Preserves: sum(deltas) + continuum == total for all zorder configs.
-            delta_j = flux_per_line[j] * emission_phi[j]
-        per_line_delta = per_line_delta.at[j].set(delta_j)
+            delta_list.append(flux_per_line[j] * emission_phi[j])
 
-    return total, per_line_delta
+    return total, jnp.stack(delta_list)

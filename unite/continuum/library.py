@@ -63,47 +63,42 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
         Convolved polynomial coefficients, same descending-order convention.
     """
     sigma2 = (jnp.asarray(lsf_fwhm) / (2.0 * np.sqrt(2.0 * np.log(2.0)))) ** 2
-    n = coeffs.shape[0] - 1  # polynomial degree
-
-    # Pre-compute even moments of N(0, s^2): M[j] = (2j-1)!! s^{2j}.
-    # M[0] = 1, M[j] = M[j-1] * (2j-1) * s^2.
+    n = coeffs.shape[0] - 1  # polynomial degree; static at trace time
     max_half = n // 2 + 1
-    moments = jnp.zeros(max_half)
-    moments = moments.at[0].set(1.0)
 
-    def _moment_step(carry, j):
-        prev = carry
-        cur = prev * (2 * j - 1) * sigma2
-        return cur, cur
-
+    # Even Gaussian moments M[j] = (2j-1)!! * sigma^{2j}.
+    # M[0] = 1; M[j] = M[j-1] * (2j-1) * sigma^2 for j >= 1.
     if max_half > 1:
+
+        def _moment_step(carry, j):
+            cur = carry * (2 * j - 1) * sigma2
+            return cur, cur
+
         _, rest = jax.lax.scan(_moment_step, 1.0, jnp.arange(1, max_half))
         moments = jnp.concatenate([jnp.array([1.0]), rest])
+    else:
+        moments = jnp.ones(1)
 
-    # Pre-compute binomial coefficients C(k, 2j) for all k in [0..n].
-    # binom[k, j] = C(k, 2j). We build this with Pascal's rule.
-    binom = jnp.zeros((n + 1, max_half))
+    # Binomial coefficients C(k, 2j): pure NumPy — depends only on n (static).
+    binom_np = np.zeros((n + 1, max_half))
     for k in range(n + 1):
         for j in range(min(k // 2, max_half - 1) + 1):
-            two_j = 2 * j
-            # C(k, 2j) via explicit formula: use lax-friendly recursion
             val = 1.0
-            for m in range(two_j):
+            for m in range(2 * j):
                 val = val * (k - m) / (m + 1)
-            binom = binom.at[k, j].set(val)
+            binom_np[k, j] = val
 
-    # Build output coefficients (descending order, same as input).
-    out = jnp.zeros(n + 1)
-    # Input: coeffs[i] is the coefficient for x^(n-i).
-    # For each input monomial c * x^k (k = n - i), the convolved result
-    # adds c * C(k, 2j) * M[j] to the x^(k-2j) = x^(n - (i + 2j)) slot.
+    # Static scatter tensor: A[out_idx, i, j] = binom_np[n-i, j] when
+    # out_idx == i + 2*j (and the entry is in range), else 0.
+    # out[out_idx] = sum_i sum_j coeffs[i] * A[out_idx, i, j] * moments[j]
+    #              = einsum('oij,j,i->o', A, moments, coeffs).
+    a_np = np.zeros((n + 1, n + 1, max_half))
     for i in range(n + 1):
-        k = n - i  # power of this monomial
+        k = n - i
         for j in range(min(k // 2, max_half - 1) + 1):
-            out_idx = i + 2 * j  # slot for x^(k - 2j) in descending order
-            out = out.at[out_idx].add(coeffs[i] * binom[k, j] * moments[j])
+            a_np[i + 2 * j, i, j] = binom_np[k, j]
 
-    return out
+    return jnp.einsum('oij,j,i->o', jnp.asarray(a_np), moments, coeffs)
 
 
 def _polyint_avg(coeffs: Array, x_low: ArrayLike, x_high: ArrayLike) -> Array:
