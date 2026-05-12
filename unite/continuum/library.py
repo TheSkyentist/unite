@@ -948,10 +948,7 @@ class BSpline(ContinuumForm):
         )
         shape = bspline_eval(u, shape_coeffs, knots_norm, self._degree)
         _snw = bspline_eval(
-            jnp.atleast_1d(u_nw),
-            shape_coeffs,
-            knots_norm,
-            self._degree,
+            jnp.atleast_1d(u_nw), shape_coeffs, knots_norm, self._degree
         )
         shape_nw = _snw[0]
         return params['scale'] * shape / shape_nw

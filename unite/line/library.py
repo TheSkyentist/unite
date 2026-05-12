@@ -556,6 +556,71 @@ class SplitNormal(Profile):
 
 
 @_register
+class GaussianSplitLaplace(Profile):
+    """Asymmetric Exponentially Modified Gaussian (asymmetric EMG) line profile.
+
+    A Gaussian (with LSF) convolved with a split-Laplace (asymmetric
+    double-exponential) distribution, where the blue (short-wavelength)
+    and red (long-wavelength) exponential tails are controlled
+    independently.  When ``fwhm_l_blue == fwhm_l_red`` this reduces
+    exactly to :class:`SEMG`.
+
+    Pixel integration is analytic via the closed-form antiderivative of
+    the Gaussian-split-Laplace CDF.
+
+    Requires three parameters: ``fwhm_gauss`` for the intrinsic Gaussian
+    component, ``fwhm_l_blue`` for the blue-side Laplacian exponential
+    tail, and ``fwhm_l_red`` for the red-side Laplacian exponential tail.
+    The instrumental LSF is added in quadrature to the Gaussian component.
+    """
+
+    code = 10
+
+    @override
+    def param_names(self) -> tuple[str, ...]:
+        return ('fwhm_gauss', 'fwhm_l_blue', 'fwhm_l_red')
+
+    @override
+    def default_priors(self) -> dict[str, Prior]:
+        return {
+            'fwhm_gauss': Uniform(0, 1000),
+            'fwhm_l_blue': Uniform(0, 1000),
+            'fwhm_l_red': Uniform(0, 1000),
+        }
+
+    @override
+    def integrate_branch(self):
+        def _fn(lo, hi, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss, p1 = fwhm_l_blue, p2 = fwhm_l_red
+            return functions.integrate_gaussianSplitLaplace(lo, hi, c, lsf, p0, p1, p2)
+
+        return _fn
+
+    @override
+    def evaluate_branch(self):
+        def _fn(wavelength, c, lsf, p0, p1, p2):
+            # p0 = fwhm_gauss, p1 = fwhm_l_blue, p2 = fwhm_l_red
+            return functions.evaluate_gaussianSplitLaplace(
+                wavelength, c, lsf, p0, p1, p2
+            )
+
+        return _fn
+
+    @override
+    def to_dict(self) -> dict:
+        return {'type': 'GaussianSplitLaplace'}
+
+    @classmethod
+    @override
+    def from_dict(cls, d: dict) -> GaussianSplitLaplace:
+        return cls()
+
+    @override
+    def __repr__(self) -> str:
+        return 'GaussianSplitLaplace()'
+
+
+@_register
 class SkewNormal(Profile):
     """Skew-normal line profile.
 
@@ -758,6 +823,10 @@ _PROFILE_ALIASES: dict[str, Profile] = {
     'boxgauss': BoxGauss(),
     'box-gauss': BoxGauss(),
     'boxcar': BoxGauss(),
+    'gaussiansplitlaplace': GaussianSplitLaplace(),
+    'gaussian-split-laplace': GaussianSplitLaplace(),
+    'asymmetric-emg': GaussianSplitLaplace(),
+    'aemg': GaussianSplitLaplace(),
 }
 
 

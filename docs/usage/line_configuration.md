@@ -265,6 +265,7 @@ Profiles are set via the `profile` argument (case-insensitive strings or class i
 | `'skew-normal'`, `'skewnormal'` | `SkewNormal` | `fwhm_gauss` | `alpha` | analytic |
 | `'skew-voigt'`, `'skewvoigt'` | `SkewVoigt` | `fwhm_gauss`, `fwhm_lorentz` | `alpha` | midpoint rule |
 | `'boxgauss'`, `'box-gauss'`, `'boxcar'` | `BoxGauss` | `fwhm_box`, `fwhm_gauss` | | analytic |
+| `'gaussiansplitlaplace'`, `'gaussian-split-laplace'`, `'aemg'` | `GaussianSplitLaplace` | `fwhm_gauss`, `fwhm_l_blue`, `fwhm_l_red` | | analytic |
 
 ### Gaussian (default)
 
@@ -440,6 +441,26 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='BoxGauss',
             redshift=z,
             fwhm_box=line.FWHM('box', prior=prior.Uniform(100, 2000)),
             fwhm_gauss=line.FWHM('g', prior=prior.Uniform(0, 500)),
+            flux=flux)
+```
+
+### GaussianSplitLaplace (Asymmetric EMG)
+
+A Gaussian (with LSF) convolved with a split-Laplace (asymmetric
+double-exponential) distribution, where the blue (short-wavelength) and
+red (long-wavelength) exponential tails are controlled independently.
+When ``fwhm_l_blue == fwhm_l_red`` the profile reduces exactly to
+:class:`SEMG`. The exact pixel integral is computed analytically via the
+closed-form antiderivative of the Gaussian–split-Laplace CDF.
+
+**Parameters:** `fwhm_gauss` (km/s), `fwhm_l_blue` (km/s), `fwhm_l_red` (km/s)
+
+```python
+lc.add_line('H_alpha', 6563.0 * u.AA, profile='GaussianSplitLaplace',
+            redshift=z,
+            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
+            fwhm_l_blue=line.FWHM('lb', prior=prior.Uniform(0, 500)),
+            fwhm_l_red=line.FWHM('lr', prior=prior.Uniform(0, 500)),
             flux=flux)
 ```
 

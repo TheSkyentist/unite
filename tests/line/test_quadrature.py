@@ -14,6 +14,7 @@ from unite.line.library import (
     Cauchy,
     GaussHermite,
     Gaussian,
+    GaussianSplitLaplace,
     Laplace,
     PseudoVoigt,
     SkewNormal,
@@ -60,6 +61,10 @@ _ALL_PROFILES = [
     (GaussHermite(), {'fwhm_gauss': 80.0, 'h3': 0.1, 'h4': 0.05}),
     (SplitNormal(), {'fwhm_blue': 100.0, 'fwhm_red': 60.0}),
     (SkewNormal(), {'fwhm_gauss': 80.0, 'alpha': 2.0}),
+    (
+        GaussianSplitLaplace(),
+        {'fwhm_gauss': 80.0, 'fwhm_l_blue': 60.0, 'fwhm_l_red': 40.0},
+    ),
 ]
 
 

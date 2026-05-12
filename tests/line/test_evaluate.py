@@ -15,6 +15,7 @@ from unite.line.library import (
     Cauchy,
     GaussHermite,
     Gaussian,
+    GaussianSplitLaplace,
     Laplace,
     PseudoVoigt,
     SkewNormal,
@@ -465,6 +466,10 @@ _PROFILE_EVALUATE_PARAMS = [
     (SkewVoigt(), {'fwhm_gauss': 80.0, 'fwhm_lorentz': 50.0, 'alpha': 0.5}),
     (BoxGauss(), {'fwhm_box': 300.0, 'fwhm_gauss': 100.0}),
     (SkewNormal(), {'fwhm_gauss': 80.0, 'alpha': 2.0}),
+    (
+        GaussianSplitLaplace(),
+        {'fwhm_gauss': 80.0, 'fwhm_l_blue': 60.0, 'fwhm_l_red': 40.0},
+    ),
 ]
 
 
@@ -670,3 +675,65 @@ class TestEvaluateSkewNormal:
 
         # Larger LSF → alpha_eff closer to 0 → red fraction closer to 0.5
         assert red_fraction(5.0) > red_fraction(200.0)
+
+
+# ---------------------------------------------------------------------------
+# GaussianSplitLaplace
+# ---------------------------------------------------------------------------
+
+
+class TestGaussianSplitLaplace:
+    """Tests for integrate_gaussianSplitLaplace and evaluate_gaussianSplitLaplace."""
+
+    center = 5000.0
+    lsf_fwhm = 5.0
+    edges = jnp.linspace(4000.0, 6000.0, 2001)
+    lo, hi = edges[:-1], edges[1:]
+    wavelength = jnp.linspace(4000.0, 6000.0, 10000)
+
+    def test_integrate_normalizes(self):
+        """integrate_gaussianSplitLaplace sums to ~1 over a wide range."""
+        result = functions.integrate_gaussianSplitLaplace(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 60.0, 40.0
+        )
+        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=1e-4)
+
+    def test_evaluate_normalizes(self):
+        """evaluate_gaussianSplitLaplace integrates to ~1 over a wide range."""
+        result = functions.evaluate_gaussianSplitLaplace(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0, 60.0, 40.0
+        )
+        integral = float(jnp.trapezoid(result, self.wavelength))
+        assert integral == pytest.approx(1.0, rel=0.01)
+
+    def test_symmetric_matches_semg(self):
+        """When fwhm_l_blue == fwhm_l_red, the profile matches SEMG."""
+        fwhm_l = 60.0
+        gsl = functions.integrate_gaussianSplitLaplace(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, fwhm_l, fwhm_l
+        )
+        semg = functions.integrate_gaussianLaplace(
+            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, fwhm_l
+        )
+        assert jnp.allclose(gsl, semg, rtol=1e-5)
+
+    def test_asymmetry_shifts_peak(self):
+        """Larger red-side tail shifts the profile peak redward."""
+        # More red tail (fwhm_l_red=200) → peak displaced red-ward
+        result_red = functions.evaluate_gaussianSplitLaplace(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0, 30.0, 200.0
+        )
+        # More blue tail (fwhm_l_blue=200) → peak displaced blue-ward
+        result_blue = functions.evaluate_gaussianSplitLaplace(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0, 200.0, 30.0
+        )
+        peak_red = self.wavelength[int(jnp.argmax(result_red))]
+        peak_blue = self.wavelength[int(jnp.argmax(result_blue))]
+        assert float(peak_red) > float(peak_blue)
+
+    def test_evaluate_nonneg(self):
+        """evaluate_gaussianSplitLaplace is non-negative everywhere."""
+        result = functions.evaluate_gaussianSplitLaplace(
+            self.wavelength, self.center, self.lsf_fwhm, 80.0, 60.0, 40.0
+        )
+        assert jnp.all(result >= 0.0)
