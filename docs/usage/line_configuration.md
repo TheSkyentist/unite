@@ -448,9 +448,8 @@ lc.add_line('H_alpha', 6563.0 * u.AA, profile='BoxGauss',
 
 A Gaussian (with LSF) convolved with a split-Laplace (asymmetric
 double-exponential) distribution, where the blue (short-wavelength) and
-red (long-wavelength) exponential tails are controlled independently.
-When ``fwhm_l_blue == fwhm_l_red`` the profile reduces exactly to
-:class:`SEMG`. The exact pixel integral is computed analytically via the
+red (long-wavelength) exponential tails are controlled independently. 
+The exact pixel integral is computed analytically via the
 closed-form antiderivative of the Gaussian–split-Laplace CDF.
 
 **Parameters:** `fwhm_gauss` (km/s), `fwhm_l_blue` (km/s), `fwhm_l_red` (km/s)
