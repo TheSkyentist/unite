@@ -893,15 +893,15 @@ class TestPseudoVoigtModel:
 
 
 # ---------------------------------------------------------------------------
-# GaussHermite profile covers model.py p1d/p2 branches (lines 167-168, 175-176)
+# GaussHermite profile covers model.py p1d/p2d branches
 # ---------------------------------------------------------------------------
 
 
 class TestGaussHermiteModel:
-    """Test that a GaussHermite line covers p1d_names and p2_names branches."""
+    """Test that a GaussHermite line covers p1d_names and p2d_names branches."""
 
     def test_gausshermite_model_runs(self):
-        """Model with GaussHermite covers p1d and p2 branches in unite_model."""
+        """Model with GaussHermite covers p1d and p2d branches in unite_model."""
         from jax import random as jrandom
         from numpyro.infer import Predictive
 
@@ -941,9 +941,9 @@ class TestGaussHermiteModel:
 
         model_fn, args = _prepare_and_build(lc, None, spectra)
 
-        # p1d_names should have h3, p2_names should have h4
+        # p1d_names should have h3, p2d_names should have h4
         assert len(args.matrices.p1d_names) > 0
-        assert len(args.matrices.p2_names) > 0
+        assert len(args.matrices.p2d_names) > 0
 
         rng_key = jrandom.PRNGKey(0)
         predictive = Predictive(model_fn, num_samples=2)

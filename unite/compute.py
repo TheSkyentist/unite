@@ -182,11 +182,17 @@ def evaluate_model(
             )
             p1 = p1v + p1d
 
-            p2 = (
-                jnp.stack([params[n] for n in cm.p2_names]) @ cm.p2_matrix
-                if cm.p2_names
+            p2v_kms = (
+                jnp.stack([params[n] for n in cm.p2v_names]) @ cm.p2v_matrix
+                if cm.p2v_names
                 else jnp.zeros(n_lines)
             )
+            p2d = (
+                jnp.stack([params[n] for n in cm.p2d_names]) @ cm.p2d_matrix
+                if cm.p2d_names
+                else jnp.zeros(n_lines)
+            )
+            p2 = centers * p2v_kms / C_KMS + p2d
 
             # --- Convert peak-tau to area-tau ---
             if cm.tau_names:

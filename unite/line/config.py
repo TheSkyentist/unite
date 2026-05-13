@@ -274,10 +274,15 @@ class ConfigMatrices:
     #: Indicator matrix for slot-1 dimensionless parameters. Shape ``(n_p1d, n_lines)``.
     p1d_matrix: jnp.ndarray
 
-    #: NumPyro site names for slot-2 (tertiary dimensionless) parameters.
-    p2_names: list[str]
-    #: Indicator matrix for slot-2 parameters. Shape ``(n_p2, n_lines)``.
-    p2_matrix: jnp.ndarray
+    #: NumPyro site names for velocity FWHM parameters in slot 2.
+    p2v_names: list[str]
+    #: Indicator matrix for slot-2 velocity parameters. Shape ``(n_p2v, n_lines)``.
+    p2v_matrix: jnp.ndarray
+
+    #: NumPyro site names for dimensionless shape parameters in slot 2.
+    p2d_names: list[str]
+    #: Indicator matrix for slot-2 dimensionless parameters. Shape ``(n_p2d, n_lines)``.
+    p2d_matrix: jnp.ndarray
 
     #: NumPyro site names for unique tau (optical depth) parameters.
     tau_names: list[str]
@@ -773,11 +778,12 @@ class LineConfiguration:
         # Assign profile params to slots based on each profile's param_names() order.
         # Slot 0: first param (always a velocity FWHM, name starts with 'fwhm').
         # Slot 1: second param — velocity FWHM (→ p1v) or dimensionless (→ p1d).
-        # Slot 2: third param (always dimensionless, only h4 currently).
+        # Slot 2: third param — velocity FWHM (→ p2v) or dimensionless (→ p2d).
         p0_pairs: list[tuple[int, object]] = []
         p1v_pairs: list[tuple[int, object]] = []
         p1d_pairs: list[tuple[int, object]] = []
-        p2_pairs: list[tuple[int, object]] = []
+        p2v_pairs: list[tuple[int, object]] = []
+        p2d_pairs: list[tuple[int, object]] = []
 
         for j, entry in enumerate(self):
             pnames = entry.profile.param_names()
@@ -787,12 +793,14 @@ class LineConfiguration:
                 pn1, tok1 = pnames[1], entry.fwhms[pnames[1]]
                 (p1v_pairs if pn1.startswith('fwhm') else p1d_pairs).append((j, tok1))
             if len(pnames) >= 3:
-                p2_pairs.append((j, entry.fwhms[pnames[2]]))
+                pn2, tok2 = pnames[2], entry.fwhms[pnames[2]]
+                (p2v_pairs if pn2.startswith('fwhm') else p2d_pairs).append((j, tok2))
 
         p0_names, p0_matrix = _slot_matrix(p0_pairs, n)
         p1v_names, p1v_matrix = _slot_matrix(p1v_pairs, n)
         p1d_names, p1d_matrix = _slot_matrix(p1d_pairs, n)
-        p2_names, p2_matrix = _slot_matrix(p2_pairs, n)
+        p2v_names, p2v_matrix = _slot_matrix(p2v_pairs, n)
+        p2d_names, p2d_matrix = _slot_matrix(p2d_pairs, n)
 
         # Collect priors from all unique tokens.
         priors: dict[str, Prior] = {}
@@ -817,8 +825,10 @@ class LineConfiguration:
             p1v_matrix=p1v_matrix,
             p1d_names=p1d_names,
             p1d_matrix=p1d_matrix,
-            p2_names=p2_names,
-            p2_matrix=p2_matrix,
+            p2v_names=p2v_names,
+            p2v_matrix=p2v_matrix,
+            p2d_names=p2d_names,
+            p2d_matrix=p2d_matrix,
             tau_names=tau_names,
             tau_matrix=tau_matrix,
             is_tau=is_tau,

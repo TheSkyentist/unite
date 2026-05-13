@@ -214,12 +214,20 @@ def unite_model(args: ModelArgs) -> None:
         p1d = jnp.zeros(n_lines)
     p1 = p1v + p1d  # for any line, only one sub-matrix is nonzero
 
-    # Slot 2: dimensionless params only.
-    if cm.p2_names:
-        p2_vec = jnp.stack([context[n] for n in cm.p2_names])
-        p2 = p2_vec @ cm.p2_matrix  # (n_lines,)
+    # Slot 2: velocity FWHMs (p2v) + dimensionless params (p2d), summed.
+    if cm.p2v_names:
+        p2v_vec = jnp.stack([context[n] for n in cm.p2v_names])
+        p2v_kms = p2v_vec @ cm.p2v_matrix  # (n_lines,)
     else:
-        p2 = jnp.zeros(n_lines)
+        p2v_kms = jnp.zeros(n_lines)
+    p2v = centers * p2v_kms / C_KMS
+
+    if cm.p2d_names:
+        p2d_vec = jnp.stack([context[n] for n in cm.p2d_names])
+        p2d = p2d_vec @ cm.p2d_matrix  # (n_lines,), dimensionless
+    else:
+        p2d = jnp.zeros(n_lines)
+    p2 = p2v + p2d
 
     # --- 2b. Convert peak-tau to area-tau ---
     if cm.tau_names:
