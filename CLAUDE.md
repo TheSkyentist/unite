@@ -134,14 +134,49 @@ Structure:
 
 All public classes and methods require NumPy-style docstrings. Type hints appear in the description (not the signature) via `autodoc_typehints = 'description'`.
 
+## Benchmarks
+
+Performance suite lives in `benchmarks/` (a Python package, separate from `tests/`). Three layers:
+
+- `bench_kernels.py` — microbenchmarks for inner JAX primitives. Includes parametrized per-`Profile` `integrate`/`evaluate` benchmarks (auto-covers every registered `Profile` subclass via `PROFILE_CLASSES` in `_helpers.py`).
+- `bench_endtoend.py` — `log_density` and `value_and_grad` of the full numpyro model on three canonical configs (`minimal`, `single_grating`, `multi_grating`), plus parametrized variants over all three `integration_mode` values and an absorber-only A/B against pure-emission single-grating. Short MCMC runs are included as `@pytest.mark.slow`.
+- `bench_compile.py` — cold-cache JIT trace + lowering time, measured via `benchmark.pedantic` + `jax.clear_caches()` between rounds. All `@pytest.mark.slow`. Skipped under pytest-codspeed (which lacks `.pedantic`).
+
+Shared scaffolding:
+
+- `benchmarks/_helpers.py` — `Bench` container, `block()`, synthetic-spectrum factory, three canonical `cfg_*` builders (`cfg_minimal`, `cfg_single_grating`, `cfg_single_grating_with_absorber`, `cfg_multi_grating`), `PROFILE_CLASSES`, `default_param_for(name)`.
+- `benchmarks/conftest.py` — session-scoped fixtures (`minimal_bench`, `single_grating_bench`, `single_grating_absorber_bench`, `multi_grating_bench`) and a parametrized `single_grating_by_mode` fixture covering all three integration modes.
+- `profiling/profile_fit.py` — standalone CLI: runs a fit under `jax.profiler.trace` (Perfetto trace), with `--memory` for a device-memory pprof and `--pyinstrument` for a Python sampling profile.
+
+### Running
+
+```bash
+pixi run bench              # full local wall-time suite (pytest-benchmark)
+pixi run bench-save         # save baseline JSON under .benchmarks/
+pixi run bench-compare      # compare current vs baseline
+pixi run profile            # write a Perfetto trace to traces/
+pixi run profile-mem        # also dump device memory pprof
+```
+
+CI runs `pixi run -e bench-ci pytest benchmarks/ --codspeed -m "not slow"` via `bench.yml` (pytest-codspeed in instrumentation mode). The repo must be onboarded at <https://codspeed.io> for results to post; the workflow itself runs regardless.
+
+### Adding a benchmark
+
+- Name files `bench_*.py` and functions `test_*` so they're picked up by `python_files = ["test_*.py", "bench_*.py"]`.
+- JIT-compile the target, call once to warm the cache, then `benchmark(lambda: block(fn(...)))`. Always `block_until_ready()` — otherwise you measure async dispatch, not compute.
+- Mark anything taking more than ~0.5 s with `@pytest.mark.slow` (CI excludes those).
+- New `Profile` subclasses auto-appear in the per-profile benchmarks if added to `PROFILE_CLASSES` in `_helpers.py`. New profile param names (beyond `fwhm_*`, `h3`/`h4`, `alpha`) need an entry in `default_param_for`.
+- New integration modes need to be added to `INTEGRATION_MODES` in `conftest.py` so the parametrized fixture covers them.
+
 ## CI/CD
 
-Four GitHub Actions workflows, all targeting `main`:
+Five GitHub Actions workflows, all targeting `main`:
 
 | Workflow          | Trigger                                      | Purpose                                                                             |
 | ----------------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `ci.yml`          | push/PR to `main`                            | format check, lint, tests on Python 3.12–3.14; coverage uploaded to Codecov on 3.14 |
 | `docs.yml`        | PR to `main` + manual                        | builds Sphinx docs (including executing all tutorials)                              |
+| `bench.yml`       | PR to `main` + manual                        | runs the benchmark suite under CodSpeed; informational PR comments, never blocks    |
 | `autorelease.yml` | push to `main` when `pyproject.toml` changes | creates a GitHub Release for the new version tag                                    |
 | `publish.yml`     | GitHub Release published                     | builds sdist + wheel, publishes to PyPI via trusted publishing                      |
 

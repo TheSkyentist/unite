@@ -26,6 +26,12 @@ htmlcov/
 .tox/
 .nox/
 
+# Benchmark and profiling artifacts
+.benchmarks/
+.codspeed/
+artifacts/
+traces/
+
 # Sphinx documentation
 docs/_build/
 docs/_static/
