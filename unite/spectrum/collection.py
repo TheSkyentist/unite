@@ -552,7 +552,11 @@ class Spectra:
                         break
                 if has_line:
                     kept.append(region)
-            filtered_cont = ContinuumConfiguration(kept) if kept else None
+            filtered_cont = (
+                ContinuumConfiguration(kept, zorder=filtered_cont.zorder)
+                if kept
+                else None
+            )
 
         self._prepared_line_config = filtered_lines
         self._prepared_cont_config = filtered_cont
@@ -643,7 +647,9 @@ class Spectra:
                         break
                 if region_covered:
                     kept.append(region)
-            filtered_cont: ContinuumConfiguration | None = ContinuumConfiguration(kept)
+            filtered_cont: ContinuumConfiguration | None = ContinuumConfiguration(
+                kept, zorder=continuum_config.zorder
+            )
         else:
             filtered_cont = None
 

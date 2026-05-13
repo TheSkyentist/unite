@@ -1288,6 +1288,46 @@ class TestAbsorptionModel:
         samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
         assert 'obs_abs_spec' in samples
 
+    def test_zorder_continuum_zorder_preserved_through_prepare(self):
+        """Continuum zorder must survive filter_config / prepare.
+
+        Regression guard: filter_config previously created ContinuumConfiguration(kept)
+        without forwarding zorder, silently resetting it to 0 and causing every tau
+        line to absorb the continuum regardless of the user's intent.
+        """
+        from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
+        from unite.continuum.library import Linear
+        from unite.line.library import Gaussian
+
+        spec = _create_absorption_spectrum()
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(2.0)),
+            zorder=1,  # behind the continuum (cont zorder=2)
+        )
+        # Continuum has a higher zorder than the absorber → absorber should NOT
+        # attenuate the continuum (1 > 2 is False).
+        cc = ContinuumConfiguration(
+            [ContinuumRegion(6400.0 * u.AA, 6700.0 * u.AA, form=Linear())], zorder=2
+        )
+        spectra = Spectra([spec], redshift=0.0)
+        lc_prep, cc_prep = spectra.prepare(lc, cc)
+
+        # The prepared continuum config must preserve the user-supplied zorder.
+        assert cc_prep is not None
+        assert cc_prep.zorder == 2
+
+        spectra.line_scale = 1.0 * u.Unit('1e-17 erg / (s cm2)')
+        spectra.continuum_scale = 1.0 * u.Unit('1e-17 erg / (s cm2 AA)')
+        _, args = model.ModelBuilder(lc_prep, cc_prep, spectra).build()
+
+        # tau at zorder 1, continuum at zorder 2: 1 > 2 is False → no attenuation
+        assert not bool(args.cont_applies[0])
+
     def test_absorption_only_model(self):
         """Model with only absorption lines (no emission) builds and runs."""
         from unite.line.library import Gaussian
