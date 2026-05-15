@@ -138,9 +138,7 @@ class ModelArgs:
 # ------------------------------------------------------------------
 
 
-def _make_specialized_dispatch(
-    profile_codes: jnp.ndarray,
-) -> tuple[Any, Any, Any, Any]:
+def _make_specialized_dispatch(profile_codes: jnp.ndarray) -> tuple[Any, Any, Any, Any]:
     """Build per-config vmapped dispatch functions with only used profile branches.
 
     Returns ``(profile_codes_local, integrate_fn, evaluate_fn, evaluate_at_centers_fn)``.
@@ -157,12 +155,22 @@ def _make_specialized_dispatch(
 
     n_all = len(_INTEGRATE_BRANCHES)
     if len(profile_codes) == 0:
-        return profile_codes, integrate_lines, evaluate_lines, evaluate_lines_at_own_centers
+        return (
+            profile_codes,
+            integrate_lines,
+            evaluate_lines,
+            evaluate_lines_at_own_centers,
+        )
 
     used_codes = sorted({int(c) for c in profile_codes})
 
     if len(used_codes) == n_all:
-        return profile_codes, integrate_lines, evaluate_lines, evaluate_lines_at_own_centers
+        return (
+            profile_codes,
+            integrate_lines,
+            evaluate_lines,
+            evaluate_lines_at_own_centers,
+        )
 
     code_to_local = {code: idx for idx, code in enumerate(used_codes)}
     local_codes = jnp.array([code_to_local[int(c)] for c in profile_codes])
@@ -170,10 +178,14 @@ def _make_specialized_dispatch(
     eval_branches = [_EVALUATE_BRANCHES[c] for c in used_codes]
 
     def _int_single(low, high, center, lsf_fwhm, p0, p1, p2, code):
-        return jax.lax.switch(code, int_branches, low, high, center, lsf_fwhm, p0, p1, p2)
+        return jax.lax.switch(
+            code, int_branches, low, high, center, lsf_fwhm, p0, p1, p2
+        )
 
     def _eval_single(wavelength, center, lsf_fwhm, p0, p1, p2, code):
-        return jax.lax.switch(code, eval_branches, wavelength, center, lsf_fwhm, p0, p1, p2)
+        return jax.lax.switch(
+            code, eval_branches, wavelength, center, lsf_fwhm, p0, p1, p2
+        )
 
     spec_integrate = jax.vmap(_int_single, in_axes=(None, None, 0, 0, 0, 0, 0, 0))
     spec_evaluate = jax.vmap(_eval_single, in_axes=(None, 0, 0, 0, 0, 0, 0))
@@ -210,7 +222,11 @@ def unite_model(args: ModelArgs) -> None:
     has_tau = bool(cm.tau_names)
 
     # Resolve per-config dispatch functions (fall back to module-level if not set).
-    _pcodes = args._profile_codes_local if args._profile_codes_local is not None else cm.profile_codes
+    _pcodes = (
+        args._profile_codes_local
+        if args._profile_codes_local is not None
+        else cm.profile_codes
+    )
     _int_fn = args._integrate_fn if args._integrate_fn is not None else integrate_lines
     _eval_fn = args._evaluate_fn if args._evaluate_fn is not None else evaluate_lines
 
@@ -298,7 +314,13 @@ def unite_model(args: ModelArgs) -> None:
     # --- 2b. Convert peak-tau to area-tau ---
     if cm.tau_names:
         tau_per_line = _peak_to_area_tau(
-            tau_per_line, centers, p0, p1, p2, _pcodes, cm.is_tau,
+            tau_per_line,
+            centers,
+            p0,
+            p1,
+            p2,
+            _pcodes,
+            cm.is_tau,
             _eval_fn=args._evaluate_at_centers_fn,
         )
 
@@ -449,9 +471,9 @@ def unite_model(args: ModelArgs) -> None:
             # Analytic: integrate each line profile individually via CDF,
             # then combine.  Exact for flux-parametrized lines; approximate
             # for tau-parametrized lines (integrates phi before applying exp).
-            pixints = _int_fn(
-                low, high, centers, lsf_fwhm, p0, p1, p2, _pcodes
-            ) / (high - low)
+            pixints = _int_fn(low, high, centers, lsf_fwhm, p0, p1, p2, _pcodes) / (
+                high - low
+            )
             cont = (
                 integrate_continuum(low, high, args, context, z_sys, cont_lsf_fwhm)
                 * cont_scale_norm

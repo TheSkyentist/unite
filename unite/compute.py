@@ -86,7 +86,11 @@ def evaluate_model(
     has_tau = bool(cm.tau_names)
 
     # Resolve per-config dispatch (specialized to used profiles, or module-level fallback).
-    _pcodes = args._profile_codes_local if args._profile_codes_local is not None else cm.profile_codes
+    _pcodes = (
+        args._profile_codes_local
+        if args._profile_codes_local is not None
+        else cm.profile_codes
+    )
     _int_fn = args._integrate_fn if args._integrate_fn is not None else integrate_lines
     _eval_fn = args._evaluate_fn if args._evaluate_fn is not None else evaluate_lines
 
@@ -211,7 +215,13 @@ def evaluate_model(
             # --- Convert peak-tau to area-tau ---
             if cm.tau_names:
                 tau_per_line = _peak_to_area_tau(
-                    tau_per_line, centers, p0, p1, p2, _pc, cm.is_tau,
+                    tau_per_line,
+                    centers,
+                    p0,
+                    p1,
+                    p2,
+                    _pc,
+                    cm.is_tau,
                     _eval_fn=args._evaluate_at_centers_fn,
                 )
 
@@ -245,9 +255,7 @@ def evaluate_model(
             # For emission-only models has_tau is a Python False at trace time, so
             # the entire evaluate_lines call is compiled out of the XLA program.
             if has_tau:
-                phi_mid = _efn(
-                    wavelength, centers, lsf_fwhm, p0, p1, p2, _pc
-                )
+                phi_mid = _efn(wavelength, centers, lsf_fwhm, p0, p1, p2, _pc)
                 tau_profiles_arr = jnp.where(
                     cm.is_tau[:, None], tau_per_line[:, None] * phi_mid, 0.0
                 )
@@ -386,9 +394,9 @@ def evaluate_model(
                 return total, line_contribs, cont_regions_scaled, tau_profiles_arr
             else:
                 # Analytic: CDF-based per-line integration, then compose.
-                pixints = _ifn(
-                    low, high, centers, lsf_fwhm, p0, p1, p2, _pc
-                ) / (high - low)
+                pixints = _ifn(low, high, centers, lsf_fwhm, p0, p1, p2, _pc) / (
+                    high - low
+                )
                 total, line_contribs = compose_leave_one_out(
                     pixints,
                     scaled_flux,
