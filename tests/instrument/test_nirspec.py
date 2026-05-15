@@ -1,5 +1,6 @@
 """Tests for NIRSpec disperser and spectrum loader."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import jax.numpy as jnp
@@ -354,3 +355,46 @@ class TestFromDJA:
             spec = from_DJA('fake.fits', disperser)
 
         assert spec.name == disperser.name
+
+
+# ---------------------------------------------------------------------------
+# Real-file tests
+# ---------------------------------------------------------------------------
+
+_SPECTRA_DIR = Path(__file__).parent.parent / 'spectra'
+_DJA_FILE = _SPECTRA_DIR / 'rubies-uds31-v4_prism-clear_4233_154183.spec.fits.gz'
+
+
+class TestFromDJARealFile:
+    """Tests for from_DJA using the real RUBIES PRISM spectrum."""
+
+    def test_loads_spectrum(self):
+        spec = from_DJA(_DJA_FILE, PRISM())
+        assert spec.npix > 0
+
+    def test_wavelength_range(self):
+        spec = from_DJA(_DJA_FILE, PRISM())
+        assert float(spec.low[0]) < 0.56
+        assert float(spec.high[-1]) > 5.4
+
+    def test_wavelength_unit_micron(self):
+        spec = from_DJA(_DJA_FILE, PRISM())
+        assert spec.unit == u.um
+
+    def test_flux_unit(self):
+        spec = from_DJA(_DJA_FILE, PRISM())
+        assert spec.flux_unit.is_equivalent(
+            u.erg / (u.s * u.cm**2 * u.um), equivalencies=u.spectral_density(1 * u.um)
+        )
+
+    def test_masked_pixels_removed(self):
+        spec = from_DJA(_DJA_FILE, PRISM())
+        assert spec.npix < 473
+
+    def test_default_name(self):
+        spec = from_DJA(_DJA_FILE, PRISM())
+        assert spec.name == 'PRISM'
+
+    def test_custom_name(self):
+        spec = from_DJA(_DJA_FILE, PRISM(), name='rubies-target')
+        assert spec.name == 'rubies-target'

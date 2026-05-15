@@ -175,6 +175,29 @@ disperser = sdss.SDSSDisperser()
 
 ---
 
+### DESI
+
+DESI spectra are split across three spectrograph arms — B (3600–5800 Å), R (5760–7620 Å), and
+Z (7520–9824 Å) — each saved as a separate set of HDUs in a single FITS file. Arms overlap by
+~40–100 Å at both junctions; `unite`'s coverage-filtering handles the overlaps naturally when each
+arm is a separate {class}`~unite.spectrum.Spectrum`.
+
+The resolving power $R(\lambda)$ is derived at load time from the banded LSF resolution matrix
+stored in the FITS file. Each pixel carries 11 diagonal-band weights; under the Gaussian LSF
+assumption their second moment gives $\sigma$ in pixels, which is converted to FWHM and then to
+$R = \lambda / \mathrm{FWHM}$.
+
+```python
+from unite.instrument import desi
+
+b = desi.DESIDisperser('B')
+r = desi.DESIDisperser('R')
+z = desi.DESIDisperser('Z')
+# Calibration tokens can be attached as with any disperser
+```
+
+---
+
 ### Generic Dispersers
 
 For instruments without built-in support, `unite` provides two generic disperser classes.
@@ -327,6 +350,62 @@ from unite.spectrum import from_sdss_fits
 
 disperser = sdss.SDSSDisperser()
 spectrum = from_sdss_fits('spec-PLATE-MJD-FIBER.fits', disperser=disperser)
+```
+
+---
+
+### from_desi_fits
+
+{func}`~unite.spectrum.from_desi_fits` loads a DESI spectrum from a native coadd FITS file. It
+returns a **list** of {class}`~unite.spectrum.Spectrum` objects — one per arm — which can be
+passed directly to {class}`~unite.spectrum.Spectra`.
+
+```python
+from unite.spectrum import from_desi_fits, Spectra
+
+spectra_list = from_desi_fits('spectra.fits')  # returns [b, r, z]
+spectra = Spectra(spectra_list, redshift=z_sys)
+```
+
+Each arm's {class}`~unite.instrument.desi.DESIDisperser` is created automatically and its
+$R(\lambda)$ grid is populated from the file's LSF resolution matrix.
+
+**Selecting arms and spectra**
+
+```python
+# Load only the R and Z arms
+spectra_list = from_desi_fits('spectra.fits', arms=['R', 'Z'])
+
+# Load the second spectrum in the file (index=0 by default)
+spectra_list = from_desi_fits('spectra.fits', index=1)
+```
+
+Arms absent from the file emit a {class}`UserWarning` and are skipped gracefully rather than
+raising an error, so the same call works on files with partial arm coverage.
+
+**Pre-constructing dispersers with calibration tokens**
+
+To attach calibration tokens before loading, pre-construct the dispersers and pass them via the
+`dispersers` argument. Arms not present in `dispersers` are created automatically.
+
+```python
+from unite.instrument import desi, FluxScale
+from unite import prior
+
+# B arm is the flux reference; R arm has a free flux scale
+r_disp = desi.DESIDisperser('R',
+    flux_scale=FluxScale(prior=prior.Uniform(0.8, 1.2))
+)
+spectra_list = from_desi_fits('spectra.fits', dispersers={'R': r_disp})
+```
+
+**Labelling spectra**
+
+The optional `name` argument sets a base label; each arm is suffixed with its lower-case letter.
+
+```python
+spectra_list = from_desi_fits('spectra.fits', name='target')
+# → spectrum names: 'target_b', 'target_r', 'target_z'
 ```
 
 ---

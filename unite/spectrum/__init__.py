@@ -10,7 +10,7 @@ The spectrum collection::
 
 Loaders::
 
-    from unite.spectrum import from_arrays, from_DJA, from_sdss_fits
+    from unite.spectrum import from_arrays, from_DJA, from_sdss_fits, from_desi_fits
 """
 
 from unite.spectrum.collection import (
@@ -19,7 +19,7 @@ from unite.spectrum.collection import (
     Spectra,
     SpectrumScaleDiagnostic,
 )
-from unite.spectrum.loaders import from_arrays, from_DJA, from_sdss_fits
+from unite.spectrum.loaders import from_arrays, from_desi_fits, from_DJA, from_sdss_fits
 from unite.spectrum.spectrum import Spectrum
 
 __all__ = [
@@ -30,5 +30,6 @@ __all__ = [
     'SpectrumScaleDiagnostic',
     'from_DJA',
     'from_arrays',
+    'from_desi_fits',
     'from_sdss_fits',
 ]

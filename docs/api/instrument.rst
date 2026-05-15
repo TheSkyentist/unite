@@ -40,3 +40,11 @@ SDSS Disperser
    :members:
    :undoc-members:
    :show-inheritance:
+
+DESI Disperser
+--------------
+
+.. automodule:: unite.instrument.desi.disperser
+   :members:
+   :undoc-members:
+   :show-inheritance:
