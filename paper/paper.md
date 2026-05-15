@@ -27,11 +27,11 @@ In particular the characterization of spectral lines, which arise from atomic an
 Therefore, the flexibility, speed, and accuracy of spectral line-fitting tools directly impact the scientific return of spectroscopic observations.
 
 `unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of spectral line features from one or more spectra simultaneously.
-It is built primarily on JAX [@jax2018github] (for speed and automatic differentiation), NumPyro [@phan2019composable; @bingham2019pyro] (for probabilistic programming), and Astropy [@astropy:2013; @astropy:2018; @astropy:2022] (for units and FITS handling), and is designed to be flexible and extensible to a wide range of spectroscopic applications.
+It is built primarily on JAX [@bradbury2018jax] (for speed and automatic differentiation), NumPyro [@phan2019numpyro; @bingham2019pyro] (for probabilistic programming), and Astropy [@astropy2013package; @astropy2018project; @astropy2022sustaining] (for units and FITS handling), and is designed to be flexible and extensible to a wide range of spectroscopic applications.
 
 # Statement of need
 
-The Near-Infrared Spectrograph (NIRSpec) on the James Webb Space Telescope (JWST) is the frontier instrument for near-infrared spectroscopy and has already provided revolutionary insights across a wide range of astrophysical topics, from the characterization of exoplanet atmospheres to the discovery of the most distant galaxies known.
+The Near-Infrared Spectrograph (NIRSpec; @jakobsen2022nirspec) on the James Webb Space Telescope (JWST; @gardner2023jwst) is the frontier instrument for near-infrared spectroscopy and has already provided revolutionary insights across a wide range of astrophysical topics, from the characterization of exoplanet atmospheres to the discovery of the most distant galaxies known.
 However, a defining challenge of NIRSpec spectroscopy is that the detector critically undersamples the instrumental line spread function (LSF) across all gratings and observing modes.
 Therefore, evaluating the model at pixel centers rather than integrating over the pixel domains introduces systematic errors in recovered fluxes and line widths, which can bias scientific inferences.
 When existing spectral line fitting tools can account for this, they typically do so via computationally and memory expensive super-sampling and convolution.
@@ -60,36 +60,36 @@ All configurations are serializable to human-readable YAML for reproducibility a
 `unite` assembles a NumPyro probabilistic model for inference with any compatible sampler, including SVI for quick exploratory fits, NUTS for full posterior sampling, and nested sampling for model comparison and evidence calculation.
 Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS HDU lists.
 
-The package is publicly available on GitHub and PyPI under the GPL-3.0-or-later license, with a DOI minted via Zenodo [@unite_zenodo] and accompanied by Sphinx documentation including narrative guides, an API reference, and executable tutorials. CI/CD workflows ensure that the code is tested and documented with each update, and the project is open to feedback and contributions from the community.
+The package is publicly available on GitHub and PyPI under the GPL-3.0-or-later license, with a DOI minted via Zenodo [@hviding2026unite] and accompanied by Sphinx documentation including narrative guides, an API reference, and executable tutorials. CI/CD workflows ensure that the code is tested and documented with each update, and the project is open to feedback and contributions from the community.
 
 # State of the field
 
 Spectral line analysis is among the most common operations in observational astronomy, and the landscape of fitting software is correspondingly rich.
 
-The dominant paradigm for emission-line fitting is non-linear least squares, with most Python codes built on `LMFIT` [@newville_2014_11813] or `scipy.optimize` [2020SciPy-NMeth] directly.
+The dominant paradigm for emission-line fitting is non-linear least squares, with most Python codes built on `LMFIT` [@newville2014lmfit] or `scipy.optimize` [@virtanen2020scipy] directly.
 
-`pPXF` [@2004PASP..116..138C; @2017MNRAS.466..798C; 2023MNRAS.526.3273C] is the standard tool for stellar kinematics and stellar-population recovery, fitting observed galaxy spectra as non-negative linear combinations of SSP templates and emission lines convolved with a parametric line-of-sight velocity distribution with optional supersampling. 
+`pPXF` [@cappellari2004ppxf; @cappellari2017ppxf; @cappellari2023ppxf] is the standard tool for stellar kinematics and stellar-population recovery, fitting observed galaxy spectra as non-negative linear combinations of SSP templates and emission lines convolved with a parametric line-of-sight velocity distribution with optional supersampling. 
 
-`PySpecKit` [@2022AJ....163..291G] is a general-purpose spectral fitting toolkit supporting a range of profile shapes and optional MCMC uncertainty estimation.
+`PySpecKit` [@ginsburg2022pyspeckit] is a general-purpose spectral fitting toolkit supporting a range of profile shapes and optional MCMC uncertainty estimation.
 
-`LiMe` [@2024A&A...688A..69F] is a modern library designed for large and complex datasets including JWST spectra, with batch fitting across many spectra and flexible profile shapes.
+`LiMe` [@fernandez2024lime] is a modern library designed for large and complex datasets including JWST spectra, with batch fitting across many spectra and flexible profile shapes.
 
-`Q3DFIT` [@2014ascl.soft09005R; 2021ascl.soft12002R; 2023ascl.soft10004R] targets IFU spectroscopy of quasar host galaxies, fitting multi-component Gaussian profiles via least squares with the stellar continuum pre-subtracted using `pPXF`.
+`Q3DFIT` [@rupke2014ifsfit; @rupke2021questfit; @rupke2023q3dfit] targets IFU spectroscopy of quasar host galaxies, fitting multi-component Gaussian profiles via least squares with the stellar continuum pre-subtracted using `pPXF`.
 
-`BADASS` [@2021MNRAS.500.2871S; 2024ascl.soft12004S] is a comprehensive Bayesian emission-line code to simultaneously infer AGN power-law continuum, FeII pseudo-continuum, stellar LOSVD (via `pPXF`), and multi-component Gaussian emission lines in a single posterior.
+`BADASS` [@sexton2021badass; @sexton2024badass] is a comprehensive Bayesian emission-line code to simultaneously infer AGN power-law continuum, FeII pseudo-continuum, stellar LOSVD (via `pPXF`), and multi-component Gaussian emission lines in a single posterior.
 
 These codes occupy various niches but none provide pixel integration or first-class multi-grating joint fitting. 
 In addition the default fitting paradigm for many of these codes is least-squares optimization, which does not provide the full posterior distribution over parameters. 
-For those that do provide Bayesian inference, they typically rely on `emcee` [@2013PASP..125..306F] or `pymc3` [@pymc2023] which can struggle in the high-dimensional parameter spaces of complex spectroscopic models and do not natively support (GPU) acceleration.
+For those that do provide Bayesian inference, they typically rely on `emcee` [@foremanmackey2013emcee] or `pymc3` [@abrilpla2023pymc] which can struggle in the high-dimensional parameter spaces of complex spectroscopic models and do not natively support (GPU) acceleration.
 However many incorporate templates into their fitting frameworks, which `unite` does not currently support. 
 
 # Research impact statement
 
 `unite` has already been used in several published JWST/NIRSpec analyses, demonstrating its utility for emission line characterization. 
 
-- **Accurate Line Fluxes and Kinematics**: With the accurate accounting for undersampling, `unite` has been used to robustly characterize fluxes and kinematics for both emission lines and absorption features in high-redshift galaxies, providing insights into the physical processes driving star formation and black hole growth. [2025arXiv250818358W; 2025arXiv250316596N; 2026arXiv260120929S; 2026arXiv260206024W]
-- **Multi-Component Line Fitting**: `unite` has been used to identify broad Balmer emission (broad H$\alpha$, H$\beta$) in high-redshift ($z \gtrsim 4$) galaxies observed with NIRSpec, providing evidence for active supermassive black hole growth in the early universe. Multi-grating joint fitting is critical as grating spectroscopy often lacks in signal-to-noise but by coupling physical constraints on flux from low-resolution gratings, `unite` enables robust detections of these components. [2025A&A...702A..57H; 2025arXiv251121820D; 2026ApJ..1000L..18H]
-- **Redshift Precision**: `unite` was used in the analysis of MoM-z14, which at the time of publication was (and remains) the most distant spectroscopically confirmed galaxy known. Coupling line parameters and properly accounting for undersampling allowed for a factor of 5 improvement in redshift precision than from continuum estimates alone even with faint, marginally detected, emission lines. [@2026OJAp....956033N]
+- **Accurate Line Fluxes and Kinematics**: With the accurate accounting for undersampling, `unite` has been used to robustly characterize fluxes and kinematics for both emission lines and absorption features in high-redshift galaxies, providing insights into the physical processes driving star formation and black hole growth. [@wang2025photons; @naidu2025bhstar; @sun2026bhstar; @wang2026water]
+- **Multi-Component Line Fitting**: `unite` has been used to identify broad Balmer emission (broad H$\alpha$, H$\beta$) in high-redshift ($z \gtrsim 4$) galaxies observed with NIRSpec, providing evidence for active supermassive black hole growth in the early universe. Multi-grating joint fitting is critical as grating spectroscopy often lacks in signal-to-noise but by coupling physical constraints on flux from low-resolution gratings, `unite` enables robust detections of these components. [@hviding2025rubies; @degraaff2025bhstar; @hviding2026xraydot]
+- **Redshift Precision**: `unite` was used in the analysis of MoM-z14, which at the time of publication was (and remains) the most distant spectroscopically confirmed galaxy known. Coupling line parameters and properly accounting for undersampling allowed for a factor of 5 improvement in redshift precision than from continuum estimates alone even with faint, marginally detected, emission lines. [@naidu2026cosmic]
 
 # AI usage disclosure
 
