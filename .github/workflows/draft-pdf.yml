@@ -2,9 +2,14 @@ name: Draft PDF
 
 on:
   push:
+    branches:
+      - joss
     paths:
       - paper/**
       - .github/workflows/draft-pdf.yml
+
+permissions:
+  contents: write
 
 jobs:
   paper:
@@ -18,8 +23,15 @@ jobs:
         with:
           journal: joss
           paper-path: paper/paper.md
-      - name: Upload
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: paper
           path: paper/paper.pdf
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: paper
+          target-folder: paper
+          clean: false

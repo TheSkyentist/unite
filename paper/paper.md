@@ -12,10 +12,18 @@ authors:
     orcid: 0000-0002-4684-9005
     corresponding: true
     affiliation: 1
+authors:
+  - name: Alberto Torralba
+    orcid: 0000-0001-5586-6950
+    corresponding: false
+    affiliation: 
 affiliations:
   - name: Max-Planck-Institut für Astronomie
     index: 1
     ror: "01vhnrs90"
+  - name: "Institute of Science and Technology Austria"
+    index: 
+    ror: 03gnh5541"
 date: X May 2026
 bibliography: paper.bib
 ---
@@ -45,17 +53,18 @@ The target audience is observational astronomers, especially those working with 
 When fitting spectroscopic data sets, fitting routines typically the assumption that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually measures. 
 This approximation is well justified when the spectrum is critically sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly over the pixel domain, as is the case for NIRSpec.
 This can be addressed integrating the model over the pixel domain, providing the exact solution for the observed signal regardless of the degree of undersampling.
-`unite` computes the integrals of continua and line models analytically where possible, and provides quadrature and super-sampling convolution modes for cases where the nonlinear coupling between optical-depth parametrized absorption lines renders analytic integration inaccurate.
 We rely on the assumption that the LSF is well approximated by a Gaussian kernel, which is a good approximation for NIRSpec and many other spectrographs, especially in the undersampled regime.
 
-However, analytic pixel integration is not possible for all model setups, in particular in the presence of optical-depth parametrized absorption lines where the nonlinear transmission $e^{-\tau\phi}$ couples the line depth and profile shape in a way that prevents closed-form solutions for the pixel integrals.
+`unite` computes the integrals of continua and line models analytically where possible. However, analytic pixel integration is not possible for all model setups, in particular in the presence of optical-depth parametrized absorption lines where the nonlinear transmission $e^{-\tau\phi}$ couples the line depth and profile shape in a way that prevents closed-form solutions for the pixel integrals.
 In these cases, `unite` provides two additional integration modes: quadrature mode, which evaluates the full model at Gauss-Legendre nodes within each pixel and weights by the corresponding quadrature weights; and convolution mode, which supersamples the intrinsic model on a fine wavelength grid and convolves with the wavelength-dependent LSF kernel to produce a pixel-convolved model. 
 Both of these modes handle the nonlinear coupling to different degrees of accuracy and computational cost, and users can choose the appropriate mode for their specific application.
 
 Despite implementing integration, quadrature, and convolution modes, `unite` is fast and efficient thanks to its JAX backend, which provides just-in-time (JIT) compilation and native GPU support.
 At its core, `unite` is a domain-specific language for building probabilistic models of spectroscopic data.
 Users build a declarative configuration of line and continuum components, assign priors to physical parameters via token instances, which can be shared across multiple model components with arithmetic combinations. 
-In addition, users specify the instrumental configuration that carry empirical calibrations of the resolving power, pixel scale, and flux normalization for each disperser which can also be shared across instruments.
+In addition, users specify the instrumental configuration carrying empirical calibrations of the wavelength-dependent resolving power, pixel scale, and flux normalization for each disperser, which can be shared across instruments. 
+One aspect that sets `unite` apart from other spectral fitting tools is that it treats instrumental calibration parameters as first-class citizens in the inference process; pixel offsets, resolution scales, and flux normalizations can be directly incorporated into the model with priors and sampled jointly with astrophysical parameters, allowing for instrumental uncertainties to directly propagate to the inferred properties.
+
 All configurations are serializable to human-readable YAML for reproducibility and sharing.
 `unite` assembles a NumPyro probabilistic model for inference with any compatible sampler, including SVI for quick exploratory fits, NUTS for full posterior sampling, and nested sampling for model comparison and evidence calculation.
 Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS HDU lists.
