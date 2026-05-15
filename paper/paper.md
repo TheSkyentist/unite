@@ -12,7 +12,6 @@ authors:
     orcid: 0000-0002-4684-9005
     corresponding: true
     affiliation: 1
-authors:
   - name: Alberto Torralba
     orcid: 0000-0001-5586-6950
     corresponding: false
