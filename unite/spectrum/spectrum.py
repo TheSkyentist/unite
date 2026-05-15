@@ -90,6 +90,7 @@ class Spectrum:
         # Store in the disperser's wavelength unit as JAX arrays.
         self._low = jnp.asarray(low.to(disperser.unit).value, dtype=float)
         self._high = jnp.asarray(high.to(disperser.unit).value, dtype=float)
+        self._wavelength = (self._low + self._high) / 2.0
 
         # -- flux and error ---------------------------------------------------
         # Convert error to the same unit as flux, then store bare values.
@@ -126,7 +127,7 @@ class Spectrum:
     @property
     def wavelength(self) -> jnp.ndarray:
         """Pixel-center wavelengths (mean of low and high edges)."""
-        return (self._low + self._high) / 2.0
+        return self._wavelength
 
     @property
     def flux(self) -> jnp.ndarray:
@@ -266,6 +267,7 @@ class Spectrum:
         new = object.__new__(type(self))
         new._low = self._low[mask]
         new._high = self._high[mask]
+        new._wavelength = (new._low + new._high) / 2.0
         new._flux = self._flux[mask]
         new._error = self._error[mask]
         new._flux_unit = self._flux_unit

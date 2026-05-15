@@ -85,6 +85,11 @@ def evaluate_model(
     n_lines = cm.wavelengths.shape[0]
     has_tau = bool(cm.tau_names)
 
+    # Resolve per-config dispatch (specialized to used profiles, or module-level fallback).
+    _pcodes = args._profile_codes_local if args._profile_codes_local is not None else cm.profile_codes
+    _int_fn = args._integrate_fn if args._integrate_fn is not None else integrate_lines
+    _eval_fn = args._evaluate_fn if args._evaluate_fn is not None else evaluate_lines
+
     # --- Build parameter dict with a uniform (n_samples,) leading axis ---
     context: dict[str, jnp.ndarray] = {}
     n_samples = None
@@ -109,6 +114,12 @@ def evaluate_model(
     }
 
     # --- Per-spectrum evaluation (vectorised over samples) ---
+    # Lazily build and JIT-compile per-spectrum vmapped evaluators on first call.
+    # This eliminates Python-level JAX retracing on every subsequent evaluate_model
+    # call with the same ModelArgs (e.g. make_spectra_tables + make_parameter_table).
+    if args._evaluators is None:
+        args._evaluators = [None] * len(args.spectra)
+
     results: list[SpectrumPrediction] = []
 
     for i, spectrum in enumerate(args.spectra):
@@ -142,6 +153,9 @@ def evaluate_model(
             _inv_wl_scale=inv_wl_scale,
             _line_scale=line_scale,
             _cont_scale=cont_scale,
+            _ifn=_int_fn,
+            _efn=_eval_fn,
+            _pc=_pcodes,
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
@@ -197,7 +211,8 @@ def evaluate_model(
             # --- Convert peak-tau to area-tau ---
             if cm.tau_names:
                 tau_per_line = _peak_to_area_tau(
-                    tau_per_line, centers, p0, p1, p2, cm.profile_codes, cm.is_tau
+                    tau_per_line, centers, p0, p1, p2, _pc, cm.is_tau,
+                    _eval_fn=args._evaluate_at_centers_fn,
                 )
 
             # --- Calibration ---
@@ -227,16 +242,17 @@ def evaluate_model(
             scaled_flux = flux_per_line * _line_scale
 
             # --- Optical depth profiles at pixel midpoints (mode-independent) ---
-            # Evaluate LSF-convolved profile at pixel centres for all lines, then
-            # mask to absorption lines only.  This is the same phi the analytic
-            # integration mode uses for exp(-tau*phi), so it is consistent with
-            # what the model actually computes.
-            phi_mid = evaluate_lines(
-                wavelength, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
-            )
-            tau_profiles_arr = jnp.where(
-                cm.is_tau[:, None], tau_per_line[:, None] * phi_mid, 0.0
-            )
+            # For emission-only models has_tau is a Python False at trace time, so
+            # the entire evaluate_lines call is compiled out of the XLA program.
+            if has_tau:
+                phi_mid = _efn(
+                    wavelength, centers, lsf_fwhm, p0, p1, p2, _pc
+                )
+                tau_profiles_arr = jnp.where(
+                    cm.is_tau[:, None], tau_per_line[:, None] * phi_mid, 0.0
+                )
+            else:
+                tau_profiles_arr = jnp.zeros((n_lines, wavelength.shape[0]))
 
             # --- Continuum (per-region for decomposition) ---
             # For analytic/quadrature: evaluate at pixel centres with LSF.
@@ -272,9 +288,7 @@ def evaluate_model(
 
                 # Evaluate all profiles and continuum at each node.
                 def _at_node(wav):
-                    phi = evaluate_lines(
-                        wav, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
-                    )
+                    phi = _efn(wav, centers, lsf_fwhm, p0, p1, p2, _pc)
                     node_lsf = wav / (_disp.R(wav * _inv_wl_scale) * r_scale)
                     cont = (
                         eval_continuum(wav, args, params, z_sys, node_lsf) * _cont_scale
@@ -317,9 +331,7 @@ def evaluate_model(
 
                 # Intrinsic profiles (lsf_fwhm=0) on fine grid.
                 zero_lsf = jnp.zeros_like(centers)
-                phi_fine = evaluate_lines(
-                    x_flat, centers, zero_lsf, p0, p1, p2, cm.profile_codes
-                )
+                phi_fine = _efn(x_flat, centers, zero_lsf, p0, p1, p2, _pc)
 
                 # LSF sigma at pixel centres (reuse cont_lsf_fwhm computed above).
                 sigma_pix = cont_lsf_fwhm * _FWHM_TO_SIGMA
@@ -374,8 +386,8 @@ def evaluate_model(
                 return total, line_contribs, cont_regions_scaled, tau_profiles_arr
             else:
                 # Analytic: CDF-based per-line integration, then compose.
-                pixints = integrate_lines(
-                    low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
+                pixints = _ifn(
+                    low, high, centers, lsf_fwhm, p0, p1, p2, _pc
                 ) / (high - low)
                 total, line_contribs = compose_leave_one_out(
                     pixints,
@@ -394,16 +406,21 @@ def evaluate_model(
 
             return total, line_contribs, cont_regions_scaled, tau_profiles_arr
 
-        # Vectorise over the leading sample axis of every parameter in context.
-        # JAX treats the dict as a pytree and maps axis 0 of each leaf.
-        total_arr, line_arr, cont_arr, tau_arr = jax.vmap(_single)(context)
+        # Build JIT'd vmapped evaluator once per spectrum; reuse on subsequent calls.
+        if args._evaluators[i] is None:
+            args._evaluators[i] = jax.jit(jax.vmap(_single))
+        total_arr, line_arr, cont_arr, tau_arr = args._evaluators[i](context)
         # total_arr:  (n_samples, n_pix)
         # line_arr:   (n_samples, n_lines, n_pix)
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
         # tau_arr:    (n_samples, n_lines, n_pix)
 
+        # Transfer line and tau arrays to host once, then use zero-copy NumPy
+        # views for per-line slicing.  Individual np.asarray(jax_arr[:, j, :])
+        # calls each dispatch a separate XLA slice → host copy.
+        line_arr_np = np.asarray(line_arr)
         lines_dict: dict[str, np.ndarray] = {
-            args.line_labels[j]: np.asarray(line_arr[:, j, :]) for j in range(n_lines)
+            args.line_labels[j]: line_arr_np[:, j, :] for j in range(n_lines)
         }
         cont_dict: dict[str, np.ndarray] = {}
         if args.cont_config is not None:
@@ -411,11 +428,15 @@ def evaluate_model(
                 cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
 
         is_abs = np.asarray(cm.is_tau)
-        tau_dict: dict[str, np.ndarray] = {
-            args.line_labels[j]: np.asarray(tau_arr[:, j, :])
-            for j in range(n_lines)
-            if is_abs[j]
-        }
+        if has_tau:
+            tau_arr_np = np.asarray(tau_arr)
+            tau_dict: dict[str, np.ndarray] = {
+                args.line_labels[j]: tau_arr_np[:, j, :]
+                for j in range(n_lines)
+                if is_abs[j]
+            }
+        else:
+            tau_dict = {}
 
         results.append(
             SpectrumPrediction(

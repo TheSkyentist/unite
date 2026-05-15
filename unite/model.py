@@ -11,8 +11,8 @@ from __future__ import annotations
 import math
 import warnings
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import cast
+from dataclasses import dataclass, field
+from typing import Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -111,6 +111,18 @@ class ModelArgs:
     #: Pre-computed at build time as a Python ``int`` (not a traced value).
     #: ``None`` when ``integration_mode != 'convolution'``.
     conv_half_width: int | None = None
+    #: Per-spectrum JIT'd vmapped evaluators, built lazily by :func:`~unite.compute.evaluate_model`.
+    #: Cached so that repeated calls with the same :class:`ModelArgs` skip Python-level retracing.
+    _evaluators: list[Any] | None = field(default=None, compare=False, repr=False)
+    #: Remapped profile codes (0-based into the specialized branch lists below).
+    #: None when specialization is not active (all profiles used or no lines).
+    _profile_codes_local: Any | None = field(default=None, compare=False, repr=False)
+    #: Specialized vmapped integrate function (only used-profile branches compiled).
+    _integrate_fn: Any | None = field(default=None, compare=False, repr=False)
+    #: Specialized vmapped evaluate function.
+    _evaluate_fn: Any | None = field(default=None, compare=False, repr=False)
+    #: Specialized vmapped evaluate-at-own-centers function (used by _peak_to_area_tau).
+    _evaluate_at_centers_fn: Any | None = field(default=None, compare=False, repr=False)
 
     def __len__(self) -> int:
         """Return the number of spectra in the model."""
@@ -119,6 +131,55 @@ class ModelArgs:
     def __bool__(self) -> bool:
         """Return True if the model has at least one spectrum."""
         return len(self.spectra) > 0
+
+
+# ------------------------------------------------------------------
+# Specialized profile dispatch
+# ------------------------------------------------------------------
+
+
+def _make_specialized_dispatch(
+    profile_codes: jnp.ndarray,
+) -> tuple[Any, Any, Any, Any]:
+    """Build per-config vmapped dispatch functions with only used profile branches.
+
+    Returns ``(profile_codes_local, integrate_fn, evaluate_fn, evaluate_at_centers_fn)``.
+    When fewer than all registered profiles are used, the returned functions wrap
+    ``lax.switch`` over only the needed branches — reducing XLA graph size and
+    compile time proportionally to the fraction of unused profiles.
+    """
+    from unite.line.compute import (
+        evaluate_lines,
+        evaluate_lines_at_own_centers,
+        integrate_lines,
+    )
+    from unite.line.library import _EVALUATE_BRANCHES, _INTEGRATE_BRANCHES
+
+    n_all = len(_INTEGRATE_BRANCHES)
+    if len(profile_codes) == 0:
+        return profile_codes, integrate_lines, evaluate_lines, evaluate_lines_at_own_centers
+
+    used_codes = sorted({int(c) for c in profile_codes})
+
+    if len(used_codes) == n_all:
+        return profile_codes, integrate_lines, evaluate_lines, evaluate_lines_at_own_centers
+
+    code_to_local = {code: idx for idx, code in enumerate(used_codes)}
+    local_codes = jnp.array([code_to_local[int(c)] for c in profile_codes])
+    int_branches = [_INTEGRATE_BRANCHES[c] for c in used_codes]
+    eval_branches = [_EVALUATE_BRANCHES[c] for c in used_codes]
+
+    def _int_single(low, high, center, lsf_fwhm, p0, p1, p2, code):
+        return jax.lax.switch(code, int_branches, low, high, center, lsf_fwhm, p0, p1, p2)
+
+    def _eval_single(wavelength, center, lsf_fwhm, p0, p1, p2, code):
+        return jax.lax.switch(code, eval_branches, wavelength, center, lsf_fwhm, p0, p1, p2)
+
+    spec_integrate = jax.vmap(_int_single, in_axes=(None, None, 0, 0, 0, 0, 0, 0))
+    spec_evaluate = jax.vmap(_eval_single, in_axes=(None, 0, 0, 0, 0, 0, 0))
+    spec_eval_centers = jax.vmap(_eval_single, in_axes=(0, 0, 0, 0, 0, 0, 0))
+
+    return local_codes, spec_integrate, spec_evaluate, spec_eval_centers
 
 
 # ------------------------------------------------------------------
@@ -147,6 +208,11 @@ def unite_model(args: ModelArgs) -> None:
     z_sys = args.redshift
     n_lines = cm.wavelengths.shape[0]
     has_tau = bool(cm.tau_names)
+
+    # Resolve per-config dispatch functions (fall back to module-level if not set).
+    _pcodes = args._profile_codes_local if args._profile_codes_local is not None else cm.profile_codes
+    _int_fn = args._integrate_fn if args._integrate_fn is not None else integrate_lines
+    _eval_fn = args._evaluate_fn if args._evaluate_fn is not None else evaluate_lines
 
     # --- 1. Sample all parameters in dependency order ---
     # Two parallel dicts are maintained:
@@ -232,7 +298,8 @@ def unite_model(args: ModelArgs) -> None:
     # --- 2b. Convert peak-tau to area-tau ---
     if cm.tau_names:
         tau_per_line = _peak_to_area_tau(
-            tau_per_line, centers, p0, p1, p2, cm.profile_codes, cm.is_tau
+            tau_per_line, centers, p0, p1, p2, _pcodes, cm.is_tau,
+            _eval_fn=args._evaluate_at_centers_fn,
         )
 
     # --- 3. Per-spectrum likelihood ---
@@ -304,8 +371,10 @@ def unite_model(args: ModelArgs) -> None:
                 _inv_wl=inv_wl_scale,
                 _rs=r_scale,
                 _disp=disp,
+                _efn=_eval_fn,
+                _pc=_pcodes,
             ):
-                phi = evaluate_lines(wav, centers, _lsf, p0, p1, p2, cm.profile_codes)
+                phi = _efn(wav, centers, _lsf, p0, p1, p2, _pc)
                 # LSF FWHM at quadrature node wavelengths for continuum.
                 node_lsf = wav / (_disp.R(wav * _inv_wl) * _rs)
                 cont = eval_continuum(wav, args, context, z_sys, node_lsf) * _csn
@@ -351,10 +420,10 @@ def unite_model(args: ModelArgs) -> None:
                 _zero_lsf=zero_lsf,
                 _scaled_flux=scaled_flux,
                 _csn=cont_scale_norm,
+                _efn=_eval_fn,
+                _pc=_pcodes,
             ):
-                phi = evaluate_lines(
-                    wav, centers, _zero_lsf, p0, p1, p2, cm.profile_codes
-                )
+                phi = _efn(wav, centers, _zero_lsf, p0, p1, p2, _pc)
                 cont = eval_continuum(wav, args, context, z_sys, 0.0) * _csn
                 return compose_from_profiles(
                     phi,
@@ -380,8 +449,8 @@ def unite_model(args: ModelArgs) -> None:
             # Analytic: integrate each line profile individually via CDF,
             # then combine.  Exact for flux-parametrized lines; approximate
             # for tau-parametrized lines (integrates phi before applying exp).
-            pixints = integrate_lines(
-                low, high, centers, lsf_fwhm, p0, p1, p2, cm.profile_codes
+            pixints = _int_fn(
+                low, high, centers, lsf_fwhm, p0, p1, p2, _pcodes
             ) / (high - low)
             cont = (
                 integrate_continuum(low, high, args, context, z_sys, cont_lsf_fwhm)
@@ -757,6 +826,10 @@ class ModelBuilder:
         cont_zorder = self._cont_config.zorder if self._cont_config is not None else 0
         cont_applies = (cm.line_zorders > cont_zorder) & cm.is_tau
 
+        local_codes, int_fn, eval_fn, eval_centers_fn = _make_specialized_dispatch(
+            self._matrices.profile_codes
+        )
+
         args = ModelArgs(
             matrices=self._matrices,
             spectra=trimmed_spectra,
@@ -791,6 +864,10 @@ class ModelBuilder:
             quadrature_weights=quadrature_weights,
             n_super=n_super_val,
             conv_half_width=conv_half_width_val,
+            _profile_codes_local=local_codes,
+            _integrate_fn=int_fn,
+            _evaluate_fn=eval_fn,
+            _evaluate_at_centers_fn=eval_centers_fn,
         )
         return unite_model, args
 

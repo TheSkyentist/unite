@@ -64,7 +64,7 @@ of evaluating every profile at every center.
 """
 
 
-def _peak_to_area_tau(tau_per_line, centers, p0, p1, p2, profile_codes, is_tau):
+def _peak_to_area_tau(tau_per_line, centers, p0, p1, p2, profile_codes, is_tau, *, _eval_fn=None):
     """Convert peak optical depth τ₀ to area-tau for :func:`~unite._compose.compose_from_profiles`.
 
     Tau tokens parametrize the peak optical depth of the *intrinsic* (pre-LSF)
@@ -89,6 +89,9 @@ def _peak_to_area_tau(tau_per_line, centers, p0, p1, p2, profile_codes, is_tau):
         Integer dispatch codes from :attr:`~unite.line.library.Profile.code`.
     is_tau : jnp.ndarray, shape ``(n_lines,)``
         Boolean mask — True for absorption lines.
+    _eval_fn : callable or None, optional
+        Specialized vmapped evaluate-at-own-centers function.  Defaults to
+        the module-level :data:`evaluate_lines_at_own_centers`.
 
     Returns
     -------
@@ -97,8 +100,10 @@ def _peak_to_area_tau(tau_per_line, centers, p0, p1, p2, profile_codes, is_tau):
     """
     import jax.numpy as jnp
 
+    if _eval_fn is None:
+        _eval_fn = evaluate_lines_at_own_centers
     _tiny_lsf = jnp.full_like(centers, 1e-10)
-    _phi_center = evaluate_lines_at_own_centers(
+    _phi_center = _eval_fn(
         centers, centers, _tiny_lsf, p0, p1, p2, profile_codes
     )
     _phi_safe = jnp.where(is_tau, _phi_center, 1.0)

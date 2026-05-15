@@ -10,11 +10,10 @@ Covers the three main post-fit paths:
 - :func:`~unite.results.make_spectra_tables` — always calls ``evaluate_model``
   then does NumPy post-processing to build per-spectrum decomposition tables.
 
-JAX gotcha: ``evaluate_model`` defines its vmapped kernel (``_single``) as a
-new closure on each call, so JAX retraces the Python function every invocation.
-The XLA compilation may be cached, but Python-level tracing is not.  The
-warmup call below populates the XLA cache; the benchmark then measures Python
-tracing + XLA dispatch — i.e., the real user-facing cost.
+``evaluate_model`` caches a ``jax.jit(jax.vmap(_single))`` evaluator per
+spectrum on :class:`~unite.model.ModelArgs` (``args._evaluators``).  The warmup
+call below builds and compiles the evaluator; the benchmark then measures the
+JIT-cached path: Python overhead + XLA dispatch with no retracing.
 """
 
 from __future__ import annotations
