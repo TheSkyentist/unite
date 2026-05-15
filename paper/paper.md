@@ -78,8 +78,8 @@ The dominant paradigm for emission-line fitting is non-linear least squares, wit
 
 `BADASS` [@sexton2021badass; @sexton2024badass] is a comprehensive Bayesian emission-line code to simultaneously infer AGN power-law continuum, FeII pseudo-continuum, stellar LOSVD (via `pPXF`), and multi-component Gaussian emission lines in a single posterior.
 
-These codes occupy various niches but none provide pixel integration or first-class multi-grating joint fitting. 
-In addition the default fitting paradigm for many of these codes is least-squares optimization, which does not provide the full posterior distribution over parameters. 
+These codes occupy various niches but none provide pixel integration or first-class joint multi-grating fitting. 
+In addition, the fitting paradigm for many of these codes is least-squares optimization, which does not provide the full posterior distribution over parameters. 
 For those that do provide Bayesian inference, they typically rely on `emcee` [@foremanmackey2013emcee] or `pymc3` [@abrilpla2023pymc] which can struggle in the high-dimensional parameter spaces of complex spectroscopic models and do not natively support (GPU) acceleration.
 However many incorporate templates into their fitting frameworks, which `unite` does not currently support. 
 
