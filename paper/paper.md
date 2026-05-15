@@ -79,15 +79,15 @@ The dominant paradigm for emission-line fitting is non-linear least squares, wit
 `BADASS` [@sexton2021badass; @sexton2024badass] is a comprehensive Bayesian emission-line code to simultaneously infer AGN power-law continuum, FeII pseudo-continuum, stellar LOSVD (via `pPXF`), and multi-component Gaussian emission lines in a single posterior.
 
 These codes occupy various niches but none provide pixel integration or first-class joint multi-grating fitting. 
-In addition, the fitting paradigm for many of these codes is least-squares optimization, which does not provide the full posterior distribution over parameters. 
-For those that do provide Bayesian inference, they typically rely on `emcee` [@foremanmackey2013emcee] or `pymc3` [@abrilpla2023pymc] which can struggle in the high-dimensional parameter spaces of complex spectroscopic models and do not natively support (GPU) acceleration.
+In addition, the fitting paradigm for many of these codes is least-squares optimization, which does not provide the posterior distribution over parameters. 
+For those that do provide Bayesian inference, they typically rely on `emcee` [@foremanmackey2013emcee] or `pymc3` [@abrilpla2023pymc] which can struggle in high-dimensional parameter spaces and do not natively support (GPU) acceleration.
 However many incorporate templates into their fitting frameworks, which `unite` does not currently support. 
 
 # Research impact statement
 
 `unite` has already been used in several published JWST/NIRSpec analyses, demonstrating its utility for emission line characterization. 
 
-- **Accurate Line Fluxes and Kinematics**: With the accurate accounting for undersampling, `unite` has been used to robustly characterize fluxes and kinematics for both emission lines and absorption features in high-redshift galaxies, providing insights into the physical processes driving star formation and black hole growth. [@wang2025photons; @naidu2025bhstar; @sun2026bhstar; @wang2026water]
+- **Accurate Line Fluxes and Kinematics**: With the accurate accounting for undersampling, `unite` has been used to robustly characterize fluxes and kinematics for both emission lines and absorption features in high-redshift galaxies, providing insights into the physical processes driving star formation and black hole growth. [@wang2025photons; @degraaff2025bhstar, @naidu2025bhstar; @sun2026bhstar; @wang2026water]
 - **Multi-Component Line Fitting**: `unite` has been used to identify broad Balmer emission (broad H$\alpha$, H$\beta$) in high-redshift ($z \gtrsim 4$) galaxies observed with NIRSpec, providing evidence for active supermassive black hole growth in the early universe. Multi-grating joint fitting is critical as grating spectroscopy often lacks in signal-to-noise but by coupling physical constraints on flux from low-resolution gratings, `unite` enables robust detections of these components. [@hviding2025rubies; @degraaff2025bhstar; @hviding2026xraydot]
 - **Redshift Precision**: `unite` was used in the analysis of MoM-z14, which at the time of publication was (and remains) the most distant spectroscopically confirmed galaxy known. Coupling line parameters and properly accounting for undersampling allowed for a factor of 5 improvement in redshift precision than from continuum estimates alone even with faint, marginally detected, emission lines. [@naidu2026cosmic]
 
