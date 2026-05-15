@@ -26,8 +26,6 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0
         with:
           environments: bench-ci
-          # Allow lock refresh — bench-ci is not in the main solve group.
-          frozen: false
 
       - name: Run benchmarks under CodSpeed
         uses: CodSpeedHQ/action@v3
@@ -35,4 +33,4 @@ jobs:
           # CODSPEED_TOKEN is auto-provided for OSS repos onboarded at codspeed.io.
           # token: ${{ secrets.CODSPEED_TOKEN }}
           # Deselect `slow` benchmarks in CI — they're for local deep dives.
-          run: pixi run -e bench-ci pytest benchmarks/ --codspeed -m "not slow"
+          run: pixi run --frozen -e bench-ci pytest benchmarks/ --codspeed -m "not slow"

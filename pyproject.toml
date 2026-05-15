@@ -82,9 +82,9 @@ JAX_ENABLE_X64 = "1"
 JAX_LOGGING_LEVEL = "ERROR"
 
 [tool.pixi.tasks]
-format = "ruff format unite tests docs/tutorials"
-lint = "ruff check unite tests docs/tutorials"
-lint-fix = "ruff check --fix unite tests docs/tutorials"
+format = "ruff format unite tests docs/tutorials benchmarks profiling"
+lint = "ruff check unite tests docs/tutorials benchmarks profiling"
+lint-fix = "ruff check --fix unite tests docs/tutorials benchmarks profiling"
 type-check = "ty check unite"
 
 [tool.pixi.dependencies]
@@ -113,6 +113,10 @@ bench-compare = "pytest benchmarks/ --benchmark-only --benchmark-compare=baselin
 # Standalone JAX profiling (Perfetto trace + optional memory profile).
 profile       = "python profiling/profile_fit.py"
 profile-mem   = "python profiling/profile_fit.py --memory"
+
+[tool.pixi.feature.bench-ci.dependencies]
+# pytest-codspeed's Valgrind wrapper is not compiled for Python 3.14+ yet.
+python = ">=3.12,<3.14"
 
 [tool.pixi.feature.bench-ci.tasks]
 # Instruction-count benchmarking via pytest-codspeed (used by CI).
@@ -148,7 +152,7 @@ test-py314 = {features = ["test", "test-py314"], solve-group = "py314"}
 test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
 docs = {features = ["docs"], solve-group = "default"}
 bench = {features = ["bench"], solve-group = "default"}
-bench-ci = {features = ["bench-ci"], solve-group = "default"}
+bench-ci = {features = ["bench-ci"], solve-group = "bench-ci"}
 
 # ---------------------------------------------------------------------------
 # ty
