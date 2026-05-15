@@ -16,13 +16,13 @@ authors:
   - name: Alberto Torralba
     orcid: 0000-0001-5586-6950
     corresponding: false
-    affiliation: 
+    affiliation: 2
 affiliations:
   - name: Max-Planck-Institut für Astronomie
     index: 1
     ror: "01vhnrs90"
   - name: "Institute of Science and Technology Austria"
-    index: 
+    index: 2
     ror: 03gnh5541"
 date: X May 2026
 bibliography: paper.bib
