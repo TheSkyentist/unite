@@ -1,5 +1,6 @@
 """Tests for SDSS disperser."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import jax.numpy as jnp
@@ -166,3 +167,54 @@ class TestFromSdssFits:
         )
         with pytest.raises(TypeError, match='SDSSDisperser'):
             from_sdss_fits('fake.fits', bad_disperser)
+
+
+# ---------------------------------------------------------------------------
+# Real-file tests
+# ---------------------------------------------------------------------------
+
+_SPECTRA_DIR = Path(__file__).parent.parent / 'spectra'
+_SDSS_FILE = _SPECTRA_DIR / 'spec-1678-53433-0425.fits.gz'
+
+
+class TestFromSdssFitsRealFile:
+    """Tests for from_sdss_fits using the real SDSS spectrum."""
+
+    def test_loads_spectrum(self):
+        spec = from_sdss_fits(_SDSS_FILE, SDSSDisperser())
+        assert spec.npix > 0
+
+    def test_wavelength_range(self):
+        spec = from_sdss_fits(_SDSS_FILE, SDSSDisperser())
+        assert float(spec.low[0]) < 3850
+        assert float(spec.high[-1]) > 9100
+
+    def test_wavelength_unit_angstrom(self):
+        spec = from_sdss_fits(_SDSS_FILE, SDSSDisperser())
+        assert spec.unit == u.AA
+
+    def test_flux_unit(self):
+        spec = from_sdss_fits(_SDSS_FILE, SDSSDisperser())
+        assert spec.flux_unit.is_equivalent(
+            u.erg / (u.s * u.cm**2 * u.AA), equivalencies=u.spectral_density(1 * u.AA)
+        )
+
+    def test_masked_pixels_removed(self):
+        # File has 21 and_mask!=0 pixels; those should be excluded.
+        spec = from_sdss_fits(_SDSS_FILE, SDSSDisperser())
+        assert spec.npix < 3846
+        assert spec.npix > 0
+
+    def test_disperser_grid_populated(self):
+        disp = SDSSDisperser()
+        from_sdss_fits(_SDSS_FILE, disp)
+        assert len(disp._wavelength_grid) == 3846
+
+    def test_R_values_reasonable(self):
+        import jax.numpy as jnp
+
+        disp = SDSSDisperser()
+        from_sdss_fits(_SDSS_FILE, disp)
+        mid = float(disp._wavelength_grid[len(disp._wavelength_grid) // 2])
+        r_val = float(disp.R(jnp.array([mid]))[0])
+        assert 1000 < r_val < 5000
