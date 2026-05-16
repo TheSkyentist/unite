@@ -15,11 +15,19 @@ env:
   JAX_ENABLE_X64: "1"
   JAX_LOGGING_LEVEL: "ERROR"
   JAX_PLATFORMS: "cpu"
+  # Pin thread counts to 1 to reduce wall-clock noise in simulation mode.
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  XLA_FLAGS: "--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1 inter_op_parallelism_threads=1"
 
 jobs:
   codspeed:
     name: CodSpeed benchmarks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v6
 
@@ -30,7 +38,5 @@ jobs:
       - name: Run benchmarks under CodSpeed
         uses: CodSpeedHQ/action@v3
         with:
-          # CODSPEED_TOKEN is auto-provided for OSS repos onboarded at codspeed.io.
-          # token: ${{ secrets.CODSPEED_TOKEN }}
           # Deselect `slow` benchmarks in CI — they're for local deep dives.
           run: pixi run --frozen -e bench-ci pytest benchmarks/ --codspeed -m "not slow"
