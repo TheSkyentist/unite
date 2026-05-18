@@ -126,7 +126,7 @@ NIRSpec dispersers support two resolution calibration modes via `r_source`:
 
 ```python
 g235h = nirspec.G235H(r_source='point')     # point-source R (de Graaff et al. 2024)
-g235h = nirspec.G235H(r_source='uniform')   # uniform illumination R from FITS tables
+g235h = nirspec.G235H(r_source='uniform')   # uniform illumination R from JDox
 ```
 
 - **`'point'`** (default): Uses polynomial fits to the slit-centered point-source resolving power
