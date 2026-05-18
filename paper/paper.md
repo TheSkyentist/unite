@@ -125,5 +125,8 @@ All scientific decisions, algorithmic design choices, and final content were mad
 # Acknowledgements
 
 REH acknowledges support by the German Aerospace Center (DLR) and the Federal Ministry for Economic Affairs and Energy (BMWi) through program 50OR2403 `RUBIES'. 
+AdG acknowledges support from a Clay Fellowship awarded by the Smithsonian Astrophysical Observatory.
+
+We acknowledge the support of the Data Science Group at the Max Planck Institute for Astronomy (MPIA) and especially Morgan Fouesneau and Ivelina Momcheva for their invaluable assistance providing high level feedback for the development of the core `unite` routines.
 
 # References
