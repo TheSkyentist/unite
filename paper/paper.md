@@ -49,7 +49,7 @@ The target audience is observational astronomers, especially those working with 
 
 # Software design
 
-When fitting spectroscopic data sets, fitting routines typically the assumption that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually measures. 
+When fitting spectroscopic data sets, fitting routines typically assume that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually measures. 
 This approximation is well justified when the spectrum is critically sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly over the pixel domain, as is the case for NIRSpec.
 This can be addressed integrating the model over the pixel domain, providing the exact solution for the observed signal regardless of the degree of undersampling.
 We rely on the assumption that the LSF is well approximated by a Gaussian kernel, which is a good approximation for NIRSpec and many other spectrographs, especially in the undersampled regime.
@@ -60,7 +60,9 @@ This model accurately captures the nonlinear coupling of line depth and profile 
 
 Despite implementing integration, quadrature, and convolution modes, `unite` is fast and efficient thanks to its JAX backend, which provides just-in-time (JIT) compilation and native GPU support.
 At its core, `unite` is a domain-specific language for building probabilistic models of spectroscopic data.
-Users build a declarative configuration of line and continuum components, assign priors to physical parameters via token instances, which can be shared across multiple model components with arithmetic combinations. 
+Users build a declarative configuration of line and continuum components and assign priors to physical parameters via token instances which can be shared across multiple model components with arithmetic combinations.
+The prior system is expressive: priors on any parameter can depend on other parameters through arithmetic expressions and topologically sorted dependency chains, enabling physical constraints such as requiring a broad component's velocity width to exceed that of a narrow component by a certain amount, or fixing flux ratios between doublet lines.
+
 In addition, users specify the instrumental configuration carrying empirical calibrations of the wavelength-dependent resolving power, pixel scale, and flux normalization for each disperser, which can be shared across instruments. 
 One aspect that sets `unite` apart from other spectral fitting tools is that it treats instrumental calibration parameters as first-class citizens in the inference process; pixel offsets, resolution scales, and flux normalizations can be directly incorporated into the model with priors and sampled jointly with astrophysical parameters, allowing for instrumental uncertainties to directly propagate to the inferred properties.
 For example, when fitting NIRSpec data, users can fold in the empirically observed offsets in wavelength solutions and flux scales derived in @degraaff2025rubies to obtain realistic uncertainties on line fluxes and kinematics that account for systematic uncertainties in the instrument calibration.
