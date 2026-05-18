@@ -12,17 +12,31 @@ authors:
     orcid: 0000-0002-4684-9005
     corresponding: true
     affiliation: 1
+  - name: Anna de Graaff
+    orcid: 0000-0002-2380-9801
+    corresponding: true
+    affiliation: "2, 1"
   - name: Alberto Torralba
     orcid: 0000-0001-5586-6950
     corresponding: false
-    affiliation: 2
+    affiliation: 3
+  - name: Helena Treiber
+    orcid: 0000-0003-0660-9776
+    corresponding: false
+    affiliation: 4
 affiliations:
   - name: Max-Planck-Institut für Astronomie
     index: 1
     ror: "01vhnrs90"
-  - name: "Institute of Science and Technology Austria"
+  - name: Center for Astrophysics Harvard & Smithsonian
     index: 2
-    ror: 03gnh5541"
+    ror: "03c3r2d17"
+  - name: Institute of Science and Technology Austria
+    index: 3
+    ror: "03gnh5541"
+  - name: Princeton University
+    index: 4
+    ror: "00hx57361"
 date: X May 2026
 bibliography: paper.bib
 ---
