@@ -1024,7 +1024,9 @@ class TestFromEdgesLoader:
     def test_mask_not_1d_raises(self):
         low, high, _, flux, error, disperser = _raw_arrays()
         with pytest.raises(ValueError, match='1-D'):
-            from_edges(low, high, flux, error, disperser, mask=np.zeros((50, 1), dtype=bool))
+            from_edges(
+                low, high, flux, error, disperser, mask=np.zeros((50, 1), dtype=bool)
+            )
 
 
 class TestFromCentersLoader:
@@ -1039,9 +1041,7 @@ class TestFromCentersLoader:
         """Derived low/high should bracket each centre."""
         _, _, center, flux, error, disperser = _raw_arrays()
         spec = from_centers(center, flux, error, disperser)
-        np.testing.assert_allclose(
-            np.asarray(spec.midpoints), center.value, rtol=1e-10
-        )
+        np.testing.assert_allclose(np.asarray(spec.midpoints), center.value, rtol=1e-10)
 
     def test_custom_name(self):
         _, _, center, flux, error, disperser = _raw_arrays()
@@ -1066,7 +1066,9 @@ class TestFromArraysLoader:
 
     def test_edges_mode(self):
         low, high, _, flux, error, disperser = _raw_arrays()
-        spec = from_arrays(low=low, high=high, flux=flux, error=error, disperser=disperser)
+        spec = from_arrays(
+            low=low, high=high, flux=flux, error=error, disperser=disperser
+        )
         assert spec.npix == 50
 
     def test_center_mode(self):
@@ -1078,20 +1080,31 @@ class TestFromArraysLoader:
         low, high, _, flux, error, disperser = _raw_arrays(npix=50)
         bad = np.zeros(50, dtype=bool)
         bad[0] = True
-        spec = from_arrays(low=low, high=high, flux=flux, error=error, disperser=disperser, mask=bad)
+        spec = from_arrays(
+            low=low, high=high, flux=flux, error=error, disperser=disperser, mask=bad
+        )
         assert spec.npix == 49
 
     def test_center_mode_with_mask(self):
         _, _, center, flux, error, disperser = _raw_arrays(npix=50)
         bad = np.zeros(50, dtype=bool)
         bad[0] = True
-        spec = from_arrays(center=center, flux=flux, error=error, disperser=disperser, mask=bad)
+        spec = from_arrays(
+            center=center, flux=flux, error=error, disperser=disperser, mask=bad
+        )
         assert spec.npix == 49
 
     def test_center_and_edges_raises(self):
         low, high, center, flux, error, disperser = _raw_arrays()
         with pytest.raises(ValueError, match='not both'):
-            from_arrays(low=low, high=high, center=center, flux=flux, error=error, disperser=disperser)
+            from_arrays(
+                low=low,
+                high=high,
+                center=center,
+                flux=flux,
+                error=error,
+                disperser=disperser,
+            )
 
     def test_only_low_raises(self):
         low, _, _, flux, error, disperser = _raw_arrays()

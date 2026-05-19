@@ -18,7 +18,7 @@ from unite.instrument.nirspec import (
     PRISM,
     NIRSpecDisperser,
 )
-from unite.spectrum import from_edges, from_DJA
+from unite.spectrum import from_DJA, from_edges
 
 # ---------------------------------------------------------------------------
 # NIRSpecDisperser — construction and validation

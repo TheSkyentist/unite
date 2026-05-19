@@ -26,9 +26,7 @@ from unite.spectrum.spectrum import Spectrum
 
 
 def _apply_mask(
-    mask: np.ndarray | None,
-    n: int,
-    *arrays: u.Quantity | np.ndarray,
+    mask: np.ndarray | None, n: int, *arrays: u.Quantity | np.ndarray
 ) -> tuple[u.Quantity | np.ndarray, ...]:
     """Validate and apply a bad-pixel mask to one or more arrays."""
     if mask is None:
@@ -38,7 +36,9 @@ def _apply_mask(
         msg = f'mask must be 1-D, got shape {mask_arr.shape}.'
         raise ValueError(msg)
     if len(mask_arr) != n:
-        msg = f'mask length ({len(mask_arr)}) does not match the number of pixels ({n}).'
+        msg = (
+            f'mask length ({len(mask_arr)}) does not match the number of pixels ({n}).'
+        )
         raise ValueError(msg)
     good = ~mask_arr
     return tuple(a[good] for a in arrays)
@@ -115,14 +115,17 @@ def from_arrays(
         msg = 'must provide both low and high, not just one.'
         raise ValueError(msg)
 
-    if has_center:
-        n = len(center)  # type: ignore[arg-type]
-        center, flux, error = _apply_mask(mask, n, center, flux, error)  # type: ignore[assignment]
+    if center is not None:
+        n = len(center)
+        center, flux, error = cast(
+            tuple[u.Quantity, u.Quantity, u.Quantity],
+            _apply_mask(mask, n, center, flux, error),
+        )
         # Build edges as midpoints between adjacent centres so that high[i] == low[i+1]
         # exactly, preserving the shared-edge topology.  Boundary edges are extrapolated
         # using the local pixel spacing.
-        cval = center.value  # type: ignore[union-attr]
-        cunit = center.unit  # type: ignore[union-attr]
+        cval = center.value
+        cunit = center.unit
         mid = (cval[:-1] + cval[1:]) / 2.0
         low_edge = np.empty(len(cval))
         high_edge = np.empty(len(cval))
@@ -133,8 +136,13 @@ def from_arrays(
         low = low_edge * cunit
         high = high_edge * cunit
     else:
-        n = len(low)  # type: ignore[arg-type]
-        low, high, flux, error = _apply_mask(mask, n, low, high, flux, error)  # type: ignore[assignment]
+        low = cast(u.Quantity, low)
+        high = cast(u.Quantity, high)
+        n = len(low)
+        low, high, flux, error = cast(
+            tuple[u.Quantity, u.Quantity, u.Quantity, u.Quantity],
+            _apply_mask(mask, n, low, high, flux, error),
+        )
 
     return Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
@@ -238,12 +246,7 @@ def from_centers(
     Spectrum
     """
     return from_arrays(
-        center=center,
-        flux=flux,
-        error=error,
-        disperser=disperser,
-        mask=mask,
-        name=name,
+        center=center, flux=flux, error=error, disperser=disperser, mask=mask, name=name
     )
 
 
