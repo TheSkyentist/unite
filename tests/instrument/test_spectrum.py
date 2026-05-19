@@ -8,7 +8,7 @@ import pytest
 from unite import line, prior
 from unite.continuum import ContinuumConfiguration, Linear
 from unite.instrument.generic import SimpleDisperser
-from unite.spectrum import Spectra, Spectrum
+from unite.spectrum import Spectra, Spectrum, from_arrays, from_centers, from_edges
 
 
 def _make_spectrum(
@@ -860,3 +860,250 @@ class TestLinedetWidth:
         # Even with huge lindet_width, Ha is close to spectrum center
         # so it should likely be covered
         assert len(fl_huge) == 1
+
+
+# ---------------------------------------------------------------------------
+# Edge topology
+# ---------------------------------------------------------------------------
+
+
+def _make_spectrum_from_edges(low: np.ndarray, high: np.ndarray, *, name='topo'):
+    """Build a Spectrum directly from low/high arrays (assumes Angstrom)."""
+    npix = low.shape[0]
+    wl_centre = 0.5 * (low + high)
+    disperser = SimpleDisperser(wavelength=wl_centre * u.AA, R=3000.0, name=name)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = np.ones(npix) * flux_unit
+    error = np.ones(npix) * flux_unit
+    return Spectrum(
+        low=low * u.AA,
+        high=high * u.AA,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        name=name,
+    )
+
+
+class TestEdgeTopology:
+    """Tests for Spectrum.edges / keep_mask / midpoints / widths / pixel_idx."""
+
+    def test_contiguous_topology(self):
+        """No gaps: E = npix + 1, keep_mask all True, widths recover diff(edges)."""
+        # 10 contiguous pixels of width 1.0 starting at 6500.
+        low = np.arange(10, dtype=float) + 6500.0
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+
+        assert spec.edges.shape == (11,)
+        assert spec.keep_mask.shape == (10,)
+        assert bool(jnp.all(spec.keep_mask))
+        np.testing.assert_allclose(np.asarray(spec.edges)[0], 6500.0)
+        np.testing.assert_allclose(np.asarray(spec.edges)[-1], 6510.0)
+        np.testing.assert_allclose(np.asarray(spec.widths), 1.0)
+        np.testing.assert_allclose(
+            np.asarray(spec.midpoints), np.asarray(spec.wavelength)
+        )
+        np.testing.assert_array_equal(np.asarray(spec.pixel_idx), np.arange(10))
+
+    def test_single_gap_topology(self):
+        """One chip gap: E = npix + 2, exactly one False in keep_mask."""
+        # 5 pixels [6500,6501)..[6504,6505) then a gap, then 5 pixels [6510,6515).
+        low = np.concatenate(
+            [np.arange(5, dtype=float) + 6500.0, np.arange(5, dtype=float) + 6510.0]
+        )
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+
+        assert spec.npix == 10
+        assert spec.edges.shape == (12,)
+        keep = np.asarray(spec.keep_mask)
+        assert keep.shape == (11,)
+        assert int((~keep).sum()) == 1
+        # The False entry sits between pixel 4 and pixel 5 in original order.
+        false_at = int(np.where(~keep)[0][0])
+        assert false_at == 5
+        # Widths at the gap span 5 AA; real-pixel widths are all 1 AA.
+        widths = np.asarray(spec.widths)
+        np.testing.assert_allclose(widths[~keep], 5.0)
+        np.testing.assert_allclose(widths[keep], 1.0)
+        # pixel_idx selects the 10 real pixels in original order.
+        np.testing.assert_array_equal(np.asarray(spec.pixel_idx), np.where(keep)[0])
+
+    def test_edges_strictly_monotone(self):
+        """diff(edges) > 0 everywhere — including across gaps."""
+        low = np.concatenate(
+            [np.arange(5, dtype=float) + 6500.0, np.arange(5, dtype=float) + 6510.0]
+        )
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+        assert bool(jnp.all(jnp.diff(spec.edges) > 0))
+
+    def test_sliced_recomputes_topology(self):
+        """_sliced rebuilds the topology to match the kept pixel run."""
+        low = np.arange(10, dtype=float) + 6500.0
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+        # Drop pixels 3 and 4: the slice contains two contiguous runs.
+        mask = jnp.array([True, True, True, False, False, True, True, True, True, True])
+        sliced = spec._sliced(mask)
+        assert sliced.npix == 8
+        # 8 pixels with one gap between the two runs ⇒ E = 8 + 1 + 1 = 10.
+        assert sliced.edges.shape == (10,)
+        keep = np.asarray(sliced.keep_mask)
+        assert int((~keep).sum()) == 1
+
+    def test_pixel_idx_recovers_low_and_high(self):
+        """edges[:-1][pixel_idx] == low and edges[1:][pixel_idx] == high."""
+        low = np.concatenate(
+            [np.arange(5, dtype=float) + 6500.0, np.arange(3, dtype=float) + 6520.0]
+        )
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+        idx = np.asarray(spec.pixel_idx)
+        np.testing.assert_allclose(
+            np.asarray(spec.edges)[:-1][idx], np.asarray(spec.low)
+        )
+        np.testing.assert_allclose(
+            np.asarray(spec.edges)[1:][idx], np.asarray(spec.high)
+        )
+
+
+# ---------------------------------------------------------------------------
+# from_arrays / from_edges / from_centers loaders
+# ---------------------------------------------------------------------------
+
+
+def _raw_arrays(npix: int = 50):
+    """Return minimal arrays for loader tests."""
+    wl = np.linspace(6500.0, 6600.0, npix) * u.AA
+    disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='test')
+    half = 0.5 * np.gradient(wl)
+    low = wl - half
+    high = wl + half
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = np.arange(npix, dtype=float) * flux_unit
+    error = np.ones(npix) * flux_unit
+    return low, high, wl, flux, error, disperser
+
+
+class TestFromEdgesLoader:
+    """Tests for from_edges (positional low+high interface)."""
+
+    def test_basic(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec = from_edges(low, high, flux, error, disperser)
+        assert spec.npix == 50
+
+    def test_custom_name(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec = from_edges(low, high, flux, error, disperser, name='myspec')
+        assert spec.name == 'myspec'
+
+    def test_mask_removes_pixels(self):
+        low, high, _, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[10] = True
+        bad[20] = True
+        spec = from_edges(low, high, flux, error, disperser, mask=bad)
+        assert spec.npix == 48
+        assert not np.any(np.isclose(np.asarray(spec.flux), 10.0))
+        assert not np.any(np.isclose(np.asarray(spec.flux), 20.0))
+
+    def test_mask_none_no_op(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec_no_mask = from_edges(low, high, flux, error, disperser)
+        spec_none = from_edges(low, high, flux, error, disperser, mask=None)
+        assert spec_no_mask.npix == spec_none.npix
+
+    def test_mask_wrong_length_raises(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='mask length'):
+            from_edges(low, high, flux, error, disperser, mask=np.zeros(30, dtype=bool))
+
+    def test_mask_not_1d_raises(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='1-D'):
+            from_edges(low, high, flux, error, disperser, mask=np.zeros((50, 1), dtype=bool))
+
+
+class TestFromCentersLoader:
+    """Tests for from_centers (positional center interface)."""
+
+    def test_basic(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_centers(center, flux, error, disperser)
+        assert spec.npix == 50
+
+    def test_edges_derived_correctly(self):
+        """Derived low/high should bracket each centre."""
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_centers(center, flux, error, disperser)
+        np.testing.assert_allclose(
+            np.asarray(spec.midpoints), center.value, rtol=1e-10
+        )
+
+    def test_custom_name(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_centers(center, flux, error, disperser, name='myspec')
+        assert spec.name == 'myspec'
+
+    def test_mask_removes_pixels(self):
+        _, _, center, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[5] = True
+        spec = from_centers(center, flux, error, disperser, mask=bad)
+        assert spec.npix == 49
+
+    def test_mask_wrong_length_raises(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='mask length'):
+            from_centers(center, flux, error, disperser, mask=np.zeros(30, dtype=bool))
+
+
+class TestFromArraysLoader:
+    """Tests for from_arrays (keyword-only, accepts both modes)."""
+
+    def test_edges_mode(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec = from_arrays(low=low, high=high, flux=flux, error=error, disperser=disperser)
+        assert spec.npix == 50
+
+    def test_center_mode(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_arrays(center=center, flux=flux, error=error, disperser=disperser)
+        assert spec.npix == 50
+
+    def test_edges_mode_with_mask(self):
+        low, high, _, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[0] = True
+        spec = from_arrays(low=low, high=high, flux=flux, error=error, disperser=disperser, mask=bad)
+        assert spec.npix == 49
+
+    def test_center_mode_with_mask(self):
+        _, _, center, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[0] = True
+        spec = from_arrays(center=center, flux=flux, error=error, disperser=disperser, mask=bad)
+        assert spec.npix == 49
+
+    def test_center_and_edges_raises(self):
+        low, high, center, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='not both'):
+            from_arrays(low=low, high=high, center=center, flux=flux, error=error, disperser=disperser)
+
+    def test_only_low_raises(self):
+        low, _, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='both low and high'):
+            from_arrays(low=low, flux=flux, error=error, disperser=disperser)
+
+    def test_only_high_raises(self):
+        _, high, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='both low and high'):
+            from_arrays(high=high, flux=flux, error=error, disperser=disperser)
+
+    def test_neither_raises(self):
+        _, _, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='must provide'):
+            from_arrays(flux=flux, error=error, disperser=disperser)

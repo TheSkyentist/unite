@@ -250,9 +250,9 @@ def _param_class_for(pn: str) -> type[Parameter]:
         ``'norm_wav'``, :class:`ContShape`
         for all others.
     """
-    if pn == 'scale':
+    if pn == 'scale' or pn.endswith('_scale'):
         return Scale
-    if pn in 'norm_wav':
+    if pn == 'norm_wav':
         return NormWavelength
     return ContShape
 

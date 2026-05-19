@@ -19,6 +19,7 @@ from unite.continuum.library import (
     ModifiedBlackbody,
     Polynomial,
     PowerLaw,
+    Template,
     form_from_dict,
     get_form,
 )
@@ -40,6 +41,7 @@ __all__ = [
     'Polynomial',
     'PowerLaw',
     'Scale',
+    'Template',
     'fit_continuum_form',
     'form_from_dict',
     'get_form',

@@ -15,9 +15,13 @@ import numpy as np
 
 from unite._compose import compose_leave_one_out
 from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
-from unite._utils import C_KMS
-from unite.continuum.compute import eval_continuum, eval_continuum_regions
-from unite.line.compute import _peak_to_area_tau, evaluate_lines, integrate_lines
+from unite.continuum.compute import eval_continuum_regions
+from unite.line.compute import (
+    _build_line_params,
+    _peak_to_area_tau,
+    evaluate_lines,
+    integrate_lines,
+)
 from unite.model import ModelArgs
 from unite.prior import Fixed
 
@@ -133,13 +137,13 @@ def evaluate_model(
         wl_out = np.asarray(spectrum.wavelength)
 
         # Static arrays: do not depend on sample values.
-        low_base = jnp.asarray(spectrum.low * wl_scale)
-        high_base = jnp.asarray(spectrum.high * wl_scale)
+        edges_base = jnp.asarray(spectrum.edges * wl_scale)
+        edges_disp_base = jnp.asarray(spectrum.edges)
+        keep_mask = jnp.asarray(spectrum.keep_mask)
         if disp.pix_offset is not None:
-            mid_disp = jnp.asarray((spectrum.low + spectrum.high) / 2.0)
-            dlam = disp.dlam_dpix(mid_disp) * wl_scale  # (n_pix,)
+            dlam_edges = disp.dlam_dpix(edges_disp_base) * wl_scale  # (E,)
         else:
-            dlam = None
+            dlam_edges = None
 
         line_scale = float(args.line_flux_scales[i])
         cont_scale = float(args.continuum_scales[i])
@@ -150,9 +154,9 @@ def evaluate_model(
         def _single(
             params,
             *,
-            _low=low_base,
-            _high=high_base,
-            _dlam=dlam,
+            _edges=edges_base,
+            _keep=keep_mask,
+            _dlam_edges=dlam_edges,
             _disp=disp,
             _inv_wl_scale=inv_wl_scale,
             _line_scale=line_scale,
@@ -163,54 +167,9 @@ def evaluate_model(
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
-            if cm.flux_names:
-                flux_vec = jnp.stack([params[n] for n in cm.flux_names])
-                flux_per_line = flux_vec @ cm.flux_matrix * cm.strengths
-            else:
-                flux_per_line = jnp.zeros(n_lines)
-
-            if cm.tau_names:
-                tau_vec = jnp.stack([params[n] for n in cm.tau_names])
-                tau_per_line = tau_vec @ cm.tau_matrix
-            else:
-                tau_per_line = jnp.zeros(n_lines)
-
-            z_vec = jnp.stack([params[n] for n in cm.z_names])
-            z_per_line = z_vec @ cm.z_matrix
-            centers = cm.wavelengths * (1.0 + z_sys + z_per_line)
-
-            p0_kms = (
-                jnp.stack([params[n] for n in cm.p0_names]) @ cm.p0_matrix
-                if cm.p0_names
-                else jnp.zeros(n_lines)
+            flux_per_line, tau_per_line, centers, p0, p1, p2 = _build_line_params(
+                cm, params, n_lines, z_sys
             )
-            p0 = centers * p0_kms / C_KMS
-
-            p1v_kms = (
-                jnp.stack([params[n] for n in cm.p1v_names]) @ cm.p1v_matrix
-                if cm.p1v_names
-                else jnp.zeros(n_lines)
-            )
-            p1v = centers * p1v_kms / C_KMS
-
-            p1d = (
-                jnp.stack([params[n] for n in cm.p1d_names]) @ cm.p1d_matrix
-                if cm.p1d_names
-                else jnp.zeros(n_lines)
-            )
-            p1 = p1v + p1d
-
-            p2v_kms = (
-                jnp.stack([params[n] for n in cm.p2v_names]) @ cm.p2v_matrix
-                if cm.p2v_names
-                else jnp.zeros(n_lines)
-            )
-            p2d = (
-                jnp.stack([params[n] for n in cm.p2d_names]) @ cm.p2d_matrix
-                if cm.p2d_names
-                else jnp.zeros(n_lines)
-            )
-            p2 = centers * p2v_kms / C_KMS + p2d
 
             # --- Convert peak-tau to area-tau ---
             if cm.tau_names:
@@ -234,18 +193,23 @@ def evaluate_model(
                 params[_disp.pix_offset.name] if _disp.pix_offset is not None else 0.0
             )
 
-            # --- Pixel edges (apply sub-pixel offset if present) ---
-            low = _low
-            high = _high
-            if _dlam is not None:
-                low = low + pix_offset * _dlam
-                high = high + pix_offset * _dlam
-            wavelength = (low + high) / 2.0
+            # --- Edge topology (apply sub-pixel offset if present) ---
+            edges = _edges
+            if _dlam_edges is not None:
+                edges = edges + pix_offset * _dlam_edges
+            widths = jnp.diff(edges)
+            # Per-pixel low/high for diagnostics and convolution mode.
+            low = edges[:-1][_keep]
+            high = edges[1:][_keep]
+            wavelength = 0.5 * (low + high)
 
             # --- LSF ---
+            # Per-line LSF (used for tau diagnostic at midpoints).
             lsf_fwhm = centers / (_disp.R(centers * _inv_wl_scale) * r_scale)
-
-            # LSF FWHM at pixel centres for continuum convolution.
+            # Per-edge LSF (shared across lines, used by analytic mode).
+            edges_disp = edges * _inv_wl_scale
+            lsf_at_edges = edges / (_disp.R(edges_disp) * r_scale)
+            # LSF FWHM at pixel centres for continuum convolution mode.
             cont_lsf_fwhm = wavelength / (_disp.R(wavelength * _inv_wl_scale) * r_scale)
 
             # Scaled line fluxes for this spectrum.
@@ -263,7 +227,7 @@ def evaluate_model(
                 tau_profiles_arr = jnp.zeros((n_lines, wavelength.shape[0]))
 
             # --- Continuum (per-region for decomposition) ---
-            # For analytic/quadrature: evaluate at pixel centres with LSF.
+            # For analytic: evaluate at pixel centres with LSF.
             # For convolution: evaluated on the fine grid inside the branch below.
             cont_total_scaled: jnp.ndarray = jnp.zeros_like(wavelength)
             cont_regions_scaled: list[jnp.ndarray] = []
@@ -280,47 +244,7 @@ def evaluate_model(
                 ]
 
             # --- Line decomposition ---
-            if args.integration_mode == 'quadrature':
-                # GL quadrature: evaluate full composed model at sub-pixel
-                # nodes and integrate.  Leave-one-out at each node gives
-                # exact per-line contributions.
-                mid = (low + high) / 2.0
-                half_width = (high - low) / 2.0
-                nodes = args.quadrature_nodes  # (n_nodes,)
-                weights = args.quadrature_weights  # (n_nodes,)
-                assert nodes is not None
-                assert weights is not None
-
-                # Sub-pixel wavelengths: (n_nodes, n_pix)
-                x = mid[None, :] + half_width[None, :] * nodes[:, None]
-
-                # Evaluate all profiles and continuum at each node.
-                def _at_node(wav):
-                    phi = _efn(wav, centers, lsf_fwhm, p0, p1, p2, _pc)
-                    node_lsf = wav / (_disp.R(wav * _inv_wl_scale) * r_scale)
-                    cont = (
-                        eval_continuum(wav, args, params, z_sys, node_lsf) * _cont_scale
-                    )
-                    total, deltas = compose_leave_one_out(
-                        phi,
-                        scaled_flux,
-                        tau_per_line,
-                        cm.is_tau,
-                        cm.applies_matrix,
-                        args.cont_applies,
-                        cont,
-                        has_tau=has_tau,
-                    )
-                    return total, deltas
-
-                # (n_nodes, n_pix) and (n_nodes, n_lines, n_pix)
-                node_totals, node_deltas = jax.vmap(_at_node)(x)
-
-                # Pixel-average via GL weighted sum (factor 0.5 from
-                # the [-1,1] → [low,high] change of variable).
-                total = 0.5 * jnp.dot(weights, node_totals)
-                line_contribs = 0.5 * jnp.einsum('n,nlp->lp', weights, node_deltas)
-            elif args.integration_mode == 'convolution':
+            if args.integration_mode == 'convolution':
                 # Numerical LSF convolution: evaluate intrinsic model (lsf_fwhm=0)
                 # on a fine sub-pixel grid, convolve with the wavelength-dependent
                 # Gaussian LSF, then pixel-average.  Per-line decomposition uses
@@ -332,30 +256,34 @@ def evaluate_model(
                 assert half_width is not None
                 n_pixels = low.shape[0]
 
-                # Fine grid: (n_super, n_pixels) → flattened (N,).
+                # Fine grid in wavelength order: all sub-bins of pixel 0, then pixel 1, etc.
+                # Shape: (n_pixels * n_super,).
                 offsets = (jnp.arange(n_super) + 0.5) / n_super
-                x_fine = low[None, :] + offsets[:, None] * (high - low)[None, :]
-                x_flat = x_fine.ravel()
+                x_fine = (
+                    low[None, :] + offsets[:, None] * (high - low)[None, :]
+                )  # (n_super, n_pixels)
+                x_flat = x_fine.T.ravel()  # (n_pixels * n_super,) in wavelength order
 
                 # Intrinsic profiles (lsf_fwhm=0) on fine grid.
                 zero_lsf = jnp.zeros_like(centers)
                 phi_fine = _efn(x_flat, centers, zero_lsf, p0, p1, p2, _pc)
 
-                # LSF sigma at pixel centres (reuse cont_lsf_fwhm computed above).
-                sigma_pix = cont_lsf_fwhm * _FWHM_TO_SIGMA
+                # LSF sigma at each fine-grid point.
+                sigma_fine = (
+                    x_flat
+                    / (_disp.R(x_flat * _inv_wl_scale) * r_scale)
+                    * _FWHM_TO_SIGMA
+                )
 
-                # Per-region continuum on fine grid (lsf_fwhm=0): pixel-average
-                # then convolve at pixel resolution.
+                # Per-region continuum on fine grid (lsf_fwhm=0): convolve on fine
+                # grid then pixel-average.
                 cont_regions_fine = eval_continuum_regions(
                     x_flat, args, params, z_sys, 0.0
                 )
                 cont_regions_scaled = [
-                    _lsf_convolve(
-                        wavelength,
-                        (r * _cont_scale).reshape(n_super, n_pixels).mean(axis=0),
-                        sigma_pix,
-                        half_width,
-                    )
+                    _lsf_convolve(x_flat, r * _cont_scale, sigma_fine, half_width)
+                    .reshape(n_pixels, n_super)
+                    .mean(axis=1)
                     * flux_scale_val
                     for r in cont_regions_fine
                 ]
@@ -378,25 +306,27 @@ def evaluate_model(
                     has_tau=has_tau,
                 )
 
-                # Pixel-average first, then convolve at pixel resolution.
-                # Cost: O(n_super * N + N * sigma/dlam) vs O(n_super² * N * sigma/dlam).
-                total_pix = total_fine.reshape(n_super, n_pixels).mean(axis=0)
-                total_conv = _lsf_convolve(wavelength, total_pix, sigma_pix, half_width)
+                # Convolve on fine grid, then pixel-average.
+                total_conv = _lsf_convolve(x_flat, total_fine, sigma_fine, half_width)
+                total_pix = total_conv.reshape(n_pixels, n_super).mean(axis=1)
 
-                deltas_pix = deltas_fine.reshape(-1, n_super, n_pixels).mean(axis=1)
                 deltas_conv = jax.vmap(
-                    lambda d: _lsf_convolve(wavelength, d, sigma_pix, half_width)
-                )(deltas_pix)  # (n_lines, n_pixels)
+                    lambda d: _lsf_convolve(x_flat, d, sigma_fine, half_width)
+                )(deltas_fine)  # (n_lines, n_pixels * n_super)
+                deltas_pix = deltas_conv.reshape(-1, n_pixels, n_super).mean(axis=2)
 
-                total = flux_scale_val * total_conv
-                line_contribs = flux_scale_val * deltas_conv
+                total = flux_scale_val * total_pix
+                line_contribs = flux_scale_val * deltas_pix
 
                 return total, line_contribs, cont_regions_scaled, tau_profiles_arr
             else:
-                # Analytic: CDF-based per-line integration, then compose.
-                pixints = _ifn(low, high, centers, lsf_fwhm, p0, p1, p2, _pc) / (
-                    high - low
-                )
+                # Analytic: cumulative-at-edges per line, then diff + mask
+                # → per-pixel-averaged profile.
+                cum_per_line = _ifn(
+                    edges, centers, lsf_at_edges, p0, p1, p2, _pc
+                )  # (n_lines, E)
+                per_interval = jnp.diff(cum_per_line, axis=1) / widths
+                pixints = per_interval[:, _keep]
                 total, line_contribs = compose_leave_one_out(
                     pixints,
                     scaled_flux,

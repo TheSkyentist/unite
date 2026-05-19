@@ -18,7 +18,7 @@ from unite.instrument.nirspec import (
     PRISM,
     NIRSpecDisperser,
 )
-from unite.spectrum import from_arrays, from_DJA
+from unite.spectrum import from_edges, from_DJA
 
 # ---------------------------------------------------------------------------
 # NIRSpecDisperser — construction and validation
@@ -222,19 +222,19 @@ class TestNIRSpecCalibration:
 
 
 # ---------------------------------------------------------------------------
-# from_arrays loader
+# from_edges loader
 # ---------------------------------------------------------------------------
 
 
-class TestFromArrays:
-    """Tests for the from_arrays loader with a NIRSpec disperser."""
+class TestFromEdges:
+    """Tests for the from_edges loader with a NIRSpec disperser."""
 
     def test_basic(self):
         npix = 200
         wl = np.linspace(1.66, 3.17, npix + 1) * u.um
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
         d = G235H()
-        spec = from_arrays(
+        spec = from_edges(
             wl[:-1],
             wl[1:],
             np.ones(npix) * flux_unit,
@@ -250,7 +250,7 @@ class TestFromArrays:
         wl = np.linspace(1.66, 3.17, npix + 1) * u.um
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
         d = G235H()
-        spec = from_arrays(
+        spec = from_edges(
             wl[:-1],
             wl[1:],
             np.ones(npix) * flux_unit,
@@ -266,7 +266,7 @@ class TestFromArrays:
         wl = np.linspace(16600, 31700, npix + 1) * u.AA
         flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
         d = G235H()
-        spec = from_arrays(
+        spec = from_edges(
             wl[:-1],
             wl[1:],
             np.ones(npix) * flux_unit,

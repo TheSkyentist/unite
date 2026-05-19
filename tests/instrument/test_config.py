@@ -268,10 +268,9 @@ class TestInstrumentConfigAdd:
         assert result is NotImplemented
 
     def test_add_empty_left(self):
-        cfg1 = InstrumentConfig([G235H()])
         cfg2 = InstrumentConfig([G395H()])
-        merged = InstrumentConfig([]) + cfg2 if False else cfg1 + cfg2
-        assert len(merged) == 2
+        merged = InstrumentConfig([]) + cfg2
+        assert len(merged) == 1
 
     def test_add_result_is_new_instance(self):
         cfg1 = InstrumentConfig([G235H()])

@@ -3,10 +3,73 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 from astropy import units as u
 
 from unite._utils import _ensure_flux_density, _ensure_wavelength
 from unite.instrument.base import Disperser
+
+
+def _compute_edge_topology(
+    low: jnp.ndarray, high: jnp.ndarray
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Build the unique-edge topology for a 1-D pixel grid.
+
+    Adjacent pixels share an edge when ``high[i] == low[i+1]``; chip gaps
+    (``high[i] != low[i+1]``) contribute two edges instead of one.  The
+    returned ``edges`` array therefore has length ``npix + num_gaps + 1``
+    and the ``keep_mask`` marks which ``diff(edges)`` entries correspond
+    to real pixels (True) versus inter-pixel gaps (False).
+
+    Parameters
+    ----------
+    low, high : jnp.ndarray, shape ``(npix,)``
+        Pixel edges in the spectrum's wavelength unit.
+
+    Returns
+    -------
+    edges : jnp.ndarray, shape ``(E,)``
+        Sorted unique edges, where ``E = npix + num_gaps + 1``.
+    keep_mask : jnp.ndarray, shape ``(E - 1,)`` of bool
+        True where the corresponding ``diff(edges)`` entry is a real pixel
+        width; False where it spans an inter-pixel gap.
+    pixel_idx : jnp.ndarray, shape ``(npix,)``
+        Indices into the length-``(E - 1)`` axis selecting the real pixels
+        in original order (i.e. ``edges[1:][pixel_idx] == high`` and
+        ``edges[:-1][pixel_idx] == low``).
+    """
+    low_np = np.asarray(low)
+    high_np = np.asarray(high)
+    npix = low_np.shape[0]
+    if npix == 0:
+        return (
+            jnp.zeros(0, dtype=low.dtype),
+            jnp.zeros(0, dtype=bool),
+            jnp.zeros(0, dtype=jnp.int32),
+        )
+
+    # Gap after pixel i if high[i] != low[i+1] (no shared edge with i+1).
+    gap_after = high_np[:-1] != low_np[1:]
+    n_gaps = int(gap_after.sum())
+    n_edges = npix + n_gaps + 1
+
+    edges_np = np.empty(n_edges, dtype=low_np.dtype)
+    keep_np = np.empty(n_edges - 1, dtype=bool)
+    pix_idx_np = np.empty(npix, dtype=np.int32)
+
+    edges_np[0] = low_np[0]
+    w = 1
+    for i in range(npix):
+        edges_np[w] = high_np[i]
+        keep_np[w - 1] = True
+        pix_idx_np[i] = w - 1
+        w += 1
+        if i < npix - 1 and gap_after[i]:
+            edges_np[w] = low_np[i + 1]
+            keep_np[w - 1] = False
+            w += 1
+
+    return jnp.asarray(edges_np), jnp.asarray(keep_np), jnp.asarray(pix_idx_np)
 
 
 class Spectrum:
@@ -92,6 +155,11 @@ class Spectrum:
         self._high = jnp.asarray(high.to(disperser.unit).value, dtype=float)
         self._wavelength = (self._low + self._high) / 2.0
 
+        # Edge topology: unique edges with inter-pixel gap bookkeeping.
+        self._edges, self._keep_mask, self._pixel_idx = _compute_edge_topology(
+            self._low, self._high
+        )
+
         # -- flux and error ---------------------------------------------------
         # Convert error to the same unit as flux, then store bare values.
         error_converted = error.to(self._flux_unit)
@@ -128,6 +196,55 @@ class Spectrum:
     def wavelength(self) -> jnp.ndarray:
         """Pixel-center wavelengths (mean of low and high edges)."""
         return self._wavelength
+
+    @property
+    def edges(self) -> jnp.ndarray:
+        """Unique sorted pixel edges, length ``E = npix + num_gaps + 1``.
+
+        Contiguous pixels share an edge (one entry per shared boundary);
+        chip gaps contribute two entries — ``high`` of the pixel before
+        the gap and ``low`` of the pixel after.  Use together with
+        :attr:`keep_mask` to recover per-pixel quantities from
+        edge-evaluated cumulative arrays via ``diff`` + masking.
+        """
+        return self._edges
+
+    @property
+    def keep_mask(self) -> jnp.ndarray:
+        """Boolean mask of length ``E - 1`` selecting real-pixel diffs.
+
+        ``jnp.diff(edges)[keep_mask]`` gives the per-pixel widths; the
+        masked-out entries span inter-pixel gaps and should be discarded
+        from any edge-cumulative-then-diff reduction.
+        """
+        return self._keep_mask
+
+    @property
+    def midpoints(self) -> jnp.ndarray:
+        """Midpoint of each ``(edges[i], edges[i+1])`` pair, length ``E - 1``.
+
+        Entries where :attr:`keep_mask` is False fall inside chip gaps and
+        should be ignored.
+        """
+        return (self._edges[1:] + self._edges[:-1]) / 2.0
+
+    @property
+    def widths(self) -> jnp.ndarray:
+        """``diff(edges)``, length ``E - 1``.
+
+        Entries where :attr:`keep_mask` is False are inter-pixel gap widths,
+        not pixel widths, and should be ignored.
+        """
+        return jnp.diff(self._edges)
+
+    @property
+    def pixel_idx(self) -> jnp.ndarray:
+        """Indices into the length-``(E - 1)`` axis selecting real pixels in order.
+
+        Convenience accessor equivalent to ``jnp.where(keep_mask)[0]`` but
+        cached at construction time as a concrete array.
+        """
+        return self._pixel_idx
 
     @property
     def flux(self) -> jnp.ndarray:
@@ -268,6 +385,9 @@ class Spectrum:
         new._low = self._low[mask]
         new._high = self._high[mask]
         new._wavelength = (new._low + new._high) / 2.0
+        new._edges, new._keep_mask, new._pixel_idx = _compute_edge_topology(
+            new._low, new._high
+        )
         new._flux = self._flux[mask]
         new._error = self._error[mask]
         new._flux_unit = self._flux_unit

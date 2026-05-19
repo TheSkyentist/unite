@@ -292,31 +292,82 @@ dc_combined = dc1 + dc2
 All spectrum loaders live in `unite.spectrum` and return a {class}`~unite.spectrum.Spectrum`
 object. Loaders always require a configured disperser.
 
+### from_edges
+
+{func}`~unite.spectrum.from_edges` is the standard generic loader — it works with any disperser
+and accepts {class}`astropy.units.Quantity` arrays for the pixel bin edges, flux, and error.
+Arguments are positional.
+
+```python
+from unite.spectrum import from_edges
+from astropy import units as u
+
+flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
+
+spectrum = from_edges(wl_edges[:-1], wl_edges[1:], flux_array * flux_unit, err_array * flux_unit, disperser)
+```
+
+Pass a boolean `mask` array (True = bad pixel) to exclude pixels before the spectrum is
+constructed — masked pixels are removed entirely, not zeroed:
+
+```python
+bad = np.zeros(len(flux_array), dtype=bool)
+bad[42] = True   # flag a known bad pixel
+
+spectrum = from_edges(low, high, flux, err, disperser, mask=bad)
+```
+
+An optional `name` keyword overrides the disperser name on the resulting spectrum.
+
+---
+
+### from_centers
+
+{func}`~unite.spectrum.from_centers` is for the common case where only pixel-centre wavelengths
+are available.  Pixel bin edges are derived via {func}`numpy.gradient`.  Arguments are positional.
+
+```python
+from unite.spectrum import from_centers
+
+spectrum = from_centers(wavelengths, flux, err, disperser)
+```
+
+```{note}
+The gradient-based edge derivation is most accurate for gapless, reasonably uniform grids.
+For spectra with detector gaps or strongly non-uniform spacing, supply `low` and `high`
+directly via `from_edges`.
+```
+
+`from_centers` also accepts `mask` and `name` keyword arguments with the same semantics as
+`from_edges`.
+
+---
+
 ### from_arrays
 
-{func}`~unite.spectrum.from_arrays` is the generic loader — it works with any disperser and
-accepts {class}`astropy.units.Quantity` arrays for the pixel bin edges, flux, and flux error.
-Because `unite` performs exact pixel integration, bin edges (not centers) are required.
+{func}`~unite.spectrum.from_arrays` is a keyword-only interface that subsumes both of the above.
+All arguments must be passed by name.  Supply either *center* or *low* + *high* — not both.
 
 ```python
 from unite.spectrum import from_arrays
-from astropy import units as u
-import numpy as np
 
-low  = wl_edges[:-1]   # lower pixel edges, Quantity
-high = wl_edges[1:]    # upper pixel edges, Quantity
-flux = flux_array * (1e-20 * u.erg / (u.s * u.cm**2 * u.AA))
-err  = err_array  * (1e-20 * u.erg / (u.s * u.cm**2 * u.AA))
+# Edge-based (equivalent to from_edges)
+spectrum = from_arrays(low=low, high=high, flux=flux, error=err, disperser=disperser)
 
-spectrum = from_arrays(low, high, flux, err, disperser=disperser)
+# Centre-based (equivalent to from_centers)
+spectrum = from_arrays(center=wavelengths, flux=flux, error=err, disperser=disperser)
+
+# With bad-pixel masking
+spectrum = from_arrays(low=low, high=high, flux=flux, error=err, disperser=disperser, mask=bad)
 ```
 
-This is the right loader for:
-- Simulated spectra or pipeline-reduced data in custom formats
-- Any instrument not covered by `from_DJA` or `from_sdss_fits`
-- Quick testing with synthetic data
+This is useful when the wavelength representation is determined at runtime or when you want to
+make the choice of representation explicit at the call site.
 
-An optional `name` argument overrides the disperser name on the resulting spectrum.
+These three loaders are the right choice for:
+- Simulated spectra or pipeline-reduced data in custom formats
+- Any instrument not covered by `from_DJA`, `from_sdss_fits`, or `from_desi_fits`
+- Quick testing with synthetic data
 
 ---
 

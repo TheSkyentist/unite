@@ -118,7 +118,7 @@ def test_mcmc_single_grating(benchmark, single_grating_bench):
 
 
 # ----------------------------------------------------------------------
-# Integration modes — parametrized over analytic / quadrature / convolution
+# Integration modes — parametrized over analytic / convolution
 # ----------------------------------------------------------------------
 
 

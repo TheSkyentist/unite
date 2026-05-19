@@ -57,7 +57,7 @@ def _full_context(b: Bench) -> dict:
 
 
 def _line_arrays(b: Bench):
-    """Return (low, high, centers, lsf_fwhm, p0, p1, p2, pcodes) for spectrum 0.
+    """Return ``(edges, lsf_at_edges, centers, p0, p1, p2, pcodes)`` for spectrum 0.
 
     Uses the prior draw stored on ``b`` to compute representative per-line
     values; shapes match what ``integrate_lines`` receives at every MCMC step.
@@ -110,17 +110,16 @@ def _line_arrays(b: Bench):
 
     spec = args.spectra[0]
     wl_scale = args.spec_to_canonical[0]
-    low = spec.low * wl_scale
-    high = spec.high * wl_scale
+    edges = spec.edges * wl_scale
     disp = spec.disperser
     inv_wl = 1.0 / wl_scale
-    lsf_fwhm = centers / disp.R(centers * inv_wl)
+    lsf_at_edges = edges / disp.R(edges * inv_wl)
 
     pcodes = args._profile_codes_local
     if pcodes is None:
         pcodes = cm.profile_codes
 
-    return low, high, centers, lsf_fwhm, p0, p1, p2, pcodes
+    return edges, lsf_at_edges, centers, p0, p1, p2, pcodes
 
 
 # ----------------------------------------------------------------------
@@ -129,17 +128,18 @@ def _line_arrays(b: Bench):
 
 
 def test_analytic_integrate_lines(benchmark, single_grating_bench):
-    """Time only the CDF-diff step for the single-grating config.
+    """Time only the cumulative-at-edges step for the single-grating config.
 
-    This is the candidate for shared-edge optimization: N+1 erfc evals
-    instead of 2N.  Compare the result here to ``test_logp_single_grating``
-    to get the CDF fraction of total forward-pass time.
+    With the edges-only refactor this is ``E ≈ N+1`` evaluations per line
+    (vs the old ``2N``).  Compare the result here to
+    ``test_logp_single_grating`` to get the CDF fraction of total
+    forward-pass time.
     """
     b = single_grating_bench
-    low, high, centers, lsf_fwhm, p0, p1, p2, pcodes = _line_arrays(b)
+    edges, lsf_at_edges, centers, p0, p1, p2, pcodes = _line_arrays(b)
     int_fn = b.args._integrate_fn
 
-    jit_fn = jax.jit(lambda: int_fn(low, high, centers, lsf_fwhm, p0, p1, p2, pcodes))
+    jit_fn = jax.jit(lambda: int_fn(edges, centers, lsf_at_edges, p0, p1, p2, pcodes))
     jit_fn()  # warm
     benchmark(lambda: block(jit_fn()))
 
@@ -147,10 +147,10 @@ def test_analytic_integrate_lines(benchmark, single_grating_bench):
 def test_analytic_integrate_lines_multi(benchmark, multi_grating_bench):
     """Same as above for the first spectrum of the multi-grating config."""
     b = multi_grating_bench
-    low, high, centers, lsf_fwhm, p0, p1, p2, pcodes = _line_arrays(b)
+    edges, lsf_at_edges, centers, p0, p1, p2, pcodes = _line_arrays(b)
     int_fn = b.args._integrate_fn
 
-    jit_fn = jax.jit(lambda: int_fn(low, high, centers, lsf_fwhm, p0, p1, p2, pcodes))
+    jit_fn = jax.jit(lambda: int_fn(edges, centers, lsf_at_edges, p0, p1, p2, pcodes))
     jit_fn()
     benchmark(lambda: block(jit_fn()))
 
@@ -173,13 +173,19 @@ def test_analytic_integrate_continuum(benchmark, single_grating_bench):
 
     spec = args.spectra[0]
     wl_scale = args.spec_to_canonical[0]
-    low = spec.low * wl_scale
-    high = spec.high * wl_scale
-    pix_mid = (low + high) / 2.0
+    edges = spec.edges * wl_scale
     disp = spec.disperser
-    cont_lsf = pix_mid / disp.R(pix_mid / wl_scale)
+    # Polynomial-based forms accept a scalar LSF per region; non-polynomial
+    # forms ignore the LSF entirely.  Use a single representative value.
+    if args.cont_config is not None and args.cont_center is not None:
+        cont_centers_obs = jnp.array(args.cont_center) * (1.0 + z_sys)
+        cont_lsf_per_region = cont_centers_obs / disp.R(cont_centers_obs / wl_scale)
+    else:
+        cont_lsf_per_region = jnp.zeros(0)
 
-    jit_fn = jax.jit(lambda: integrate_continuum(low, high, args, ctx, z_sys, cont_lsf))
+    jit_fn = jax.jit(
+        lambda: integrate_continuum(edges, args, ctx, z_sys, cont_lsf_per_region)
+    )
     jit_fn()
     benchmark(lambda: block(jit_fn()))
 
@@ -198,17 +204,22 @@ def test_analytic_compose(benchmark, single_grating_bench):
     b = single_grating_bench
     args = b.args
     cm = args.matrices
-    low, high, centers, lsf_fwhm, p0, p1, p2, pcodes = _line_arrays(b)
+    edges, lsf_at_edges, centers, p0, p1, p2, pcodes = _line_arrays(b)
     int_fn = b.args._integrate_fn
+    spec = args.spectra[0]
+    keep = spec.keep_mask
+    widths = jnp.diff(edges)
 
-    # Pre-compute pixints once; treat as static input.
-    pixints = jax.jit(
-        lambda: int_fn(low, high, centers, lsf_fwhm, p0, p1, p2, pcodes) / (high - low)
-    )()
+    # Pre-compute pixints (n_lines, n_pixels) once; treat as static input.
+    def _make_pixints():
+        cum = int_fn(edges, centers, lsf_at_edges, p0, p1, p2, pcodes)
+        return (jnp.diff(cum, axis=1) / widths)[:, keep]
+
+    pixints = jax.jit(_make_pixints)()
     pixints.block_until_ready()
 
     n_lines = int(cm.wavelengths.shape[0])
-    n_pixels = int(low.shape[0])
+    n_pixels = int(pixints.shape[1])
     ctx = {k: jnp.asarray(v) for k, v in b.sample.items()}
     flux_per_line = (
         jnp.stack([ctx[n] for n in cm.flux_names]) @ cm.flux_matrix * cm.strengths
@@ -247,16 +258,21 @@ def test_analytic_compose_with_tau(benchmark, single_grating_absorber_bench):
     b = single_grating_absorber_bench
     args = b.args
     cm = args.matrices
-    low, high, centers, lsf_fwhm, p0, p1, p2, pcodes = _line_arrays(b)
+    edges, lsf_at_edges, centers, p0, p1, p2, pcodes = _line_arrays(b)
     int_fn = b.args._integrate_fn
+    spec = args.spectra[0]
+    keep = spec.keep_mask
+    widths = jnp.diff(edges)
 
-    pixints = jax.jit(
-        lambda: int_fn(low, high, centers, lsf_fwhm, p0, p1, p2, pcodes) / (high - low)
-    )()
+    def _make_pixints():
+        cum = int_fn(edges, centers, lsf_at_edges, p0, p1, p2, pcodes)
+        return (jnp.diff(cum, axis=1) / widths)[:, keep]
+
+    pixints = jax.jit(_make_pixints)()
     pixints.block_until_ready()
 
     n_lines = int(cm.wavelengths.shape[0])
-    n_pixels = int(low.shape[0])
+    n_pixels = int(pixints.shape[1])
     ctx = {k: jnp.asarray(v) for k, v in b.sample.items()}
     flux_per_line = (
         jnp.stack([ctx[n] for n in cm.flux_names]) @ cm.flux_matrix * cm.strengths

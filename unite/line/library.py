@@ -60,40 +60,39 @@ class Profile(ABC):
 
     def integrate(
         self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
+        edges: ArrayLike,
         lsf_fwhm: ArrayLike,
+        center: ArrayLike,
         **params: ArrayLike,
     ) -> Array:
-        r"""Integrate the profile over wavelength bins.
+        r"""Cumulative profile array evaluated at edges.
 
-        Delegates to :meth:`integrate_branch` by mapping keyword arguments to
-        positional slots (p0, p1, p2) in :meth:`param_names` order.
+        Delegates to :meth:`integrate_branch` by mapping keyword arguments
+        to positional slots (p0, p1, p2) in :meth:`param_names` order.
 
         Parameters
         ----------
-        low : ArrayLike
-            Lower wavelength edges of bins.
-        high : ArrayLike
-            Upper wavelength edges of bins.
+        edges : ArrayLike, shape ``(E,)``
+            Pixel edges in canonical wavelength units.
+        lsf_fwhm : ArrayLike, shape ``(E,)``
+            Instrumental LSF FWHM evaluated at each edge.
         center : ArrayLike
             Line center wavelength.
-        lsf_fwhm : ArrayLike
-            Instrumental line spread function FWHM at the line center.
         \*\*params : ArrayLike
-            Parameter values, keyed by the names from :meth:`param_names`.
+            Parameter values keyed by the names from :meth:`param_names`.
 
         Returns
         -------
-        Array
-            Fractional flux integrated in each bin (sums to 1 over all bins).
+        Array, shape ``(E,)``
+            Cumulative profile array.  ``jnp.diff`` over the result, masked
+            to drop inter-pixel gap entries, gives the per-pixel integral
+            of the profile.
         """
         pnames = self.param_names()
         p0 = params[pnames[0]] if len(pnames) > 0 else 0.0
         p1 = params[pnames[1]] if len(pnames) > 1 else 0.0
         p2 = params[pnames[2]] if len(pnames) > 2 else 0.0
-        return self.integrate_branch()(low, high, center, lsf_fwhm, p0, p1, p2)
+        return self.integrate_branch()(edges, center, lsf_fwhm, p0, p1, p2)
 
     def evaluate(
         self,
@@ -136,7 +135,13 @@ class Profile(ABC):
 
         The returned function must have the fixed signature::
 
-            fn(low, high, center, lsf_fwhm, p0, p1, p2) -> Array
+            fn(edges, center, lsf_fwhm, p0, p1, p2) -> Array
+
+        where *edges* has shape ``(E,)`` (pixel edges), *lsf_fwhm* has
+        shape ``(E,)`` (instrumental LSF FWHM at each edge), and the
+        returned array also has shape ``(E,)``.  The return is a
+        cumulative profile array such that ``jnp.diff`` recovers per-pixel
+        integrals.  Argument order matches :meth:`evaluate_branch`.
 
         Parameters correspond to :meth:`param_names` in order: ``p0`` is
         ``param_names()[0]``, ``p1`` is ``param_names()[1]``, ``p2`` is
@@ -165,14 +170,27 @@ class Profile(ABC):
             A pure-JAX function suitable as a ``lax.switch`` branch.
         """
 
-    @abstractmethod
     def to_dict(self) -> dict:
-        """Serialize to a YAML-safe dictionary."""
+        """Serialize to a YAML-safe dictionary.
+
+        The default implementation returns ``{'type': type(self).__name__}``,
+        which suffices for all no-argument profile subclasses.  Override for
+        profiles that carry constructor parameters (e.g. order, degree).
+        """
+        return {'type': type(self).__name__}
 
     @classmethod
-    @abstractmethod
     def from_dict(cls, d: dict) -> Profile:
-        """Deserialize from a dictionary."""
+        """Deserialize from a dictionary.
+
+        The default implementation calls ``cls()`` with no arguments, which
+        suffices for all no-argument profile subclasses.  Override for
+        profiles that require constructor parameters.
+        """
+        return cls()
+
+    def __repr__(self) -> str:
+        return f'{type(self).__name__}()'
 
 
 # -------------------------------------------------------------------
@@ -229,9 +247,9 @@ class Gaussian(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss
-            return functions.integrate_gaussian(lo, hi, c, lsf, p0)
+            return functions.integrate_gaussian(edges, lsf, c, p0)
 
         return _fn
 
@@ -241,19 +259,6 @@ class Gaussian(Profile):
             return functions.evaluate_gaussian(wavelength, c, lsf, p0)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'Gaussian'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> Gaussian:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'Gaussian()'
 
 
 @_register
@@ -280,9 +285,9 @@ class Cauchy(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_lorentz; pure Cauchy via PseudoVoigt with zero Gaussian width
-            return functions.integrate_voigt(lo, hi, c, lsf, 0.0, p0)
+            return functions.integrate_voigt(edges, lsf, c, 0.0, p0)
 
         return _fn
 
@@ -292,19 +297,6 @@ class Cauchy(Profile):
             return functions.evaluate_voigt(wavelength, c, lsf, 0.0, p0)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'Cauchy'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> Cauchy:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'Cauchy()'
 
 
 @_register
@@ -328,9 +320,9 @@ class PseudoVoigt(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz
-            return functions.integrate_voigt(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_voigt(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -340,19 +332,6 @@ class PseudoVoigt(Profile):
             return functions.evaluate_voigt(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'PseudoVoigt'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> PseudoVoigt:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'PseudoVoigt()'
 
 
 @_register
@@ -375,9 +354,9 @@ class Laplace(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_exp; pure Laplace convolved with Gaussian LSF
-            return functions.integrate_gaussianLaplace(lo, hi, c, lsf, 0.0, p0)
+            return functions.integrate_gaussianLaplace(edges, lsf, c, 0.0, p0)
 
         return _fn
 
@@ -387,19 +366,6 @@ class Laplace(Profile):
             return functions.evaluate_gaussianLaplace(wavelength, c, lsf, 0.0, p0)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'Laplace'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> Laplace:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'Laplace()'
 
 
 @_register
@@ -425,9 +391,9 @@ class SEMG(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_exp
-            return functions.integrate_gaussianLaplace(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_gaussianLaplace(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -437,19 +403,6 @@ class SEMG(Profile):
             return functions.evaluate_gaussianLaplace(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SEMG'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SEMG:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SEMG()'
 
 
 @_register
@@ -479,9 +432,9 @@ class GaussHermite(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = h3, p2 = h4
-            return functions.integrate_gaussHermite(lo, hi, c, lsf, p0, p1, p2)
+            return functions.integrate_gaussHermite(edges, lsf, c, p0, p1, p2)
 
         return _fn
 
@@ -491,19 +444,6 @@ class GaussHermite(Profile):
             return functions.evaluate_gaussHermite(wavelength, c, lsf, p0, p1, p2)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'GaussHermite'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> GaussHermite:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'GaussHermite()'
 
 
 @_register
@@ -528,9 +468,9 @@ class SplitNormal(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_blue, p1 = fwhm_red
-            return functions.integrate_split_normal(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_split_normal(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -540,19 +480,6 @@ class SplitNormal(Profile):
             return functions.evaluate_split_normal(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SplitNormal'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SplitNormal:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SplitNormal()'
 
 
 @_register
@@ -590,9 +517,9 @@ class GaussianSplitLaplace(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_l_blue, p2 = fwhm_l_red
-            return functions.integrate_gaussianSplitLaplace(lo, hi, c, lsf, p0, p1, p2)
+            return functions.integrate_gaussianSplitLaplace(edges, lsf, c, p0, p1, p2)
 
         return _fn
 
@@ -605,19 +532,6 @@ class GaussianSplitLaplace(Profile):
             )
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'GaussianSplitLaplace'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> GaussianSplitLaplace:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'GaussianSplitLaplace()'
 
 
 @_register
@@ -654,9 +568,9 @@ class SkewNormal(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = alpha
-            return functions.integrate_skewNormal(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_skewNormal(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -666,19 +580,6 @@ class SkewNormal(Profile):
             return functions.evaluate_skewNormal(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SkewNormal'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SkewNormal:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SkewNormal()'
 
 
 @_register
@@ -708,9 +609,9 @@ class BoxGauss(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_box, p1 = fwhm_gauss
-            return functions.integrate_boxGauss(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_boxGauss(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -720,19 +621,6 @@ class BoxGauss(Profile):
             return functions.evaluate_boxGauss(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'BoxGauss'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> BoxGauss:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'BoxGauss()'
 
 
 @_register
@@ -774,9 +662,9 @@ class SkewVoigt(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz, p2 = alpha
-            return functions.integrate_skewVoigt(lo, hi, c, lsf, p0, p1, p2)
+            return functions.integrate_skewVoigt(edges, lsf, c, p0, p1, p2)
 
         return _fn
 
@@ -786,19 +674,6 @@ class SkewVoigt(Profile):
             return functions.evaluate_skewVoigt(wavelength, c, lsf, p0, p1, p2)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SkewVoigt'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SkewVoigt:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SkewVoigt()'
 
 
 _PROFILE_ALIASES: dict[str, Profile] = {

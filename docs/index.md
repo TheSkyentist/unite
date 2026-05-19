@@ -10,7 +10,7 @@ with shared kinematics, calibration tokens, and flexible priors.
 **Key features:**
 
 - Fast pixel integration of line profiles (Gaussian, Voigt, Hermite, and more) with analytic
-  CDF-based integration or Gauss-Legendre quadrature for exact absorption modelling
+  CDF-based integration or numerical LSF convolution for exact absorption modelling
 - Simultaneous fitting across multiple spectra and gratings
 - Shared kinematic parameters (redshift, FWHM) across lines and components
 - Dependent priors with arbitrary-depth parameter chains

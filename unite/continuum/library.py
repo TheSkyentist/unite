@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, cast, override
 
 import jax
@@ -101,33 +102,34 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
     return jnp.einsum('oij,j,i->o', jnp.asarray(a_np), moments, coeffs)
 
 
-def _polyint_avg(coeffs: Array, x_low: ArrayLike, x_high: ArrayLike) -> Array:
-    """Exact pixel-averaged value of a polynomial over ``[x_low, x_high]``.
+def _polyint_at(coeffs: Array, x: ArrayLike) -> Array:
+    """Antiderivative of a polynomial evaluated at *x*.
 
-    Given descending-order coefficients ``[a_n, ..., a_0]``, compute::
+    Given descending-order coefficients ``[a_n, ..., a_0]``, return the
+    antiderivative ``P(x) = ∫ p(x') dx' = a_n/(n+1) * x^{n+1} + ... + a_0 * x``
+    evaluated at each entry of *x* (constant of integration zero).
 
-        (1 / (x_high - x_low)) * integral_{x_low}^{x_high} p(x) dx
-
-    using the analytic antiderivative.
+    Used by polynomial-based continuum forms to produce a cumulative-at-edges
+    array: ``jnp.diff(P_at_edges) / jnp.diff(edges)`` recovers the exact
+    pixel-averaged value of *p* over each pixel.
 
     Parameters
     ----------
     coeffs : Array, shape ``(n+1,)``
         Polynomial coefficients in descending order.
-    x_low, x_high : ArrayLike
-        Pixel bin edges (may be arrays).
+    x : ArrayLike
+        Points at which to evaluate the antiderivative.
 
     Returns
     -------
     Array
-        Pixel-averaged polynomial values.
+        Antiderivative value at each *x*.
     """
-    # Antiderivative: for descending [a_n, ..., a_0], the antiderivative
-    # is [a_n/(n+1), a_{n-1}/n, ..., a_0/1, 0] (also descending).
+    # Antiderivative coefficients (also descending), with zero constant term.
     n = coeffs.shape[0]
     divisors = jnp.arange(n, 0, -1, dtype=coeffs.dtype)
-    anti = jnp.concatenate([coeffs / divisors, jnp.array([0.0])])
-    return (jnp.polyval(anti, x_high) - jnp.polyval(anti, x_low)) / (x_high - x_low)
+    anti = jnp.concatenate([coeffs / divisors, jnp.array([0.0], dtype=coeffs.dtype)])
+    return jnp.polyval(anti, x)
 
 
 def _cheb_to_mono_matrix(n: int) -> Array:
@@ -255,6 +257,7 @@ class ContinuumForm(ABC):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         """Evaluate the (optionally LSF-convolved) continuum model.
 
@@ -280,6 +283,11 @@ class ContinuumForm(ABC):
         lsf_fwhm : ArrayLike, optional
             LSF FWHM at each wavelength point (same unit as
             *wavelength*).  Default ``0.0`` means no LSF convolution.
+        z_sys : float, optional
+            Systemic redshift of the source.  Forms that evaluate in
+            rest-frame (e.g. :class:`Template`) use this to convert
+            observed-frame wavelengths to rest-frame.  Most forms ignore
+            it.  Default ``0.0``.
 
         Returns
         -------
@@ -289,27 +297,27 @@ class ContinuumForm(ABC):
 
     def integrate(
         self,
-        low: ArrayLike,
-        high: ArrayLike,
+        edges: ArrayLike,
         center: float,
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
-        """Pixel-integrated continuum model.
+        """Cumulative continuum integral evaluated at edges.
 
-        Evaluates the (optionally LSF-convolved) continuum averaged over
-        each pixel bin ``[low, high]``.  The default implementation
-        evaluates at pixel centres, which is exact for forms whose
-        variation across a pixel is negligible (e.g. :class:`Linear`).
-
-        Subclasses may override this to provide analytic integration.
+        ``jnp.diff`` over the returned array (then divided by pixel widths)
+        gives the pixel-averaged continuum.  The default implementation is
+        a midpoint-rule cumulative sum via :meth:`evaluate`, which is exact
+        for forms that vary linearly across a pixel (e.g. :class:`Linear`)
+        and a reasonable approximation otherwise.  Polynomial-based forms
+        override this method to use the exact antiderivative.
 
         Parameters
         ----------
-        low, high : ArrayLike, shape ``(n_pixels,)``
-            Pixel bin edges (observed frame, canonical wavelength unit).
+        edges : ArrayLike, shape ``(E,)``
+            Pixel edges (observed frame, canonical wavelength unit).
         center : float
             Region midpoint in observed frame.
         params : dict of str to ArrayLike
@@ -319,16 +327,25 @@ class ContinuumForm(ABC):
         obs_high : float
             Upper observed-frame wavelength bound of the region.
         lsf_fwhm : ArrayLike, optional
-            LSF FWHM at each pixel centre (same unit as *low*/*high*).
-            Default ``0.0`` means no LSF convolution.
+            LSF FWHM scalar for the region; polynomial-based forms apply
+            it via the analytic Gaussian-moment convolution.  Default
+            ``0.0`` means no LSF convolution.
+        z_sys : float, optional
+            Systemic redshift; passed through to :meth:`evaluate`.
+            Default ``0.0``.
 
         Returns
         -------
-        Array
-            Pixel-averaged continuum flux, shape ``(n_pixels,)``.
+        Array, shape ``(E,)``
+            Cumulative continuum integral at the edges.
         """
-        wavelength = (low + high) / 2.0
-        return self.evaluate(wavelength, center, params, obs_low, obs_high, lsf_fwhm)
+        edges_arr = jnp.asarray(edges)
+        mids = 0.5 * (edges_arr[1:] + edges_arr[:-1])
+        widths = jnp.diff(edges_arr)
+        vals = self.evaluate(mids, center, params, obs_low, obs_high, lsf_fwhm, z_sys)
+        return jnp.concatenate(
+            [jnp.zeros(1, edges_arr.dtype), jnp.cumsum(vals * widths)]
+        )
 
     @property
     def is_linear(self) -> bool:
@@ -529,9 +546,30 @@ class Linear(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         nw = params['norm_wav']
         return params['scale'] + jnp.tan(params['angle']) * (wavelength - nw)
+
+    @override
+    def integrate(
+        self,
+        edges: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
+    ) -> Array:
+        # Linear is preserved exactly under Gaussian convolution, so LSF is a
+        # no-op.  The antiderivative of ``scale + slope * (λ - nw)`` is
+        # ``scale * (λ - nw) + slope * (λ - nw)² / 2`` (constant of integration
+        # zero); ``jnp.diff`` then recovers the exact pixel integral.
+        nw = params['norm_wav']
+        x = jnp.asarray(edges) - nw
+        slope = jnp.tan(params['angle'])
+        return jnp.asarray(params['scale']) * x + 0.5 * slope * x * x
 
     @override
     def to_dict(self) -> dict:
@@ -618,6 +656,7 @@ class Polynomial(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         nw = params['norm_wav']
         x = wavelength - nw
@@ -631,22 +670,21 @@ class Polynomial(ContinuumForm):
     @override
     def integrate(
         self,
-        low: ArrayLike,
-        high: ArrayLike,
+        edges: ArrayLike,
         center: float,
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         nw = params['norm_wav']
-        x_low = low - nw
-        x_high = high - nw
+        x = jnp.asarray(edges) - nw
         mono = jnp.array(
             [params[f'c{i}'] for i in range(self._degree, 0, -1)] + [params['scale']]
         )
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm)
-        return _polyint_avg(convolved, x_low, x_high)
+        return _polyint_at(convolved, x)
 
     @override
     def to_dict(self) -> dict:
@@ -660,6 +698,28 @@ class Polynomial(ContinuumForm):
     @override
     def __repr__(self) -> str:
         return f'Polynomial(degree={self._degree})'
+
+
+def _normalize_wavelength(
+    wavelength: ArrayLike,
+    center: float,
+    obs_low: float,
+    obs_high: float,
+    stretch: float,
+) -> tuple[Array, float]:
+    """Map observed wavelengths to the normalised coordinate used by Chebyshev/Bernstein.
+
+    Both forms normalize ``wavelength`` to the interval ``[-1, 1]`` (for
+    Chebyshev) or ``[0, 1]`` (for Bernstein) using the same scale factor
+    ``(obs_high - obs_low) / 2 * stretch``.  This helper computes the
+    shared scale factor and the intermediate ``u = (w - center) / scale``
+    coordinate; callers apply the form-specific final transformation.
+
+    Returns ``(u, scale_factor)`` where ``u = (wavelength - center) / scale_factor``.
+    """
+    scale_factor = (obs_high - obs_low) / 2 * stretch
+    u = (jnp.asarray(wavelength) - center) / scale_factor
+    return u, scale_factor
 
 
 @_register
@@ -762,56 +822,51 @@ class Chebyshev(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
-        half_width = (obs_high - obs_low) / 2
-        scale_factor = half_width * self._stretch
-        x = (wavelength - center) / scale_factor
-        nw = params['norm_wav']
-        x_nw = (nw - center) / scale_factor
-
-        # Chebyshev coefficients → monomial (ascending) via static matrix,
-        # then convolve with rescaled LSF and evaluate.
+        x, scale_factor = _normalize_wavelength(
+            wavelength, center, obs_low, obs_high, self._stretch
+        )
+        x_nw, _ = _normalize_wavelength(
+            params['norm_wav'], center, obs_low, obs_high, self._stretch
+        )
         cheb_coeffs = jnp.array(
             [1.0] + [params[f'c{i}'] for i in range(1, self._order + 1)]
         )
-        mono_asc = self._cheb2mono @ cheb_coeffs  # ascending order
-        mono = mono_asc[::-1]  # descending for jnp.polyval
-        # Rescale LSF FWHM into the normalised coordinate system.
+        mono = (self._cheb2mono @ cheb_coeffs)[::-1]  # ascending → descending
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         shape = jnp.polyval(convolved, x)
-        # norm_wav is a scalar — no LSF convolution needed.
         shape_nw = chebval(x_nw, cheb_coeffs)
         return params['scale'] * shape / shape_nw
 
     @override
     def integrate(
         self,
-        low: ArrayLike,
-        high: ArrayLike,
+        edges: ArrayLike,
         center: float,
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
-        half_width = (obs_high - obs_low) / 2
-        scale_factor = half_width * self._stretch
-        x_low = (low - center) / scale_factor
-        x_high = (high - center) / scale_factor
-        nw = params['norm_wav']
-        x_nw = (nw - center) / scale_factor
-
+        x, scale_factor = _normalize_wavelength(
+            edges, center, obs_low, obs_high, self._stretch
+        )
+        x_nw, _ = _normalize_wavelength(
+            params['norm_wav'], center, obs_low, obs_high, self._stretch
+        )
         cheb_coeffs = jnp.array(
             [1.0] + [params[f'c{i}'] for i in range(1, self._order + 1)]
         )
-        mono_asc = self._cheb2mono @ cheb_coeffs
-        mono = mono_asc[::-1]
+        mono = (self._cheb2mono @ cheb_coeffs)[::-1]
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
-        shape_avg = _polyint_avg(convolved, x_low, x_high)
+        # Antiderivative in normalised coord; rescale to λ by dλ/du = scale_factor.
+        shape_anti = _polyint_at(convolved, x) * scale_factor
         shape_nw = chebval(x_nw, cheb_coeffs)
-        return params['scale'] * shape_avg / shape_nw
+        return params['scale'] * shape_anti / shape_nw
 
     @override
     def to_dict(self) -> dict:
@@ -927,6 +982,7 @@ class BSpline(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         # LSF convolution is not supported for BSpline (non-polynomial basis).
         # Normalize wavelengths relative to the knot range
@@ -1093,70 +1149,59 @@ class Bernstein(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
-        # 1. Coordinate Transformation
-        half_width = (obs_high - obs_low) / 2
-        stretch_factor = half_width * self._stretch
-
-        # helper to transform wavelength to [0, 1]
-        def to_t(w):
-            uu = (w - center) / stretch_factor
-            return (uu + 1) / 2
-
-        t = to_t(wavelength)
-        t_nw = to_t(params['norm_wav'])
-
-        # 2. Bernstein coefficients → monomial (ascending) via static matrix,
-        # convolve with rescaled LSF, then evaluate.
+        # u ∈ [-1, 1]; t = (u + 1) / 2 ∈ [0, 1] for Bernstein basis.
+        u, scale_factor = _normalize_wavelength(
+            wavelength, center, obs_low, obs_high, self._stretch
+        )
+        u_nw, _ = _normalize_wavelength(
+            params['norm_wav'], center, obs_low, obs_high, self._stretch
+        )
+        t = (u + 1) / 2
+        t_nw = (u_nw + 1) / 2
         coeffs = jnp.concatenate(
             [jnp.array([1.0])]
             + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._degree + 1)]
         )
-        mono_asc = self._bern2mono @ coeffs  # ascending monomial in t
-        mono = mono_asc[::-1]  # descending for jnp.polyval
-        # LSF FWHM in t-coordinate: dt/dλ = 1 / (2 * stretch_factor)
-        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * stretch_factor)
+        mono = (self._bern2mono @ coeffs)[::-1]  # ascending → descending
+        # LSF FWHM in t-coordinate: dt/dλ = 1 / (2 * scale_factor)
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * scale_factor)
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         shape = jnp.polyval(convolved, t)
-        # norm_wav is a scalar — no LSF convolution needed.
         shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
-
-        # 3. Normalize so that the continuum equals `scale` at `norm_wav`
         return cast(Array, params['scale'] * shape / shape_nw)
 
     @override
     def integrate(
         self,
-        low: ArrayLike,
-        high: ArrayLike,
+        edges: ArrayLike,
         center: float,
         params: dict[str, ArrayLike],
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
-        half_width = (obs_high - obs_low) / 2
-        stretch_factor = half_width * self._stretch
-
-        def to_t(w):
-            uu = (w - center) / stretch_factor
-            return (uu + 1) / 2
-
-        t_low = to_t(low)
-        t_high = to_t(high)
-        t_nw = to_t(params['norm_wav'])
-
+        u, scale_factor = _normalize_wavelength(
+            edges, center, obs_low, obs_high, self._stretch
+        )
+        u_nw, _ = _normalize_wavelength(
+            params['norm_wav'], center, obs_low, obs_high, self._stretch
+        )
+        t = (u + 1) / 2
+        t_nw = (u_nw + 1) / 2
         coeffs = jnp.concatenate(
             [jnp.array([1.0])]
             + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._degree + 1)]
         )
-        mono_asc = self._bern2mono @ coeffs
-        mono = mono_asc[::-1]
-        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * stretch_factor)
+        mono = (self._bern2mono @ coeffs)[::-1]
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * scale_factor)
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
-        shape_avg = _polyint_avg(convolved, t_low, t_high)
+        # Antiderivative in t-coord; rescale to λ via dλ/dt = 2 * scale_factor.
+        shape_anti = _polyint_at(convolved, t) * (2.0 * scale_factor)
         shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
-        return params['scale'] * shape_avg / shape_nw
+        return params['scale'] * shape_anti / shape_nw
 
     @override
     def to_dict(self) -> dict:
@@ -1227,36 +1272,35 @@ class PowerLaw(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         # LSF convolution is not supported for PowerLaw.
         nw = params['norm_wav']
         return cast(Array, params['scale'] * (wavelength / nw) ** params['beta'])
 
-    # def integrate(
-    #     self,
-    #     low: ArrayLike,
-    #     high: ArrayLike,
-    #     center: float,
-    #     params: dict[str, ArrayLike],
-    #     obs_low: float,
-    #     obs_high: float,
-    #     lsf_fwhm: ArrayLike = 0.0,
-    # ) -> Array:
-    #     # Exact integral of scale * (wavelength / nw)^beta over [low, high]:
-    #     # = scale / nw^beta * [w^{beta+1} / (beta+1)]_{low}^{high} / (high - low)
-    #     nw = params['norm_wav']
-    #     beta = params['beta']
-    #     bp1 = beta + 1.0
-    #     # For beta != -1 (the common case): use the power-rule antiderivative.
-    #     # beta = -1 gives log, but that is physically unusual; we handle it
-    #     # via jnp.where for safety.
-    #     antideriv_high = high**bp1 / bp1
-    #     antideriv_low = low**bp1 / bp1
-    #     power_avg = (antideriv_high - antideriv_low) / (high - low)
-    #     # beta = -1 fallback: integral of 1/w is ln(w)
-    #     log_avg = (jnp.log(high) - jnp.log(low)) / (high - low)
-    #     avg = jnp.where(jnp.abs(bp1) > 1e-10, power_avg, log_avg)
-    #     return params['scale'] / nw**beta * avg
+    @override
+    def integrate(
+        self,
+        edges: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
+    ) -> Array:
+        # LSF convolution is not supported for PowerLaw (same as evaluate).
+        # Returns cumulative antiderivative at edges; diff/widths gives pixel averages.
+        edges_arr = jnp.asarray(edges)
+        nw = params['norm_wav']
+        beta = params['beta']
+        bp1 = beta + 1.0
+        # Power-rule antiderivative of (w/nw)^beta = w^bp1 / (bp1 * nw^beta).
+        anti_power = edges_arr**bp1 / (bp1 * nw**beta)
+        # beta = -1 fallback: antiderivative of 1/w is nw * ln(w).
+        anti_log = nw * jnp.log(edges_arr)
+        anti = jnp.where(jnp.abs(bp1) > 1e-10, anti_power, anti_log)
+        return cast(Array, params['scale'] * (anti - anti[0]))
 
     @override
     def to_dict(self) -> dict:
@@ -1334,6 +1378,7 @@ class Blackbody(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         # LSF convolution is not supported for Blackbody.
         wl_um = wavelength * self._micron_factor
@@ -1424,6 +1469,7 @@ class ModifiedBlackbody(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         # LSF convolution is not supported for ModifiedBlackbody.
         wl_um = wavelength * self._micron_factor
@@ -1545,6 +1591,7 @@ class AttenuatedBlackbody(ContinuumForm):
         obs_low: float,
         obs_high: float,
         lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
     ) -> Array:
         # LSF convolution is not supported for AttenuatedBlackbody.
         wl_um = wavelength * self._micron_factor
@@ -1572,3 +1619,309 @@ class AttenuatedBlackbody(ContinuumForm):
     @override
     def __repr__(self) -> str:
         return f'AttenuatedBlackbody(lambda_ext={self.lambda_ext})'
+
+
+@_register
+class Template(ContinuumForm):
+    """Interpolated spectral template continuum.
+
+    Loads one or more template spectra from a file readable by
+    :func:`astropy.table.Table.read`.  The file must contain a wavelength
+    column (identified by its physical unit) and one or more flux columns.
+    Each flux column becomes a separate scale parameter named
+    ``{column}_scale``.
+
+    The template is evaluated by linearly interpolating each column in the
+    rest frame and normalising so that ``{col}_scale`` equals the flux at
+    ``norm_wav``:
+
+    .. code-block:: text
+
+        F(λ) = Σ_i  {col_i}_scale * T_i(λ_rest) / T_i(norm_wav_rest)
+
+    where ``λ_rest = λ_obs / (1 + z_sys)``.
+
+    Parameters
+    ----------
+    path : str or Path
+        Path to the template file.  Any format supported by
+        :func:`~astropy.table.Table.read` is accepted (FITS, ECSV, …).
+    wavelength_colname : str, optional
+        Name of the wavelength column.  If omitted, the column whose unit
+        has ``physical_type == 'length'`` is used; raises if the result is
+        ambiguous.
+    usecols : list or tuple of str, optional
+        Flux columns to load.  Defaults to all non-wavelength columns.
+        Raises if any requested column is absent.
+
+    Notes
+    -----
+    The wavelength column must carry an astropy unit with
+    ``physical_type == 'length'``.  Flux columns without units, or with
+    units that are not spectral flux density (f_lambda), produce a
+    :class:`UserWarning` but are still accepted.
+
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``{col}_scale`` — Template amplitude at ``norm_wav``, one per column.
+      Default prior: ``Uniform(0, 2)``.
+    * ``norm_wav`` — Rest-frame reference wavelength (shared across all
+      columns).  Default prior: ``Fixed(region_center_rest)``.
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        wavelength_colname: str | None = None,
+        usecols: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        import warnings
+        from pathlib import Path as _Path
+
+        from astropy.table import Table
+
+        self._path = _Path(path)
+        self._wavelength_colname = wavelength_colname
+        self._usecols_arg = tuple(usecols) if usecols is not None else None
+
+        table = Table.read(self._path)
+
+        # --- identify wavelength column ---
+        if wavelength_colname is not None:
+            if wavelength_colname not in table.colnames:
+                msg = (
+                    f"wavelength_colname '{wavelength_colname}' not found in "
+                    f'{self._path}. Available columns: {table.colnames}'
+                )
+                raise ValueError(msg)
+            wl_col = wavelength_colname
+        else:
+            length_cols = [
+                c
+                for c in table.colnames
+                if getattr(table[c], 'unit', None) is not None
+                and u.Unit(table[c].unit).is_equivalent(u.m)
+            ]
+            if len(length_cols) == 0:
+                msg = (
+                    f'No column with a length unit found in {self._path}. '
+                    'Set wavelength_colname explicitly.'
+                )
+                raise ValueError(msg)
+            if len(length_cols) > 1:
+                msg = (
+                    f'Multiple length-unit columns in {self._path}: {length_cols}. '
+                    'Set wavelength_colname explicitly.'
+                )
+                raise ValueError(msg)
+            wl_col = length_cols[0]
+
+        # --- wavelength array ---
+        wl_col_data = table[wl_col]
+        if not hasattr(wl_col_data, 'unit') or wl_col_data.unit is None:
+            msg = f"Wavelength column '{wl_col}' has no unit."
+            raise ValueError(msg)
+        self._lam_qty: u.Quantity = u.Quantity(
+            np.asarray(wl_col_data), unit=wl_col_data.unit
+        )
+        if not np.all(np.diff(self._lam_qty.value) > 0):
+            msg = f"Wavelength column '{wl_col}' is not strictly monotonically increasing."
+            raise ValueError(msg)
+
+        # --- flux columns ---
+        remaining = [c for c in table.colnames if c != wl_col]
+        if usecols is not None:
+            missing = [c for c in usecols if c not in table.colnames]
+            if missing:
+                msg = (
+                    f'usecols columns not found in {self._path}: {missing}. '
+                    f'Available columns: {table.colnames}'
+                )
+                raise ValueError(msg)
+            flux_cols = list(usecols)
+        else:
+            flux_cols = remaining
+
+        if len(flux_cols) == 0:
+            msg = f'No flux columns found in {self._path} after excluding the wavelength column.'
+            raise ValueError(msg)
+
+        # --- unit warnings and NaN/inf checks ---
+        _flam_ref = u.Unit('erg s-1 cm-2 AA-1')
+        for col in flux_cols:
+            col_data = table[col]
+            col_unit = getattr(col_data, 'unit', None)
+            if col_unit is None or str(col_unit) in ('', 'None'):
+                warnings.warn(
+                    f"Template column '{col}' in {self._path} has no units. "
+                    'Assuming f_lambda (spectral flux density per wavelength). '
+                    'scale parameters will be in units of continuum_scale.',
+                    UserWarning,
+                    stacklevel=2,
+                )
+            elif not u.Unit(col_unit).is_equivalent(_flam_ref):
+                warnings.warn(
+                    f"Template column '{col}' has unit '{col_unit}'. "
+                    'Expected f_lambda (spectral flux density per wavelength).',
+                    UserWarning,
+                    stacklevel=2,
+                )
+            arr = np.asarray(col_data, dtype=float)
+            if not np.all(np.isfinite(arr)):
+                msg = f"Template column '{col}' contains NaN or inf values."
+                raise ValueError(msg)
+
+        lam_arr = self._lam_qty.to(u.um).value
+        if not np.all(np.isfinite(lam_arr)):
+            msg = f"Wavelength column '{wl_col}' contains NaN or inf values."
+            raise ValueError(msg)
+
+        self._flux_cols: list[str] = flux_cols
+        self._flam_arrays: dict[str, np.ndarray] = {
+            col: np.asarray(table[col], dtype=float) for col in flux_cols
+        }
+
+        # set by _prepare()
+        self._lam_um: np.ndarray | None = None
+        self._rest_low_um: float = 0.0
+        self._flam_eval: Array | None = None
+        self._lam_eval: Array | None = None
+
+    # ------------------------------------------------------------------
+    # ContinuumForm interface
+    # ------------------------------------------------------------------
+
+    @override
+    def param_names(self) -> tuple[str, ...]:
+        return (*[f'{c}_scale' for c in self._flux_cols], 'norm_wav')
+
+    @override
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {}
+        for col in self._flux_cols:
+            priors[f'{col}_scale'] = Uniform(0, 2)
+        priors['norm_wav'] = Fixed(region_center)
+        return priors
+
+    @override
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {}
+        for col in self._flux_cols:
+            d[f'{col}_scale'] = (True, flux_unit)
+        d['norm_wav'] = (False, wl_unit)
+        return d
+
+    @override
+    def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
+        """Convert template to microns and validate wavelength coverage."""
+        self._lam_um = self._lam_qty.to(u.um).value
+        self._rest_low_um = float(low.to(u.um).value)
+        rest_high_um = float(high.to(u.um).value)
+
+        # Use a small relative tolerance to absorb floating-point rounding from
+        # unit conversions (e.g. 9000 AA * 1e-4 µm/AA = 0.9000000000000001 µm).
+        _rtol = 1e-9
+        if self._lam_um[0] > self._rest_low_um * (1.0 + _rtol):
+            msg = (
+                f'Template wavelength grid starts at {self._lam_um[0]:.4f} µm '
+                f'but region lower bound is {low.to(u.um):.4f}. '
+                'Template does not cover the full region.'
+            )
+            raise ValueError(msg)
+        if self._lam_um[-1] < rest_high_um * (1.0 - _rtol):
+            msg = (
+                f'Template wavelength grid ends at {self._lam_um[-1]:.4f} µm '
+                f'but region upper bound is {high.to(u.um):.4f}. '
+                'Template does not cover the full region.'
+            )
+            raise ValueError(msg)
+
+        # Stack flux arrays: shape (N_cols, N_lam)
+        self._flam_eval = jnp.array(
+            np.stack([self._flam_arrays[c] for c in self._flux_cols], axis=0)
+        )
+        self._lam_eval = jnp.array(self._lam_um)
+
+    @override
+    def evaluate(
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
+    ) -> Array:
+        # Convert observed-frame wavelength to rest-frame microns.
+        # obs_low = rest_low_canonical * (1 + z_sys), and _rest_low_um is
+        # rest_low in microns, so wavelength * _rest_low_um / obs_low gives
+        # rest-frame microns regardless of the canonical wavelength unit.
+        assert self._flam_eval is not None and self._lam_eval is not None, (
+            'Template._prepare() must be called before evaluate(). '
+            'Wrap the Template in a ContinuumRegion to trigger _prepare().'
+        )
+        wl = jnp.asarray(wavelength)
+        scale = self._rest_low_um / obs_low
+        lam_rest_um = wl * scale
+        norm_wav_rest_um = params['norm_wav'] * scale
+
+        total = jnp.zeros_like(wl)
+        for i, col in enumerate(self._flux_cols):
+            flam_row = self._flam_eval[i]
+            t_at_lam = jnp.interp(lam_rest_um, self._lam_eval, flam_row)
+            t_at_norm = jnp.interp(norm_wav_rest_um, self._lam_eval, flam_row)
+            total = total + params[f'{col}_scale'] * t_at_lam / t_at_norm
+        return total
+
+    # ------------------------------------------------------------------
+    # Serialization
+    # ------------------------------------------------------------------
+
+    @override
+    def to_dict(self) -> dict:
+        d: dict = {'type': 'Template', 'path': str(self._path)}
+        if self._wavelength_colname is not None:
+            d['wavelength_colname'] = self._wavelength_colname
+        if self._usecols_arg is not None:
+            d['usecols'] = list(self._usecols_arg)
+        return d
+
+    @classmethod
+    @override
+    def from_dict(cls, d: dict) -> Template:
+        return cls(
+            d['path'],
+            wavelength_colname=d.get('wavelength_colname'),
+            usecols=d.get('usecols'),
+        )
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Template):
+            return NotImplemented
+        return (
+            self._path == other._path
+            and self._wavelength_colname == other._wavelength_colname
+            and self._usecols_arg == other._usecols_arg
+        )
+
+    @override
+    def __hash__(self) -> int:
+        return hash(
+            (
+                type(self).__name__,
+                self._path,
+                self._wavelength_colname,
+                self._usecols_arg,
+            )
+        )
+
+    @override
+    def __repr__(self) -> str:
+        cols = ', '.join(self._flux_cols)
+        return f'Template({self._path.name!r}, columns=[{cols}])'

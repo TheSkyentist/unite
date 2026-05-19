@@ -13,11 +13,11 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 
 ## What it does
 
-- **Three pixel-integration modes**: analytic (exact CDF-based, default), Gauss-Legendre quadrature (`n_nodes` sub-pixel points per pixel), and numerical LSF convolution (`n_super` uniform fine-grid points per pixel + banded wavelength-varying Gaussian convolution, correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` for absorption lines)
+- **Two pixel-integration modes**: analytic (exact CDF-based, default) and numerical LSF convolution (`n_super` uniform fine-grid points per pixel + banded wavelength-varying Gaussian convolution, correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` for absorption lines)
 - **Simultaneous multi-spectrum fitting** across gratings and instruments with shared kinematic parameters (redshift, FWHM)
 - **Multiple line profiles**: Gaussian, Cauchy, Pseudo-Voigt, Laplace, SEMG, Gauss-Hermite, Split-Normal, Skew-Normal, Skew-Voigt, Box-Gauss, Gaussian-Split-Laplace (asymmetric EMG)
 - **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)`, with per-component depth ordering (`zorder`) so each absorber selectively attenuates only the sources behind it
-- **Flexible continuum models**: Linear, Polynomial, Chebyshev, Bernstein, B-Spline, Power-Law, Blackbody, Modified Blackbody, Attenuated Blackbody — auto-generated from line configurations
+- **Flexible continuum models**: Linear, Polynomial, Chebyshev, Bernstein, B-Spline, Power-Law, Blackbody, Modified Blackbody, Attenuated Blackbody, Template (user-supplied file) — auto-generated from line configurations
 - **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
 - **YAML serialization** for reproducible, human-editable configurations
 - **User-controlled sampler** — `ModelBuilder` returns `(model_fn, model_args)` for use with any NumPyro backend (NUTS, SVI, nested sampling, ...)
@@ -88,7 +88,6 @@ spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 
 # 3. Build and run with any NumPyro sampler
 # integration_mode='analytic' (default) uses exact CDF integration;
-# integration_mode='quadrature' uses Gauss-Legendre quadrature (n_nodes per pixel);
 # integration_mode='convolution' convolves intrinsic model with LSF on a fine grid
 #   (n_super uniform points per pixel) — most accurate for absorption lines
 builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)

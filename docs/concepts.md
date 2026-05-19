@@ -66,33 +66,39 @@ physically appropriate since the instrumental broadening is always present.
   `∫F·exp(-τ·φ)`, which is accurate when the absorber is well-resolved but introduces an
   approximation for unresolved or marginally resolved lines.
 
-**Quadrature mode** evaluates the full composed model — emission, absorption, and
-continuum together — at Gauss-Legendre sub-pixel nodes and integrates via weighted sum:
+**Convolution mode** evaluates the intrinsic model (LSF = 0) on a uniform fine sub-pixel
+grid, pixel-averages, and then numerically convolves with the wavelength-dependent
+Gaussian LSF:
 
-- **Exact pixel integration** for both emission and absorption — properly computes
-  `∫F(λ)·exp(-τ·φ(λ)) dλ` over each pixel, avoiding the analytic-mode approximation
-- **Slower** — requires `n_nodes` (default 7) profile evaluations per pixel instead of one
-- **Recommended when** tau-parametrized lines are unresolved or marginally resolved, or when
-  mixing emission and absorption at similar wavelengths
+- **Exact** for both emission and absorption — correctly computes
+  `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` rather than `F · exp(-τ · LSF ⊗ φ)`, eliminating
+  both the pixel-integration approximation and the LSF pre-convolution approximation
+- **Slower** — requires `n_super` (default 10) sub-pixel evaluations per pixel plus a
+  banded LSF convolution at pixel resolution
+- **Recommended when** absorption lines are unresolved or optically thick, or when
+  your model includes non-polynomial continuum forms (`PowerLaw`, `BSpline`, blackbody)
+  whose analytic LSF treatment is not available in analytic mode
 
 ```python
 # Analytic (default) — fast, exact for emission lines
 model_fn, args = builder.build(integration_mode='analytic')
 
-# Quadrature — correct pixel integration for absorption lines
-model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
+# Convolution — exact LSF treatment for absorption and non-polynomial continua
+model_fn, args = builder.build(integration_mode='convolution', n_super=10)
 ```
 
-The continuum is evaluated at pixel centers in both modes, since it varies slowly enough
-that sub-pixel variation is negligible.
+In analytic mode the continuum is evaluated at pixel centers (or analytically integrated
+for polynomial-based forms), since it varies slowly enough that sub-pixel variation is
+negligible.
 
 (lsf-pre-convolution-of-absorption-profiles)=
 ### LSF Pre-Convolution of Absorption Profiles
 
 :::{warning}
-**This approximation applies in both integration modes.**
+**This approximation applies in analytic mode only — convolution mode handles the LSF
+correctly.**
 
-In both analytic and quadrature modes, the absorption profile `φ(λ)` used in
+In analytic mode, the absorption profile `φ(λ)` used in
 `exp(-τ·φ)` is the **LSF-convolved** profile, not the intrinsic one. The physically correct
 observable is:
 

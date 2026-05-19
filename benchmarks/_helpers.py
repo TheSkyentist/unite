@@ -133,7 +133,7 @@ def build_model(line_cfg, cont_cfg, spectra: Spectra, *, integration_mode='analy
     """Prepare spectra + build the model.  Returns (model_fn, args).
 
     ``integration_mode`` is forwarded to :meth:`ModelBuilder.build`; valid
-    values are ``'analytic'`` (default), ``'quadrature'``, ``'convolution'``.
+    values are ``'analytic'`` (default) and ``'convolution'``.
     """
     spectra.prepare(line_cfg, cont_cfg)
     spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)

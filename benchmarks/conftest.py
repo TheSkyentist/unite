@@ -32,7 +32,7 @@ from benchmarks._helpers import (
 )
 from unite.spectrum import Spectra
 
-INTEGRATION_MODES = ('analytic', 'quadrature', 'convolution')
+INTEGRATION_MODES = ('analytic', 'convolution')
 
 
 @pytest.fixture(scope='session')
@@ -88,9 +88,9 @@ def single_grating_absorber_bench() -> Bench:
 def single_grating_by_mode(request) -> Bench:
     """Single-grating config built under each integration mode.
 
-    Parametrized over ``('analytic', 'quadrature', 'convolution')`` so every
-    benchmark that takes this fixture is automatically run three times — one
-    per mode.  Use this to compare mode-level cost.
+    Parametrized over ``('analytic', 'convolution')`` so every benchmark
+    that takes this fixture is automatically run once per mode.  Use this
+    to compare mode-level cost.
     """
     lc, cc = cfg_single_grating()
     spec = make_spectrum(6400, 6800, 400, f'sg_{request.param}')
