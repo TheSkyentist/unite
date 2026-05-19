@@ -32,6 +32,8 @@ def _read_pyproject_version():
 
 
 def _git_hash():
+    # Only called in dev (non-installed) environments to append the git commit
+    # hash to the version string (e.g. "0.1.0.dev0+git.abc1234").
     try:
         return (
             subprocess.check_output(

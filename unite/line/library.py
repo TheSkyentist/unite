@@ -60,40 +60,39 @@ class Profile(ABC):
 
     def integrate(
         self,
-        low: ArrayLike,
-        high: ArrayLike,
-        center: ArrayLike,
+        edges: ArrayLike,
         lsf_fwhm: ArrayLike,
+        center: ArrayLike,
         **params: ArrayLike,
     ) -> Array:
-        r"""Integrate the profile over wavelength bins.
+        r"""Cumulative profile array evaluated at edges.
 
-        Delegates to :meth:`integrate_branch` by mapping keyword arguments to
-        positional slots (p0, p1, p2) in :meth:`param_names` order.
+        Delegates to :meth:`integrate_branch` by mapping keyword arguments
+        to positional slots (p0, p1, p2) in :meth:`param_names` order.
 
         Parameters
         ----------
-        low : ArrayLike
-            Lower wavelength edges of bins.
-        high : ArrayLike
-            Upper wavelength edges of bins.
+        edges : ArrayLike, shape ``(E,)``
+            Pixel edges in canonical wavelength units.
+        lsf_fwhm : ArrayLike, shape ``(E,)``
+            Instrumental LSF FWHM evaluated at each edge.
         center : ArrayLike
             Line center wavelength.
-        lsf_fwhm : ArrayLike
-            Instrumental line spread function FWHM at the line center.
         \*\*params : ArrayLike
-            Parameter values, keyed by the names from :meth:`param_names`.
+            Parameter values keyed by the names from :meth:`param_names`.
 
         Returns
         -------
-        Array
-            Fractional flux integrated in each bin (sums to 1 over all bins).
+        Array, shape ``(E,)``
+            Cumulative profile array.  ``jnp.diff`` over the result, masked
+            to drop inter-pixel gap entries, gives the per-pixel integral
+            of the profile.
         """
         pnames = self.param_names()
         p0 = params[pnames[0]] if len(pnames) > 0 else 0.0
         p1 = params[pnames[1]] if len(pnames) > 1 else 0.0
         p2 = params[pnames[2]] if len(pnames) > 2 else 0.0
-        return self.integrate_branch()(low, high, center, lsf_fwhm, p0, p1, p2)
+        return self.integrate_branch()(edges, center, lsf_fwhm, p0, p1, p2)
 
     def evaluate(
         self,
@@ -136,7 +135,13 @@ class Profile(ABC):
 
         The returned function must have the fixed signature::
 
-            fn(low, high, center, lsf_fwhm, p0, p1, p2) -> Array
+            fn(edges, center, lsf_fwhm, p0, p1, p2) -> Array
+
+        where *edges* has shape ``(E,)`` (pixel edges), *lsf_fwhm* has
+        shape ``(E,)`` (instrumental LSF FWHM at each edge), and the
+        returned array also has shape ``(E,)``.  The return is a
+        cumulative profile array such that ``jnp.diff`` recovers per-pixel
+        integrals.  Argument order matches :meth:`evaluate_branch`.
 
         Parameters correspond to :meth:`param_names` in order: ``p0`` is
         ``param_names()[0]``, ``p1`` is ``param_names()[1]``, ``p2`` is
@@ -229,9 +234,9 @@ class Gaussian(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss
-            return functions.integrate_gaussian(lo, hi, c, lsf, p0)
+            return functions.integrate_gaussian(edges, lsf, c, p0)
 
         return _fn
 
@@ -280,9 +285,9 @@ class Cauchy(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_lorentz; pure Cauchy via PseudoVoigt with zero Gaussian width
-            return functions.integrate_voigt(lo, hi, c, lsf, 0.0, p0)
+            return functions.integrate_voigt(edges, lsf, c, 0.0, p0)
 
         return _fn
 
@@ -328,9 +333,9 @@ class PseudoVoigt(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz
-            return functions.integrate_voigt(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_voigt(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -375,9 +380,9 @@ class Laplace(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_exp; pure Laplace convolved with Gaussian LSF
-            return functions.integrate_gaussianLaplace(lo, hi, c, lsf, 0.0, p0)
+            return functions.integrate_gaussianLaplace(edges, lsf, c, 0.0, p0)
 
         return _fn
 
@@ -425,9 +430,9 @@ class SEMG(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_exp
-            return functions.integrate_gaussianLaplace(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_gaussianLaplace(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -479,9 +484,9 @@ class GaussHermite(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = h3, p2 = h4
-            return functions.integrate_gaussHermite(lo, hi, c, lsf, p0, p1, p2)
+            return functions.integrate_gaussHermite(edges, lsf, c, p0, p1, p2)
 
         return _fn
 
@@ -528,9 +533,9 @@ class SplitNormal(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_blue, p1 = fwhm_red
-            return functions.integrate_split_normal(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_split_normal(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -590,9 +595,9 @@ class GaussianSplitLaplace(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_l_blue, p2 = fwhm_l_red
-            return functions.integrate_gaussianSplitLaplace(lo, hi, c, lsf, p0, p1, p2)
+            return functions.integrate_gaussianSplitLaplace(edges, lsf, c, p0, p1, p2)
 
         return _fn
 
@@ -654,9 +659,9 @@ class SkewNormal(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = alpha
-            return functions.integrate_skewNormal(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_skewNormal(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -708,9 +713,9 @@ class BoxGauss(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_box, p1 = fwhm_gauss
-            return functions.integrate_boxGauss(lo, hi, c, lsf, p0, p1)
+            return functions.integrate_boxGauss(edges, lsf, c, p0, p1)
 
         return _fn
 
@@ -774,9 +779,9 @@ class SkewVoigt(Profile):
 
     @override
     def integrate_branch(self):
-        def _fn(lo, hi, c, lsf, p0, p1, p2):
+        def _fn(edges, c, lsf, p0, p1, p2):
             # p0 = fwhm_gauss, p1 = fwhm_lorentz, p2 = alpha
-            return functions.integrate_skewVoigt(lo, hi, c, lsf, p0, p1, p2)
+            return functions.integrate_skewVoigt(edges, lsf, c, p0, p1, p2)
 
         return _fn
 

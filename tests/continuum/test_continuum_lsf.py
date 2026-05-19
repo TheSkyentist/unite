@@ -34,6 +34,33 @@ def _numerical_convolve(wavelength, flux, lsf_fwhm):
     return gaussian_filter1d(flux, sigma_in_pixels, mode='nearest')
 
 
+def _integrate_per_pixel(
+    form, low, high, center, params, region_low, region_high, lsf_fwhm=0.0
+):
+    """Test-only shim mapping legacy ``(low, high)`` calls to the new edges API.
+
+    Builds ``edges`` from ``low``/``high``, inserting both ``high[i]`` and
+    ``low[i+1]`` as separate edges whenever they differ (i.e. across
+    inter-pixel gaps).  Returns the per-pixel-averaged continuum array
+    the old ``form.integrate(low, high, ...)`` would have produced.
+    """
+    low_np = np.asarray(low)
+    high_np = np.asarray(high)
+    npix = low_np.shape[0]
+    edge_list = [float(low_np[0])]
+    keep_list = []
+    for i in range(npix):
+        edge_list.append(float(high_np[i]))
+        keep_list.append(True)
+        if i < npix - 1 and float(high_np[i]) != float(low_np[i + 1]):
+            edge_list.append(float(low_np[i + 1]))
+            keep_list.append(False)
+    edges = jnp.asarray(edge_list)
+    keep = jnp.asarray(keep_list)
+    cum = form.integrate(edges, center, params, region_low, region_high, lsf_fwhm)
+    return (jnp.diff(cum) / jnp.diff(edges))[keep]
+
+
 # ---------------------------------------------------------------------------
 # _gaussian_convolve_poly unit tests
 # ---------------------------------------------------------------------------
@@ -169,7 +196,7 @@ class TestLinearLSFInvariance:
         high = low + 0.01
         params = {'scale': 1.5, 'angle': 0.3, 'norm_wav': 1.5}
         mid = (low + high) / 2.0
-        integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.05)
+        integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.05)
         evaluated = form.evaluate(mid, 1.5, params, 1.0, 2.0, 0.05)
         np.testing.assert_allclose(integrated, evaluated, atol=1e-12)
 
@@ -330,7 +357,7 @@ class TestDefaultIntegrate:
         high = low + 0.01
         params = {'scale': 1.0, 'temperature': 5000.0, 'norm_wav': 1.5}
         mid = (low + high) / 2.0
-        integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
+        integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
         evaluated = form.evaluate(mid, 1.5, params, 1.0, 2.0, 0.0)
         np.testing.assert_allclose(integrated, evaluated, atol=1e-12)
 
@@ -350,7 +377,7 @@ class TestPolynomialIntegrate:
         high = low + 0.01
         params = {'scale': 1.0, 'c1': 2.0, 'norm_wav': 1.5}
         mid = (low + high) / 2.0
-        integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
+        integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
         evaluated = form.evaluate(mid, 1.5, params, 1.0, 2.0, 0.0)
         np.testing.assert_allclose(integrated, evaluated, atol=1e-12)
 
@@ -361,7 +388,7 @@ class TestPolynomialIntegrate:
         low = jnp.array([1.0, 1.2, 1.4, 1.6, 1.8])
         high = jnp.array([1.2, 1.4, 1.6, 1.8, 2.0])
         params = {'scale': 1.0, 'c1': 0.5, 'c2': 3.0, 'norm_wav': 1.5}
-        integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
+        integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
         # Verify against numerical integration (scipy)
         from scipy.integrate import quad
 
@@ -381,8 +408,10 @@ class TestPolynomialIntegrate:
         low = jnp.array([1.0, 1.2, 1.4, 1.6, 1.8])
         high = jnp.array([1.2, 1.4, 1.6, 1.8, 2.0])
         params = {'scale': 1.0, 'c1': 0.5, 'c2': 3.0, 'norm_wav': 1.5}
-        int_no_lsf = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
-        int_with_lsf = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.05)
+        int_no_lsf = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
+        int_with_lsf = _integrate_per_pixel(
+            form, low, high, 1.5, params, 1.0, 2.0, 0.05
+        )
         # Should differ (LSF adds variance to the quadratic term)
         assert not jnp.allclose(int_no_lsf, int_with_lsf)
 
@@ -402,7 +431,7 @@ class TestChebyshevIntegrate:
         high = low + 0.05
         params = {'scale': 2.5, 'norm_wav': 1.5}
         mid = (low + high) / 2.0
-        integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
+        integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
         evaluated = form.evaluate(mid, 1.5, params, 1.0, 2.0, 0.0)
         np.testing.assert_allclose(integrated, evaluated, atol=1e-10)
 
@@ -413,7 +442,9 @@ class TestChebyshevIntegrate:
         high = jnp.array([1.2, 1.4, 1.6, 1.8, 2.0])
         center = 1.5
         params = {'scale': 1.0, 'c1': 0.2, 'c2': 0.1, 'norm_wav': center}
-        integrated = form.integrate(low, high, center, params, 1.0, 2.0, 0.0)
+        integrated = _integrate_per_pixel(
+            form, low, high, center, params, 1.0, 2.0, 0.0
+        )
         # Compare against evaluate at many sub-points (numerical average)
         for i in range(len(low)):
             lo, hi = float(low[i]), float(high[i])
@@ -443,7 +474,9 @@ class TestBernsteinIntegrate:
             'coeff_3': 1.2,
             'norm_wav': center,
         }
-        integrated = form.integrate(low, high, center, params, 1.0, 2.0, 0.0)
+        integrated = _integrate_per_pixel(
+            form, low, high, center, params, 1.0, 2.0, 0.0
+        )
         for i in range(len(low)):
             lo, hi = float(low[i]), float(high[i])
             wl = jnp.linspace(lo, hi, 10000)
@@ -465,7 +498,7 @@ class TestBernsteinIntegrate:
 #         low = jnp.array([1.0, 1.2, 1.4, 1.6, 1.8])
 #         high = jnp.array([1.2, 1.4, 1.6, 1.8, 2.0])
 #         params = {'scale': 2.0, 'beta': -1.5, 'norm_wav': 1.5}
-#         integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
+#         integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
 #         from scipy.integrate import quad
 
 #         def f(w):
@@ -484,7 +517,7 @@ class TestBernsteinIntegrate:
 #         high = low + 0.001  # very narrow pixels
 #         params = {'scale': 1.0, 'beta': -1.5, 'norm_wav': 1.5}
 #         mid = (low + high) / 2.0
-#         integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
+#         integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
 #         evaluated = form.evaluate(mid, 1.5, params, 1.0, 2.0, 0.0)
 #         np.testing.assert_allclose(integrated, evaluated, rtol=1e-5)
 
@@ -494,5 +527,5 @@ class TestBernsteinIntegrate:
 #         low = jnp.array([1.0, 1.5, 1.8])
 #         high = jnp.array([1.2, 1.7, 2.0])
 #         params = {'scale': 3.0, 'beta': 0.0, 'norm_wav': 1.5}
-#         integrated = form.integrate(low, high, 1.5, params, 1.0, 2.0, 0.0)
+#         integrated = _integrate_per_pixel(form, low, high, 1.5, params, 1.0, 2.0, 0.0)
 #         np.testing.assert_allclose(integrated, 3.0, atol=1e-12)

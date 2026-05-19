@@ -860,3 +860,110 @@ class TestLinedetWidth:
         # Even with huge lindet_width, Ha is close to spectrum center
         # so it should likely be covered
         assert len(fl_huge) == 1
+
+
+# ---------------------------------------------------------------------------
+# Edge topology
+# ---------------------------------------------------------------------------
+
+
+def _make_spectrum_from_edges(low: np.ndarray, high: np.ndarray, *, name='topo'):
+    """Build a Spectrum directly from low/high arrays (assumes Angstrom)."""
+    npix = low.shape[0]
+    wl_centre = 0.5 * (low + high)
+    disperser = SimpleDisperser(wavelength=wl_centre * u.AA, R=3000.0, name=name)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = np.ones(npix) * flux_unit
+    error = np.ones(npix) * flux_unit
+    return Spectrum(
+        low=low * u.AA,
+        high=high * u.AA,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        name=name,
+    )
+
+
+class TestEdgeTopology:
+    """Tests for Spectrum.edges / keep_mask / midpoints / widths / pixel_idx."""
+
+    def test_contiguous_topology(self):
+        """No gaps: E = npix + 1, keep_mask all True, widths recover diff(edges)."""
+        # 10 contiguous pixels of width 1.0 starting at 6500.
+        low = np.arange(10, dtype=float) + 6500.0
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+
+        assert spec.edges.shape == (11,)
+        assert spec.keep_mask.shape == (10,)
+        assert bool(jnp.all(spec.keep_mask))
+        np.testing.assert_allclose(np.asarray(spec.edges)[0], 6500.0)
+        np.testing.assert_allclose(np.asarray(spec.edges)[-1], 6510.0)
+        np.testing.assert_allclose(np.asarray(spec.widths), 1.0)
+        np.testing.assert_allclose(
+            np.asarray(spec.midpoints), np.asarray(spec.wavelength)
+        )
+        np.testing.assert_array_equal(np.asarray(spec.pixel_idx), np.arange(10))
+
+    def test_single_gap_topology(self):
+        """One chip gap: E = npix + 2, exactly one False in keep_mask."""
+        # 5 pixels [6500,6501)..[6504,6505) then a gap, then 5 pixels [6510,6515).
+        low = np.concatenate(
+            [np.arange(5, dtype=float) + 6500.0, np.arange(5, dtype=float) + 6510.0]
+        )
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+
+        assert spec.npix == 10
+        assert spec.edges.shape == (12,)
+        keep = np.asarray(spec.keep_mask)
+        assert keep.shape == (11,)
+        assert int((~keep).sum()) == 1
+        # The False entry sits between pixel 4 and pixel 5 in original order.
+        false_at = int(np.where(~keep)[0][0])
+        assert false_at == 5
+        # Widths at the gap span 5 AA; real-pixel widths are all 1 AA.
+        widths = np.asarray(spec.widths)
+        np.testing.assert_allclose(widths[~keep], 5.0)
+        np.testing.assert_allclose(widths[keep], 1.0)
+        # pixel_idx selects the 10 real pixels in original order.
+        np.testing.assert_array_equal(np.asarray(spec.pixel_idx), np.where(keep)[0])
+
+    def test_edges_strictly_monotone(self):
+        """diff(edges) > 0 everywhere — including across gaps."""
+        low = np.concatenate(
+            [np.arange(5, dtype=float) + 6500.0, np.arange(5, dtype=float) + 6510.0]
+        )
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+        assert bool(jnp.all(jnp.diff(spec.edges) > 0))
+
+    def test_sliced_recomputes_topology(self):
+        """_sliced rebuilds the topology to match the kept pixel run."""
+        low = np.arange(10, dtype=float) + 6500.0
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+        # Drop pixels 3 and 4: the slice contains two contiguous runs.
+        mask = jnp.array([True, True, True, False, False, True, True, True, True, True])
+        sliced = spec._sliced(mask)
+        assert sliced.npix == 8
+        # 8 pixels with one gap between the two runs ⇒ E = 8 + 1 + 1 = 10.
+        assert sliced.edges.shape == (10,)
+        keep = np.asarray(sliced.keep_mask)
+        assert int((~keep).sum()) == 1
+
+    def test_pixel_idx_recovers_low_and_high(self):
+        """edges[:-1][pixel_idx] == low and edges[1:][pixel_idx] == high."""
+        low = np.concatenate(
+            [np.arange(5, dtype=float) + 6500.0, np.arange(3, dtype=float) + 6520.0]
+        )
+        high = low + 1.0
+        spec = _make_spectrum_from_edges(low, high)
+        idx = np.asarray(spec.pixel_idx)
+        np.testing.assert_allclose(
+            np.asarray(spec.edges)[:-1][idx], np.asarray(spec.low)
+        )
+        np.testing.assert_allclose(
+            np.asarray(spec.edges)[1:][idx], np.asarray(spec.high)
+        )

@@ -11,6 +11,7 @@ called from wi_absthin :func:`jax.jit`-compiled model code.
 
 from __future__ import annotations
 
+import math
 from typing import Final
 
 import jax.numpy as jnp
@@ -21,14 +22,14 @@ from jax.typing import ArrayLike
 
 # Conversion: FWHM to sigma for the half-variance parametrization of erf.
 # sigma = FWHM / (2 sqrt(2 ln 2)); erf uses sqrt(2)*sigma, so the factor is:
-_HALFVAR_SIGMA_TO_FWHM: Final[float] = 2 * np.sqrt(np.log(2))
+_HALFVAR_SIGMA_TO_FWHM: Final[float] = 2 * math.sqrt(math.log(2))
 
 # Conversion factor from exponential (Laplace) scale to FWHM
 # pdf = (1/(2*b)) * exp(-|x - μ|/b)
 # max(pdf) = 1/(2*b), half max = 1/(4*b)
 # 1/(4*b) = 1/(2*b) * exp(-|x - μ|/b) => exp(-|x - μ|/b) = 1/2
 # => |x - μ|/b = ln(2) => FWHM = 2*b*ln(2)
-_EXP_SCALE_TO_FWHM: Final[float] = 2 * np.log(2)
+_EXP_SCALE_TO_FWHM: Final[float] = 2 * math.log(2)
 
 # -------------------------------------------------------------------
 # Private helpers
@@ -47,7 +48,7 @@ def _fwhm_to_sigma(fwhm: ArrayLike) -> Array:
 
 # Thompson et al. (1987) Voigt FWHM approximation: Γ_V = C1*Γ_l + sqrt(C2*Γ_l² + Γ_g²).
 # δ = 0.099 ln 2 gives C1 + sqrt(C2) = 1 exactly, so the Lorentzian limit is exact.
-_THOMPSON_DELTA: Final[float] = 0.099 * np.log(2)
+_THOMPSON_DELTA: Final[float] = 0.099 * math.log(2)
 _THOMPSON_C1: Final[float] = (1 + _THOMPSON_DELTA) / 2
 _THOMPSON_C2: Final[float] = ((1 - _THOMPSON_DELTA) / 2) ** 2
 
@@ -62,10 +63,16 @@ def _gaussian_pdf(dx: ArrayLike, sigma: ArrayLike) -> Array:
     return jnp.exp(-0.5 * (dx * dx / (sigma * sigma))) / (sigma * np.sqrt(2.0 * np.pi))
 
 
-def _gaussian_cdf_diff(low: ArrayLike, high: ArrayLike, total_fwhm: ArrayLike) -> Array:
-    """Gaussian CDF difference ``Φ(high) - Φ(low)`` via the erf halfvar parametrization."""
+def _gaussian_cdf(x: ArrayLike, total_fwhm: ArrayLike) -> Array:
+    """Gaussian CDF ``Φ((x)/sigma)`` via the erf halfvar parametrisation.
+
+    The argument *x* is the center-relative displacement; ``total_fwhm`` is
+    the total Gaussian FWHM and may be a scalar or an array broadcastable
+    against *x*.  Returns ``0.5 * erf(x * inv_erf_scale) + 0.5`` so that
+    ``Φ(-∞) → 0`` and ``Φ(+∞) → 1``.
+    """
     inv_erf_scale = _HALFVAR_SIGMA_TO_FWHM / total_fwhm
-    return 0.5 * (erf(high * inv_erf_scale) - erf(low * inv_erf_scale))
+    return 0.5 * (1.0 + erf(x * inv_erf_scale))
 
 
 def _cauchy_pdf(dx: ArrayLike, hwhm: ArrayLike) -> Array:
@@ -73,27 +80,9 @@ def _cauchy_pdf(dx: ArrayLike, hwhm: ArrayLike) -> Array:
     return jnp.asarray((hwhm / np.pi) / (dx * dx + hwhm * hwhm))
 
 
-def _cauchy_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
-    """Cauchy (Lorentzian) CDF difference ``F(high) - F(low)``."""
-    inv_hwhm = 2 / fwhm
-    t_low = low * inv_hwhm
-    t_high = high * inv_hwhm
-    return (jnp.arctan(t_high) - jnp.arctan(t_low)) / np.pi
-
-
-# Don't need this but keeping anyways just in case
-def _laplace_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array:
-    """Laplace (double exponential) CDF difference ``F(high) - F(low)``."""
-    b = fwhm / _EXP_SCALE_TO_FWHM
-
-    t_high = high / b
-    t_low = low / b
-
-    # Explot symmetry and parts that cancel out.
-    int_high = jnp.sign(t_high) * (1.0 - jnp.exp(-jnp.abs(t_high)))
-    int_low = jnp.sign(t_low) * (1.0 - jnp.exp(-jnp.abs(t_low)))
-
-    return 0.5 * (int_high - int_low)
+def _cauchy_cdf(x: ArrayLike, fwhm: ArrayLike) -> Array:
+    """Cauchy (Lorentzian) CDF at center-relative displacement *x*."""
+    return 0.5 + jnp.arctan(2.0 * x / fwhm) / np.pi
 
 
 # -------------------------------------------------------------------
@@ -103,34 +92,30 @@ def _laplace_cdf_diff(low: ArrayLike, high: ArrayLike, fwhm: ArrayLike) -> Array
 
 @jit
 def integrate_gaussian(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
-    lsf_fwhm: ArrayLike,
-    fwhm: ArrayLike,
+    edges: ArrayLike, lsf_fwhm: ArrayLike, center: ArrayLike, fwhm: ArrayLike
 ) -> Array:
-    """Integrate a Gaussian profile over wavelength bins.
+    """Cumulative Gaussian CDF evaluated at edges.
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges in canonical wavelength units.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM evaluated at each edge.  Combined in
+        quadrature with the intrinsic Gaussian width per edge.
     center : ArrayLike
         Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
     fwhm : ArrayLike
         Intrinsic Gaussian FWHM.
 
     Returns
     -------
-    jnp.ndarray
-        Integrated fraction per bin.
+    Array, shape ``(E,)``
+        Gaussian CDF at each edge.  ``jnp.diff`` over the returned array
+        gives the integral of the (per-edge-LSF) profile over each pixel.
     """
     total_fwhm = _combine_fwhm(lsf_fwhm, fwhm)
-    return _gaussian_cdf_diff(low - center, high - center, total_fwhm)
+    return _gaussian_cdf(edges - center, total_fwhm)
 
 
 @jit
@@ -166,30 +151,26 @@ def evaluate_gaussian(
 
 @jit
 def integrate_split_normal(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     lsf_fwhm: ArrayLike,
+    center: ArrayLike,
     fwhm_blue: ArrayLike,
     fwhm_red: ArrayLike,
 ) -> Array:
-    """
-    Integrate a split-normal (two-sided Gaussian) profile over wavelength bins.
+    """Cumulative split-normal CDF evaluated at edges.
 
-    The split-normal distribution has different standard deviations on each side
-    of the mean. The left side (blue, shorter wavelengths) uses fwhm_blue, and
-    the right side (red, longer wavelengths) uses fwhm_red.
+    The split-normal distribution has different standard deviations on each
+    side of the mean.  The left side (blue, shorter wavelengths) uses
+    ``fwhm_blue``, the right side (red) uses ``fwhm_red``.
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
     center : ArrayLike
         Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
     fwhm_blue : ArrayLike
         Blue side (left) Gaussian FWHM.
     fwhm_red : ArrayLike
@@ -197,8 +178,8 @@ def integrate_split_normal(
 
     Returns
     -------
-    jnp.ndarray
-        Integrated fraction per bin.
+    Array, shape ``(E,)``
+        Split-normal CDF at each edge.
     """
     total_fwhm_blue = _combine_fwhm(lsf_fwhm, fwhm_blue)
     total_fwhm_red = _combine_fwhm(lsf_fwhm, fwhm_red)
@@ -211,21 +192,13 @@ def integrate_split_normal(
     w_blue = inv_sigma_red / total_weight  # = sigma_blue / (sigma_blue + sigma_red)
     w_red = inv_sigma_blue / total_weight  # = sigma_red / (sigma_blue + sigma_red)
 
-    def _split_normal_cdf(x, center, inv_sigma_blue, inv_sigma_red, w_blue, w_red):
-        t_blue = (x - center) * inv_sigma_blue
-        t_red = (x - center) * inv_sigma_red
-        # CDF continuous at center: both branches give w_blue when x = center
-        return jnp.where(
-            x <= center, w_blue * (1 + erf(t_blue)), w_blue + w_red * erf(t_red)
-        )
-
-    cdf_high = _split_normal_cdf(
-        high, center, inv_sigma_blue, inv_sigma_red, w_blue, w_red
+    x = edges - center
+    t_blue = x * inv_sigma_blue
+    t_red = x * inv_sigma_red
+    # CDF continuous at center: both branches give w_blue when x = 0
+    return jnp.where(
+        edges <= center, w_blue * (1 + erf(t_blue)), w_blue + w_red * erf(t_red)
     )
-    cdf_low = _split_normal_cdf(
-        low, center, inv_sigma_blue, inv_sigma_red, w_blue, w_red
-    )
-    return cdf_high - cdf_low
 
 
 @jit
@@ -277,14 +250,13 @@ def evaluate_split_normal(
 
 @jit
 def integrate_boxGauss(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     lsf_fwhm: ArrayLike,
+    center: ArrayLike,
     fwhm_box: ArrayLike,
     fwhm_gauss: ArrayLike,
 ) -> Array:
-    """Integrate a boxcar-Gaussian convolution profile over wavelength bins.
+    """Cumulative boxcar-Gaussian CDF evaluated at edges.
 
     The intrinsic profile is a uniform rectangular (boxcar) distribution of
     width ``fwhm_box`` centred at zero, convolved with a Gaussian whose FWHM
@@ -292,14 +264,12 @@ def integrate_boxGauss(
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
     center : ArrayLike
         Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
     fwhm_box : ArrayLike
         Full width of the boxcar distribution.
     fwhm_gauss : ArrayLike
@@ -308,28 +278,25 @@ def integrate_boxGauss(
 
     Returns
     -------
-    Array
-        Integrated fraction per bin.
+    Array, shape ``(E,)``
+        Boxcar-Gaussian CDF at each edge.
     """
-    lo = low - center
-    hi = high - center
+    x = edges - center
     sigma = _fwhm_to_sigma(_combine_fwhm(lsf_fwhm, fwhm_gauss))
     hw = fwhm_box / 2.0
 
-    def _antideriv(x: ArrayLike, a: ArrayLike):
-        # Antiderivative of Phi((x+a)/sigma) w.r.t. x:
-        # F(x, a) = (x+a)*Phi((x+a)/sigma) + sigma*phi((x+a)/sigma)
-        u = (x + a) / sigma
+    def _antideriv(z: ArrayLike, a: ArrayLike):
+        # Antiderivative of Phi((z+a)/sigma) w.r.t. z:
+        # F(z, a) = (z+a)*Phi((z+a)/sigma) + sigma*phi((z+a)/sigma)
+        u = (z + a) / sigma
         cdf = 0.5 * (1.0 + erf(u / np.sqrt(2)))
         sigma_pdf = sigma * jnp.exp(-0.5 * u * u) / np.sqrt(2.0 * np.pi)
-        return (x + a) * cdf + sigma_pdf
+        return (z + a) * cdf + sigma_pdf
 
-    return (
-        _antideriv(hi, hw)
-        - _antideriv(lo, hw)
-        - _antideriv(hi, -hw)
-        + _antideriv(lo, -hw)
-    ) / fwhm_box
+    # Per-edge CDF: integral of the boxcar-Gaussian PDF from -∞ to x.  Using
+    # the antiderivative identity F(z, hw) - F(z, -hw) = ∫_{-∞}^{z} pdf · dz' · fwhm_box,
+    # so dividing by fwhm_box recovers a true CDF that goes 0 → 1.
+    return (_antideriv(x, hw) - _antideriv(x, -hw)) / fwhm_box
 
 
 @jit
@@ -408,46 +375,43 @@ def _integrandGH(t_halfvar: ArrayLike, h3_eff: ArrayLike, h4_eff: ArrayLike) -> 
 
 @jit
 def integrate_gaussHermite(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     fwhm_lsf: ArrayLike,
+    center: ArrayLike,
     fwhm_g: ArrayLike,
     h3: ArrayLike,
     h4: ArrayLike,
 ) -> Array:
-    """Integrate a Gauss-Hermite profile over wavelength bins.
+    """Cumulative Gauss-Hermite CDF evaluated at edges.
 
     Uses the closed-form CDF derived from the orthonormal probabilists'
-    Hermite expansion. Convolving wi_absth the Gaussian LSF rescales the shape
-    parameters as ``h_m' = h_m * (sigma_g / sigma_tot)^m``. See the
+    Hermite expansion.  Convolving with the Gaussian LSF rescales the
+    shape parameters as ``h_m' = h_m * (sigma_g / sigma_tot)^m``.  See the
     :doc:`Gauss-Hermite derivation </derivations/gauss-hermite>` for details.
 
     Parameters
     ----------
-    low : jnp.ndarray
-        Low wavelength edges of bins.
-    high : jnp.ndarray
-        High wavelength edges of bins.
-    center : jnp.ndarray
-        Line centers.
-    fwhm_lsf : jnp.ndarray
-        Instrumental LSF FWHM.
-    fwhm_g : jnp.ndarray
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    fwhm_lsf : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
+    center : ArrayLike
+        Line center wavelength.
+    fwhm_g : ArrayLike
         Gaussian component FWHM.
-    h3 : jnp.ndarray
+    h3 : ArrayLike
         Gauss-Hermite h3 (skewness) coefficient.
-    h4 : jnp.ndarray
+    h4 : ArrayLike
         Gauss-Hermite h4 (kurtosis) coefficient.
 
     Returns
     -------
-    jnp.ndarray
-        Integrated fraction per bin (sums to 1 over all bins).
+    Array, shape ``(E,)``
+        Gauss-Hermite CDF at each edge.
     """
     fwhm_tot = _combine_fwhm(fwhm_lsf, fwhm_g)
 
-    # Sigma ratio: GH moments scale as r^n under convolution wi_absth a Gaussian LSF
+    # Sigma ratio: GH moments scale as r^n under convolution with a Gaussian LSF
     r = fwhm_g / fwhm_tot
     r3 = r * r * r
 
@@ -455,13 +419,12 @@ def integrate_gaussHermite(
     c3 = h3 * r3 / np.sqrt(6)
     c4 = h4 * r3 * r / np.sqrt(24)
 
-    # Normalized bin edges (halfvar parametrisation for consistency wi_absth erf CDF)
+    # Normalised edge coordinate (halfvar parametrisation for consistency with erf CDF)
     inv_sigma_tot = _HALFVAR_SIGMA_TO_FWHM / fwhm_tot
-    t_low = (low - center) * inv_sigma_tot
-    t_high = (high - center) * inv_sigma_tot
+    t = (edges - center) * inv_sigma_tot
 
-    gaussian_cdf = 0.5 * (erf(t_high) - erf(t_low))
-    gh_correction = _integrandGH(t_high, c3, c4) - _integrandGH(t_low, c3, c4)
+    gaussian_cdf = 0.5 * (1.0 + erf(t))
+    gh_correction = _integrandGH(t, c3, c4)
     return gaussian_cdf - gh_correction / np.sqrt(2.0 * np.pi)
 
 
@@ -627,30 +590,28 @@ def _owens_t(h, a):
 
 @jit
 def integrate_skewNormal(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     lsf_fwhm: ArrayLike,
+    center: ArrayLike,
     fwhm_g: ArrayLike,
     alpha: ArrayLike,
 ) -> Array:
-    """Integrate a skew-normal profile over wavelength bins.
+    """Cumulative skew-normal CDF evaluated at edges.
 
-    Uses the exact skew-normal CDF ``Phi(z) - 2 T(z, alpha_eff)``, where T is
-    Owen's T function and ``z = (x - center) / sigma_tot``.  The LSF convolution
-    is exact — the shape parameter rescales analytically with no approximation.
-    See docs/derivations/skew-normal.md for the full derivation.
+    Uses the exact skew-normal CDF ``Φ(z) - 2 T(z, alpha_eff)``, where T is
+    Owen's T function and ``z = (x - center) / sigma_tot``.  The LSF
+    convolution is exact — the shape parameter rescales analytically with
+    no approximation.  See ``docs/derivations/skew-normal.md`` for the full
+    derivation.
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
     center : ArrayLike
         Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
     fwhm_g : ArrayLike
         Intrinsic Gaussian FWHM.
     alpha : ArrayLike
@@ -658,18 +619,16 @@ def integrate_skewNormal(
 
     Returns
     -------
-    Array
-        Integrated fraction per bin.
+    Array, shape ``(E,)``
+        Skew-normal CDF at each edge.
     """
     fwhm_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
     sigma_tot = _fwhm_to_sigma(fwhm_tot)
     alpha_eff = _alpha_eff_skewnormal(lsf_fwhm, fwhm_g, alpha)
 
-    z_lo = (low - center) / sigma_tot
-    z_hi = (high - center) / sigma_tot
-
-    gaussian_cdf = 0.5 * (erf(z_hi / np.sqrt(2)) - erf(z_lo / np.sqrt(2)))
-    owens_correction = _owens_t(z_hi, alpha_eff) - _owens_t(z_lo, alpha_eff)
+    z = (edges - center) / sigma_tot
+    gaussian_cdf = 0.5 * (1.0 + erf(z / np.sqrt(2)))
+    owens_correction = _owens_t(z, alpha_eff)
     return gaussian_cdf - 2.0 * owens_correction
 
 
@@ -734,13 +693,9 @@ def _voigt_params_thompson(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> tuple[Array,
     return (fwhm_eff, eta)
 
 
-def _voigt_thompson_cdf_diff(
-    low: ArrayLike, high: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike
-) -> Array:
+def _voigt_thompson_cdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
     fwhm_eff, eta = _voigt_params_thompson(fwhm_g, fwhm_l)
-    lorentzian = eta * _cauchy_cdf_diff(low, high, fwhm_eff)
-    gaussian = (1 - eta) * _gaussian_cdf_diff(low, high, fwhm_eff)
-    return lorentzian + gaussian
+    return eta * _cauchy_cdf(x, fwhm_eff) + (1.0 - eta) * _gaussian_cdf(x, fwhm_eff)
 
 
 def _voigt_thompson_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
@@ -791,11 +746,11 @@ _IDA_H: Final[np.ndarray] = np.array(
 
 # Conversion: irrational-function gamma_I to FWHM: W_I = 2*(2^(2/3) - 1)^(1/2) * gamma_I
 # So gamma_I = W_I / (2*(2^(2/3) - 1)^(1/2))
-_IRRAT_FWHM_TO_GAMMA: Final[float] = 0.5 / np.sqrt(2.0 ** (2.0 / 3.0) - 1.0)
+_IRRAT_FWHM_TO_GAMMA: Final[float] = 0.5 / math.sqrt(2.0 ** (2.0 / 3.0) - 1.0)
 
 # Conversion: hyperbolic-function gamma_P to FWHM: W_P = 2*ln(sqrt(2) + 1) * gamma_P
 # So gamma_P = W_P / (2*ln(sqrt(2) + 1))
-_HYPER_FWHM_TO_GAMMA: Final[float] = 0.5 / np.log(np.sqrt(2.0) + 1.0)
+_HYPER_FWHM_TO_GAMMA: Final[float] = 0.5 / math.log(math.sqrt(2.0) + 1.0)
 
 
 # Intermediate function fl
@@ -805,13 +760,10 @@ def _f_l_pdf(x, hwhm):
     return (0.5 * inv_hwhm) * (1 + t * t) ** (-3 / 2)
 
 
-def _f_l_cdf_diff(low, high, hwhm):
-    inv_hwhm = 1 / hwhm
-    t_low = low * inv_hwhm
-    t_high = high * inv_hwhm
-    return (
-        t_high / jnp.sqrt(1 + t_high * t_high) - t_low / jnp.sqrt(1 + t_low * t_low)
-    ) / 2
+def _f_l_cdf(x, hwhm):
+    """CDF of the irrational component of the extended pseudo-Voigt at *x*."""
+    t = x / hwhm
+    return 0.5 + 0.5 * t / jnp.sqrt(1.0 + t * t)
 
 
 # Intermediate function fp: squared-sech hyperbolic
@@ -829,14 +781,13 @@ def _f_p_pdf(x, gamma):
     return (0.5 * inv_gamma) * _sech2(x * inv_gamma)
 
 
-def _f_p_cdf_diff(low, high, gamma):
-    """CDF difference for the hyperbolic-sech² function.
+def _f_p_cdf(x, gamma):
+    """CDF of the hyperbolic-sech² component at *x*.
 
-    FP(x) = (1/2) * tanh(x/gammaP), so FP(∞) - FP(-∞) = 1.
-    *low* and *high* must be center-relative displacements.
+    ``FP(x) = 0.5 + 0.5 * tanh(x / gammaP)`` so ``FP(-∞) → 0`` and
+    ``FP(+∞) → 1``.  *x* must be a center-relative displacement.
     """
-    inv_gamma = 1 / gamma
-    return 0.5 * (jnp.tanh(high * inv_gamma) - jnp.tanh(low * inv_gamma))
+    return 0.5 + 0.5 * jnp.tanh(x / gamma)
 
 
 def _voigt_ida_params(
@@ -901,17 +852,13 @@ def _voigt_ida_params(
     return (wg_abs, wl_abs, wi_abs, wp_abs, eta_g, eta_l, eta_i, eta_p)
 
 
-def _voigt_ida_cdf_diff(
-    low: ArrayLike, high: ArrayLike, fwhm_g_total: ArrayLike, fwhm_l: ArrayLike
-) -> Array:
-    """CDF difference of the extended pseudo-Voigt approximation (Ida et al. 2000).
+def _voigt_ida_cdf(x: ArrayLike, fwhm_g_total: ArrayLike, fwhm_l: ArrayLike) -> Array:
+    """CDF of the extended pseudo-Voigt approximation (Ida et al. 2000) at *x*.
 
     Parameters
     ----------
-    low, high : ArrayLike
-        Absolute bin edges.
-    center : ArrayLike
-        Line center.
+    x : ArrayLike
+        Center-relative displacement.
     fwhm_g_total : ArrayLike
         Total Gaussian FWHM (intrinsic + LSF in quadrature).
     fwhm_l : ArrayLike
@@ -920,12 +867,10 @@ def _voigt_ida_cdf_diff(
     wg_abs, wl_abs, wi_abs, wp_abs, eta_g, eta_l, eta_i, eta_p = _voigt_ida_params(
         fwhm_g_total, fwhm_l
     )
-    # Center-relative displacements needed by the non-standard CDFs
-
-    gauss = eta_g * _gaussian_cdf_diff(low, high, wg_abs)
-    lorentz = eta_l * _cauchy_cdf_diff(low, high, wl_abs)
-    irrat = eta_i * _f_l_cdf_diff(low, high, wi_abs * _IRRAT_FWHM_TO_GAMMA)
-    hyper = eta_p * _f_p_cdf_diff(low, high, wp_abs * _HYPER_FWHM_TO_GAMMA)
+    gauss = eta_g * _gaussian_cdf(x, wg_abs)
+    lorentz = eta_l * _cauchy_cdf(x, wl_abs)
+    irrat = eta_i * _f_l_cdf(x, wi_abs * _IRRAT_FWHM_TO_GAMMA)
+    hyper = eta_p * _f_p_cdf(x, wp_abs * _HYPER_FWHM_TO_GAMMA)
     return gauss + lorentz + irrat + hyper
 
 
@@ -1082,31 +1027,29 @@ def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> A
 
 @jit
 def integrate_voigt(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     lsf_fwhm: ArrayLike,
+    center: ArrayLike,
     fwhm_g: ArrayLike,
     fwhm_l: ArrayLike,
 ) -> Array:
-    """Integrate a Voigt profile over wavelength bins via the extended pseudo-Voigt.
+    """Cumulative extended pseudo-Voigt CDF evaluated at edges.
 
-    Uses the Ida, Ando & Toraya (2000) extended pseudo-Voigt approximation, which
-    achieves < 0.12% peak-height deviation from the true Voigt profile using a
-    four-component mixture: Gaussian, Lorentzian, irrational, and hyperbolic-sech².
-    The LSF Gaussian FWHM is added in quadrature to the intrinsic Gaussian FWHM
-    before computing the extended-pseudo-Voigt parameters.
+    Uses the Ida, Ando & Toraya (2000) extended pseudo-Voigt approximation,
+    which achieves < 0.12% peak-height deviation from the true Voigt profile
+    via a four-component mixture (Gaussian, Lorentzian, irrational,
+    hyperbolic-sech²).  The LSF Gaussian FWHM is added in quadrature to the
+    intrinsic Gaussian FWHM **per edge** before computing the mixture
+    parameters.
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
     center : ArrayLike
         Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
     fwhm_g : ArrayLike
         Intrinsic Gaussian component FWHM.
     fwhm_l : ArrayLike
@@ -1114,11 +1057,11 @@ def integrate_voigt(
 
     Returns
     -------
-    jnp.ndarray
-        Integrated fraction per bin.
+    Array, shape ``(E,)``
+        Extended-pseudo-Voigt CDF at each edge.
     """
     fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
-    return _voigt_ida_cdf_diff(low - center, high - center, fwhm_g_total, fwhm_l)
+    return _voigt_ida_cdf(edges - center, fwhm_g_total, fwhm_l)
 
 
 @jit
@@ -1214,31 +1157,33 @@ def _alpha_eff(
 
 @jit
 def integrate_skewVoigt(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     lsf_fwhm: ArrayLike,
+    center: ArrayLike,
     fwhm_g: ArrayLike,
     fwhm_l: ArrayLike,
     alpha: ArrayLike,
 ) -> Array:
-    """Integrate a skew pseudo-Voigt profile over wavelength bins.
+    """Cumulative skew pseudo-Voigt at edges.
 
-    Uses the same extended pseudo-Voigt approximation as integrate_voigt,
-    multiplied by the skew correction integrated via the error function. The skewness
-    parameter is rescaled after convolution with the LSF via the Gaussian-body exact
-    formula with an FXIG boost correction for the Lorentzian component.
+    The skew pseudo-Voigt has no closed-form CDF.  This implementation
+    reuses the analytic Ida extended pseudo-Voigt CDF (cheap, exact for
+    the symmetric part) for the per-pixel symmetric Voigt fraction, then
+    multiplies by the skew correction ``[1 + erf(alpha_eff · (mid - c) / w0)]``
+    evaluated at pixel midpoints.  This matches the prior implementation
+    semantically (exact symmetric integration, midpoint rule on the skew
+    factor only) while fitting the edges-only contract.  Avoiding the
+    Faddeeva W4 PDF gives roughly an order-of-magnitude speedup over a
+    pure cumsum-midpoint construction.
 
     Parameters
     ----------
-    low : ArrayLike
-        Lower bin edges.
-    high : ArrayLike
-        Upper bin edges.
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
     center : ArrayLike
         Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
     fwhm_g : ArrayLike
         Intrinsic Gaussian component FWHM.
     fwhm_l : ArrayLike
@@ -1248,21 +1193,28 @@ def integrate_skewVoigt(
 
     Returns
     -------
-    Array
-        Integrated fraction per bin.
+    Array, shape ``(E,)``
+        Cumulative skew pseudo-Voigt array.
     """
-    # Compute Voigt CDF
-    voigt_cdf = integrate_voigt(low, high, center, lsf_fwhm, fwhm_g, fwhm_l)
-
-    # Get effective skew
-    fwhm_g_tot = _combine_fwhm(lsf_fwhm, fwhm_g)
+    edges_arr = jnp.asarray(edges)
+    lsf_arr = jnp.asarray(lsf_fwhm)
+    # Analytic per-pixel pseudo-Voigt fractions via Ida CDF diff (per-edge LSF).
+    voigt_cum = integrate_voigt(edges_arr, lsf_arr, center, fwhm_g, fwhm_l)
+    voigt_per_pixel = jnp.diff(voigt_cum)
+    # Skew correction at pixel midpoints.  The skew factor is a second-order
+    # asymmetry correction and varies negligibly across an unresolved line, so
+    # ``a_eff`` and ``w0`` are computed from a single scalar LSF at the line
+    # center (cheap) rather than from per-edge LSF — the per-edge variant
+    # multiplies the cost of the polynomial/power-law ``_alpha_eff`` boost
+    # correction by the number of edges with no scientifically meaningful gain.
+    mids = 0.5 * (edges_arr[1:] + edges_arr[:-1])
+    lsf_center = jnp.interp(center, edges_arr, lsf_arr)
+    fwhm_g_tot = _combine_fwhm(lsf_center, fwhm_g)
     w0 = _thompson_fwhm(fwhm_g_tot, fwhm_l) / _HALFVAR_SIGMA_TO_FWHM
-    a_eff = _alpha_eff(lsf_fwhm, fwhm_g, fwhm_l, alpha)
-
-    # Evaluate skew correction at bin center (midpoint of low and high)
-    x = 0.5 * (low + high) - center
-    skew = _skew(x, a_eff, w0)
-    return voigt_cdf * skew
+    a_eff = _alpha_eff(lsf_center, fwhm_g, fwhm_l, alpha)
+    skew = _skew(mids - center, a_eff, w0)
+    per_pixel = voigt_per_pixel * skew
+    return jnp.concatenate([jnp.zeros(1, edges_arr.dtype), jnp.cumsum(per_pixel)])
 
 
 @jit
@@ -1351,41 +1303,37 @@ def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:
 
 @jit
 def integrate_gaussianLaplace(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     lsf_fwhm: ArrayLike,
+    center: ArrayLike,
     fwhm_g: ArrayLike,
     fwhm_l: ArrayLike,
 ) -> Array:
-    """Integrate a symmetric EMG (Gaussian convolved wi_absth Laplace) over wavelength bins.
+    """Cumulative symmetric-EMG CDF (Gaussian ⊛ Laplace) evaluated at edges.
 
-    The LSF is added in quadrature to the Gaussian component, then the
-    symmetric EMG CDF is evaluated analytically using a numerically stable
-    erfcx form. See the :doc:`SEMG derivation </derivations/semg>` for details.
+    The LSF is added in quadrature to the Gaussian component **per edge**,
+    then the symmetric-EMG CDF is evaluated analytically using a
+    numerically stable erfcx form.  See the :doc:`SEMG derivation
+    </derivations/semg>` for details.
 
     Parameters
     ----------
-    low : jnp.ndarray
-        Low wavelength edges of bins.
-    high : jnp.ndarray
-        High wavelength edges of bins.
-    center : jnp.ndarray
-        Line centers.
-    lsf_fwhm : jnp.ndarray
-        Instrumental LSF FWHM.
-    fwhm_g : jnp.ndarray
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
+    center : ArrayLike
+        Line center wavelength.
+    fwhm_g : ArrayLike
         Intrinsic Gaussian component FWHM.
-    fwhm_l : jnp.ndarray
+    fwhm_l : ArrayLike
         Laplace component FWHM (related to scale *b* by ``FWHM = 2 b ln 2``).
 
     Returns
     -------
-    jnp.ndarray
-        Integrated fraction per bin (sums to 1 over all bins).
+    Array, shape ``(E,)``
+        Symmetric-EMG CDF at each edge.
     """
-    # This function breaks for pure Laplace, does that matter? lsf is never zero?
-
     fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
 
     # sigma here is the halfvar-parametrised sigma (= sqrt(2) * standard sigma)
@@ -1395,17 +1343,15 @@ def integrate_gaussianLaplace(
     # Convolution parameter
     a = 0.5 * σ * λ
 
-    # Gaussian component (via error function CDF)
-    gaussian_cdf = _gaussian_cdf_diff(low - center, high - center, fwhm_g_total)
+    # Gaussian component (CDF at each edge)
+    gaussian_cdf = _gaussian_cdf(edges - center, fwhm_g_total)
 
-    # Exponential correction
-    scale = 1 / σ
-    t_low = (low - center) * scale
-    t_high = (high - center) * scale
-    exp_correction = _integrandGL(t_high, a) - _integrandGL(t_low, a)
+    # Exponential correction: antiderivative-style integrand at each edge
+    t = (edges - center) / σ
+    exp_correction = _integrandGL(t, a)
 
     # Guard against large a, the Gaussian limit
-    return gaussian_cdf + jnp.where(a > _OVERFLOW_THRESHOLD, 0, 0.25 * exp_correction)
+    return gaussian_cdf + jnp.where(a > _OVERFLOW_THRESHOLD, 0.0, 0.25 * exp_correction)
 
 
 @jit
@@ -1488,42 +1434,38 @@ def _integrandGSL(t: ArrayLike, a: ArrayLike) -> Array:
 
 @jit
 def integrate_gaussianSplitLaplace(
-    low: ArrayLike,
-    high: ArrayLike,
-    center: ArrayLike,
+    edges: ArrayLike,
     lsf_fwhm: ArrayLike,
+    center: ArrayLike,
     fwhm_g: ArrayLike,
     fwhm_l_blue: ArrayLike,
     fwhm_l_red: ArrayLike,
 ) -> Array:
-    """
-    Integrate an asymmetric EMG (Gaussian convolved with Split-Laplace) over wavelength bins.
+    """Cumulative asymmetric-EMG CDF (Gaussian ⊛ split-Laplace) evaluated at edges.
 
-    The LSF is added in quadrature to the Gaussian component, then the
-    asymmetric EMG CDF is evaluated analytically using a numerically stable
-    erfcx form.
+    The LSF is added in quadrature to the Gaussian component **per edge**,
+    then the asymmetric-EMG CDF is evaluated analytically using a
+    numerically stable erfcx form.
 
     Parameters
     ----------
-    low : jnp.ndarray
-        Low wavelength edges of bins.
-    high : jnp.ndarray
-        High wavelength edges of bins.
-    center : jnp.ndarray
-        Line centers.
-    lsf_fwhm : jnp.ndarray
-        Instrumental LSF FWHM.
-    fwhm_g : jnp.ndarray
+    edges : ArrayLike, shape ``(E,)``
+        Pixel edges.
+    lsf_fwhm : ArrayLike, shape ``(E,)``
+        Instrumental LSF FWHM at each edge.
+    center : ArrayLike
+        Line center wavelength.
+    fwhm_g : ArrayLike
         Intrinsic Gaussian component FWHM.
-    fwhm_l_r : jnp.ndarray
-        Right-side Laplace component FWHM.
-    fwhm_l_l : jnp.ndarray
-        Left-side Laplace component FWHM.
+    fwhm_l_blue : ArrayLike
+        Blue-side Laplace component FWHM.
+    fwhm_l_red : ArrayLike
+        Red-side Laplace component FWHM.
 
     Returns
     -------
-    jnp.ndarray
-        Integrated fraction per bin (sums to 1 over all bins).
+    Array, shape ``(E,)``
+        Asymmetric-EMG CDF at each edge.
     """
     fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
 
@@ -1535,24 +1477,16 @@ def integrate_gaussianSplitLaplace(
     a_red = σ * λ_red / 2
     a_blue = σ * λ_blue / 2
 
-    # Gaussian component (via error function CDF)
-    gaussian_cdf = _gaussian_cdf_diff(low - center, high - center, fwhm_g_total)
+    # Gaussian component (CDF at each edge)
+    gaussian_cdf = _gaussian_cdf(edges - center, fwhm_g_total)
 
-    # Exponential correction
-    scale = 1 / σ
-    t_low = (low - center) * scale
-    t_high = (high - center) * scale
+    # Exponential correction antiderivatives at each edge
+    t = (edges - center) / σ
+    red_t = _integrandGSL(t, a_red)
+    blue_t = _integrandGSL(-t, a_blue)
 
-    red_low = _integrandGSL(t_low, a_red)
-    blue_low = _integrandGSL(-t_low, a_blue)
-    red_high = _integrandGSL(t_high, a_red)
-    blue_high = _integrandGSL(-t_high, a_blue)
+    exp_correction = (fwhm_l_red * red_t - fwhm_l_blue * blue_t) / 2
 
-    red = fwhm_l_red * (red_high - red_low)
-    blue = fwhm_l_blue * (blue_high - blue_low)
-    exp_correction = (red - blue) / 2
-
-    # Guard against large a on both sides: fall back to pure Gaussian limit
     return gaussian_cdf - exp_correction / (fwhm_l_red + fwhm_l_blue)
 
 

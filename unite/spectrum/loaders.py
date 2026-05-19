@@ -359,10 +359,16 @@ def from_desi_fits(
             error_vals = np.zeros_like(ivar_1d)
             error_vals[good] = 1.0 / np.sqrt(ivar_1d[good])
 
-            # Pixel edges from uniform spacing.
-            dlam = np.diff(wavelength).mean()
-            low = (wavelength - dlam / 2.0) * u.AA
-            high = (wavelength + dlam / 2.0) * u.AA
+            # Pixel edges as midpoints between adjacent pixel centres so that
+            # high[i] == low[i+1] exactly, enabling edge sharing in the topology.
+            dlam = np.diff(wavelength)
+            mid = (wavelength[:-1] + wavelength[1:]) / 2.0
+            _edges = np.empty(len(wavelength) + 1)
+            _edges[0] = wavelength[0] - dlam[0] / 2.0
+            _edges[1:-1] = mid
+            _edges[-1] = wavelength[-1] + dlam[-1] / 2.0
+            low = _edges[:-1] * u.AA
+            high = _edges[1:] * u.AA
 
             # Derive R(λ) from resolution matrix second moment.
             r_arr = _desi_second_moment_R(res_1d, wavelength)

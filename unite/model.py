@@ -21,16 +21,23 @@ from astropy import units as u
 from numpyro import distributions as dist
 
 from unite._compose import compose_from_profiles
-from unite._utils import C_KMS, _get_conversion_factor
+from unite._lsf import _FWHM_TO_SIGMA
+from unite._utils import _get_conversion_factor
 from unite.continuum.compute import eval_continuum, integrate_continuum
 from unite.continuum.config import ContinuumConfiguration
-from unite.line.compute import _peak_to_area_tau, evaluate_lines, integrate_lines
+from unite.line.compute import (
+    _build_line_params,
+    _peak_to_area_tau,
+    evaluate_lines,
+    integrate_lines,
+)
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.prior import Fixed, Parameter, Prior, topological_sort
 from unite.spectrum import Spectra, Spectrum
 
-# Conversion factor from FWHM to Gaussian sigma: 1 / (2 * sqrt(2 * ln 2)).
-_FWHM_TO_SIGMA: float = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+# Gaussian kernel half-width in sigma units for the banded LSF convolution.
+# 4 sigma captures >99.99% of the Gaussian area; increasing this has diminishing returns.
+_LSF_TRUNCATION_SIGMA: float = 4.0
 
 # ------------------------------------------------------------------
 # ModelArgs — data bundle for the numpyro model function
@@ -171,17 +178,15 @@ def _make_specialized_dispatch(profile_codes: jnp.ndarray) -> tuple[Any, Any, An
     int_branches = [_INTEGRATE_BRANCHES[c] for c in used_codes]
     eval_branches = [_EVALUATE_BRANCHES[c] for c in used_codes]
 
-    def _int_single(low, high, center, lsf_fwhm, p0, p1, p2, code):
-        return jax.lax.switch(
-            code, int_branches, low, high, center, lsf_fwhm, p0, p1, p2
-        )
+    def _int_single(edges, center, lsf_fwhm, p0, p1, p2, code):
+        return jax.lax.switch(code, int_branches, edges, center, lsf_fwhm, p0, p1, p2)
 
     def _eval_single(wavelength, center, lsf_fwhm, p0, p1, p2, code):
         return jax.lax.switch(
             code, eval_branches, wavelength, center, lsf_fwhm, p0, p1, p2
         )
 
-    spec_integrate = jax.vmap(_int_single, in_axes=(None, None, 0, 0, 0, 0, 0, 0))
+    spec_integrate = jax.vmap(_int_single, in_axes=(None, 0, None, 0, 0, 0, 0))
     spec_evaluate = jax.vmap(_eval_single, in_axes=(None, 0, 0, 0, 0, 0, 0))
     spec_eval_centers = jax.vmap(_eval_single, in_axes=(0, 0, 0, 0, 0, 0, 0))
 
@@ -246,64 +251,9 @@ def unite_model(args: ModelArgs) -> None:
             obj_ctx[tok] = val
 
     # --- 2. Per-line parameter arrays via matrix products ---
-    # Flux: include multiplet strengths (emission lines only; absorption lines have 0).
-    if cm.flux_names:
-        flux_vec = jnp.stack([context[n] for n in cm.flux_names])
-        flux_per_line = flux_vec @ cm.flux_matrix * cm.strengths  # (n_lines,)
-    else:
-        flux_per_line = jnp.zeros(n_lines)
-
-    # Tau: optical depths for absorption lines (emission lines have 0).
-    if cm.tau_names:
-        tau_vec = jnp.stack([context[n] for n in cm.tau_names])
-        tau_per_line = tau_vec @ cm.tau_matrix  # (n_lines,)
-    else:
-        tau_per_line = jnp.zeros(n_lines)
-
-    # Redshift (delta from systemic).
-    z_vec = jnp.stack([context[n] for n in cm.z_names])
-    z_per_line = z_vec @ cm.z_matrix  # (n_lines,)
-
-    # Observed-frame centers (in canonical wavelength unit).
-    centers = cm.wavelengths * (1.0 + z_sys + z_per_line)  # (n_lines,)
-
-    # Slot 0: primary velocity FWHM → canonical wavelength units.
-    if cm.p0_names:
-        p0_vec = jnp.stack([context[n] for n in cm.p0_names])
-        p0_kms = p0_vec @ cm.p0_matrix  # (n_lines,)
-    else:
-        p0_kms = jnp.zeros(n_lines)
-    p0 = centers * p0_kms / C_KMS  # canonical wavelength units
-
-    # Slot 1: velocity FWHMs (p1v) + dimensionless params (p1d), summed.
-    if cm.p1v_names:
-        p1v_vec = jnp.stack([context[n] for n in cm.p1v_names])
-        p1v_kms = p1v_vec @ cm.p1v_matrix  # (n_lines,)
-    else:
-        p1v_kms = jnp.zeros(n_lines)
-    p1v = centers * p1v_kms / C_KMS
-
-    if cm.p1d_names:
-        p1d_vec = jnp.stack([context[n] for n in cm.p1d_names])
-        p1d = p1d_vec @ cm.p1d_matrix  # (n_lines,), dimensionless
-    else:
-        p1d = jnp.zeros(n_lines)
-    p1 = p1v + p1d  # for any line, only one sub-matrix is nonzero
-
-    # Slot 2: velocity FWHMs (p2v) + dimensionless params (p2d), summed.
-    if cm.p2v_names:
-        p2v_vec = jnp.stack([context[n] for n in cm.p2v_names])
-        p2v_kms = p2v_vec @ cm.p2v_matrix  # (n_lines,)
-    else:
-        p2v_kms = jnp.zeros(n_lines)
-    p2v = centers * p2v_kms / C_KMS
-
-    if cm.p2d_names:
-        p2d_vec = jnp.stack([context[n] for n in cm.p2d_names])
-        p2d = p2d_vec @ cm.p2d_matrix  # (n_lines,), dimensionless
-    else:
-        p2d = jnp.zeros(n_lines)
-    p2 = p2v + p2d
+    flux_per_line, tau_per_line, centers, p0, p1, p2 = _build_line_params(
+        cm, context, n_lines, z_sys
+    )
 
     # --- 2b. Convert peak-tau to area-tau ---
     if cm.tau_names:
@@ -336,79 +286,19 @@ def unite_model(args: ModelArgs) -> None:
             context[disp.pix_offset.name] if disp.pix_offset is not None else 0.0
         )
 
-        # Pixel edges in canonical wavelength unit.
-        low = spectrum.low * wl_scale
-        high = spectrum.high * wl_scale
+        # Edge topology (canonical wavelength unit) — shared by all lines.
+        edges = spectrum.edges * wl_scale  # (E,)
+        keep_mask = spectrum.keep_mask  # (E-1,)
         if disp.pix_offset is not None:
-            mid_disp = (spectrum.low + spectrum.high) / 2.0  # disperser unit
-            shift = pix_offset * disp.dlam_dpix(mid_disp) * wl_scale
-            low = low - shift
-            high = high - shift
-
-        n_pixels = low.shape[0]
-
-        # LSF FWHM at each line center (n_lines,).
-        # R() expects disperser-unit wavelengths, result is in canonical unit.
-        lsf_fwhm = centers / (disp.R(centers * inv_wl_scale) * r_scale)
-
-        # LSF FWHM at pixel centres for continuum convolution.
-        pix_mid = (low + high) / 2.0
-        cont_lsf_fwhm = pix_mid / (disp.R(pix_mid * inv_wl_scale) * r_scale)
+            edges = edges - (pix_offset * disp.dlam_dpix(spectrum.edges) * wl_scale)
+        widths = jnp.diff(edges)  # (E-1,)
 
         # Scaled line fluxes and continuum for this spectrum.
         scaled_flux = flux_per_line * lfs / norm
         cont_scale_norm = cs / norm
 
         # --- Compute pixel-averaged model ---
-        if args.integration_mode == 'quadrature':
-            # Gauss-Legendre quadrature: evaluate full composed model at
-            # sub-pixel nodes and integrate.  This properly computes
-            # ∫ F(λ) · exp(-τ·φ(λ)) dλ over each pixel.
-            mid = (low + high) / 2.0
-            half_width = (high - low) / 2.0
-            nodes = args.quadrature_nodes  # (n_nodes,)
-            weights = args.quadrature_weights  # (n_nodes,)
-            assert nodes is not None
-            assert weights is not None
-
-            # Map GL nodes to pixel sub-points: (n_nodes, n_pixels)
-            x = mid[None, :] + half_width[None, :] * nodes[:, None]
-
-            # Evaluate full model at each set of node points and integrate.
-            # Default keyword args bind per-spectrum values at definition
-            # time to avoid late-binding closure issues (ruff B023).
-            def _glq_eval(
-                wav,
-                *,
-                _lsf=lsf_fwhm,
-                _scaled_flux=scaled_flux,
-                _csn=cont_scale_norm,
-                _fs=flux_scale,
-                _inv_wl=inv_wl_scale,
-                _rs=r_scale,
-                _disp=disp,
-                _efn=_eval_fn,
-                _pc=_pcodes,
-            ):
-                phi = _efn(wav, centers, _lsf, p0, p1, p2, _pc)
-                # LSF FWHM at quadrature node wavelengths for continuum.
-                node_lsf = wav / (_disp.R(wav * _inv_wl) * _rs)
-                cont = eval_continuum(wav, args, context, z_sys, node_lsf) * _csn
-                total = compose_from_profiles(
-                    phi,
-                    _scaled_flux,
-                    tau_per_line,
-                    cm.is_tau,
-                    cm.applies_matrix,
-                    args.cont_applies,
-                    cont,
-                    has_tau=has_tau,
-                )
-                return _fs * total
-
-            model_at_nodes = jax.vmap(_glq_eval)(x)  # (n_nodes, n_pix)
-            model = 0.5 * jnp.dot(weights, model_at_nodes)  # pixel-averaged
-        elif args.integration_mode == 'convolution':
+        if args.integration_mode == 'convolution':
             # Numerical LSF convolution: evaluate the intrinsic model (lsf_fwhm=0)
             # on a uniform fine sub-pixel grid, convolve with the wavelength-
             # dependent Gaussian LSF, then pixel-average.  This correctly computes
@@ -420,11 +310,19 @@ def unite_model(args: ModelArgs) -> None:
             assert n_super is not None
             assert half_width is not None
 
+            # Per-pixel low/high — needed only by convolution.
+            low = edges[:-1][keep_mask]
+            high = edges[1:][keep_mask]
+            n_pixels = low.shape[0]
+
             # Fine grid: n_super uniform points per pixel, midpoints of sub-bins.
-            # Shape: (n_super, n_pixels), flattened to (n_super * n_pixels,).
+            # Transposed to wavelength order: all sub-bins of pixel 0, then pixel 1, etc.
+            # Shape: (n_pixels * n_super,).
             offsets = (jnp.arange(n_super) + 0.5) / n_super  # (n_super,)
-            x_fine = low[None, :] + offsets[:, None] * (high - low)[None, :]
-            x_flat = x_fine.ravel()  # (n_super * n_pixels,)
+            x_fine = (
+                low[None, :] + offsets[:, None] * (high - low)[None, :]
+            )  # (n_super, n_pixels)
+            x_flat = x_fine.T.ravel()  # (n_pixels * n_super,) in wavelength order
 
             # Evaluate intrinsic model (lsf_fwhm=0) on fine grid.
             # _combine_fwhm(0, fwhm) = fwhm, so intrinsic profiles are used.
@@ -452,26 +350,46 @@ def unite_model(args: ModelArgs) -> None:
                     has_tau=has_tau,
                 )
 
-            model_fine_intrinsic = _conv_eval(x_flat)  # (n_super * n_pixels,)
+            model_fine_intrinsic = _conv_eval(x_flat)  # (n_pixels * n_super,)
 
-            # Pixel-average the intrinsic model then convolve at pixel resolution.
-            # Equivalent to fine-grid convolution when sigma_lsf ≥ dlam; reduces cost
-            # from O(n_super² x N x sigma/dlam) to O(n_super x N + N x sigma/dlam).
-            model_pix = model_fine_intrinsic.reshape(n_super, n_pixels).mean(axis=0)
-            sigma_pix = cont_lsf_fwhm * _FWHM_TO_SIGMA
-            model_conv = _lsf_convolve(pix_mid, model_pix, sigma_pix, half_width)
-            model = flux_scale * model_conv
+            # LSF sigma at each fine-grid point.
+            sigma_fine = (
+                x_flat / (disp.R(x_flat * inv_wl_scale) * r_scale) * _FWHM_TO_SIGMA
+            )
+
+            # Convolve on the fine grid, then pixel-average.
+            model_fine_conv = _lsf_convolve(
+                x_flat, model_fine_intrinsic, sigma_fine, half_width
+            )
+            model_pix = model_fine_conv.reshape(n_pixels, n_super).mean(axis=1)
+            model = flux_scale * model_pix
         else:
-            # Analytic: integrate each line profile individually via CDF,
-            # then combine.  Exact for flux-parametrized lines; approximate
-            # for tau-parametrized lines (integrates phi before applying exp).
-            pixints = _int_fn(low, high, centers, lsf_fwhm, p0, p1, p2, _pcodes) / (
-                high - low
-            )
-            cont = (
-                integrate_continuum(low, high, args, context, z_sys, cont_lsf_fwhm)
-                * cont_scale_norm
-            )
+            # Analytic: each profile's cumulative-at-edges array, then diff
+            # → per-interval integral → mask off inter-pixel-gap entries →
+            # divide by widths → pixel-averaged profile.
+            # Per-edge LSF (length E, shared across all lines of this spectrum).
+            lsf_at_edges = edges / (disp.R(edges * inv_wl_scale) * r_scale)
+
+            cum_per_line = _int_fn(
+                edges, centers, lsf_at_edges, p0, p1, p2, _pcodes
+            )  # (n_lines, E)
+            per_interval = jnp.diff(cum_per_line, axis=1) / widths  # (n_lines, E-1)
+            pixints = per_interval[:, keep_mask]  # (n_lines, npix)
+
+            # Per-region LSF FWHM (scalar per region) for polynomial-based
+            # continuum forms' analytic Gaussian-moment convolution.
+            if args.cont_config is not None and args.cont_center is not None:
+                cont_centers_obs = jnp.array(args.cont_center) * (1.0 + z_sys)
+                cont_lsf_per_region = cont_centers_obs / (
+                    disp.R(cont_centers_obs * inv_wl_scale) * r_scale
+                )
+            else:
+                cont_lsf_per_region = jnp.zeros(0)
+            cont_per_interval = integrate_continuum(
+                edges, args, context, z_sys, cont_lsf_per_region
+            )  # (E-1,)
+            cont = cont_per_interval[keep_mask] * cont_scale_norm  # (npix,)
+
             model = flux_scale * compose_from_profiles(
                 pixints,
                 scaled_flux,
@@ -667,9 +585,9 @@ class ModelBuilder:
         conv_half_width : int or None, optional
             Half-width of the banded LSF convolution kernel in fine-grid
             indices (default: ``None``).  When ``None``, auto-computed at
-            build time as ``ceil(4 * max_sigma / min_dx_fine * 1.5)``
-            where ``max_sigma`` is the largest LSF sigma across all
-            spectra and ``min_dx_fine`` is the finest sub-pixel spacing.
+            build time as ``ceil(4 * max_sigma * n_super / min_dlam_pix)``
+            where ``max_sigma`` is the largest LSF sigma across all spectra
+            and ``min_dlam_pix`` is the smallest pixel width.
             Only used when ``integration_mode='convolution'``.
 
         Returns
@@ -745,7 +663,9 @@ class ModelBuilder:
                     pix_widths = (s.high - s.low) * wl_scale
                     min_dlam = min(min_dlam, float(jnp.min(pix_widths)))
                 max_sigma = max_lsf_fwhm * _FWHM_TO_SIGMA
-                conv_half_width = max(1, math.ceil(4.0 * max_sigma / min_dlam))
+                conv_half_width = max(
+                    1, math.ceil(_LSF_TRUNCATION_SIGMA * max_sigma * n_super / min_dlam)
+                )
             n_super_val: int | None = n_super
             conv_half_width_val: int | None = conv_half_width
         else:

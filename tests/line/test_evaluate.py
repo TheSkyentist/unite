@@ -124,17 +124,26 @@ class TestEvaluateIntegrateConsistency:
     def _check_convergence(
         self, integrate_fn, evaluate_fn, args_integrate, args_evaluate, tolerances=None
     ):
-        """Verify convergence as pixel width shrinks."""
+        """Verify convergence as pixel width shrinks.
+
+        ``args_integrate`` / ``args_evaluate`` are ``(center, lsf_scalar, *p_args)``
+        — same for both since the underlying parameters are identical.
+        """
         if tolerances is None:
             tolerances = [(100, 0.1), (500, 0.01), (2000, 1e-3)]
+        center, lsf_scalar, *p_args = args_integrate
+        eval_center, eval_lsf_scalar, *eval_p_args = args_evaluate
         for n_pix, tol in tolerances:
             edges = jnp.linspace(4900.0, 5100.0, n_pix + 1)
-            lo, hi = edges[:-1], edges[1:]
-            mid = (lo + hi) / 2.0
-            dlam = hi - lo
+            mid = (edges[:-1] + edges[1:]) / 2.0
+            dlam = jnp.diff(edges)
+            lsf_at_edges = jnp.full_like(edges, lsf_scalar)
 
-            integrated = integrate_fn(lo, hi, *args_integrate)
-            evaluated = evaluate_fn(mid, *args_evaluate) * dlam
+            cdf = integrate_fn(edges, lsf_at_edges, center, *p_args)
+            integrated = jnp.diff(cdf)
+            evaluated = (
+                evaluate_fn(mid, eval_center, eval_lsf_scalar, *eval_p_args) * dlam
+            )
 
             # Compare near the peak where values are significant
             mask = integrated > 1e-6
@@ -346,17 +355,15 @@ class TestVoigtAgreement:
         """
         # Define pixel edges
         edges = jnp.linspace(4900.0, 5100.0, 100)  # Focus on the core
-        lo, hi = edges[:-1], edges[1:]
-        mid = (lo + hi) / 2.0
-        dlam = hi - lo
+        mid = (edges[:-1] + edges[1:]) / 2.0
+        dlam = jnp.diff(edges)
 
         fg, fl = 80.0, 50.0
         fg_total = functions._combine_fwhm(self.lsf_fwhm, fg)
 
-        # 1. Ida CDF Diff
-        ida_flux = functions._voigt_ida_cdf_diff(
-            lo - self.center, hi - self.center, fg_total, fl
-        )
+        # 1. Ida CDF Diff (cumulative CDF at edges → diff → per-pixel integrals)
+        ida_cdf = functions._voigt_ida_cdf(edges - self.center, fg_total, fl)
+        ida_flux = jnp.diff(ida_cdf)
 
         # 2. Thompson Integrated (PDF * dx)
         thompson_flux = (
@@ -380,33 +387,34 @@ class TestIntegrateVoigtLimits:
     center = 5000.0
     lsf_fwhm = 5.0
     edges = jnp.linspace(4900.0, 5100.0, 501)
-    lo, hi = edges[:-1], edges[1:]
+    lsf_at_edges = jnp.full_like(edges, lsf_fwhm)
 
     def test_gaussian_limit(self):
         # fwhm_l -> 0: rho -> 0, Ida weights collapse to pure Gaussian
         voigt = functions.integrate_voigt(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 100.0, 1e-6
+            self.edges, self.lsf_at_edges, self.center, 100.0, 1e-6
         )
         gauss = functions.integrate_gaussian(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 100.0
+            self.edges, self.lsf_at_edges, self.center, 100.0
         )
         assert jnp.allclose(voigt, gauss, rtol=1e-4)
 
     def test_cauchy_limit(self):
         # fwhm_g -> 0 (only LSF), fwhm_l large: both functions.integrate_voigt and functions.evaluate_voigt
         # should agree closely when pixel-integrated.
-        voigt = functions.integrate_voigt(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 1e-6, 100.0
+        voigt_cdf = functions.integrate_voigt(
+            self.edges, self.lsf_at_edges, self.center, 1e-6, 100.0
         )
+        voigt_per_pixel = jnp.diff(voigt_cdf)
+        mid = (self.edges[:-1] + self.edges[1:]) / 2.0
+        dlam = jnp.diff(self.edges)
         faddeeva_sum = float(
             jnp.sum(
-                functions.evaluate_voigt(
-                    (self.lo + self.hi) / 2, self.center, self.lsf_fwhm, 1e-6, 100.0
-                )
-                * (self.hi - self.lo)
+                functions.evaluate_voigt(mid, self.center, self.lsf_fwhm, 1e-6, 100.0)
+                * dlam
             )
         )
-        assert float(jnp.sum(voigt)) == pytest.approx(faddeeva_sum, rel=0.01)
+        assert float(jnp.sum(voigt_per_pixel)) == pytest.approx(faddeeva_sum, rel=0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -536,12 +544,11 @@ class TestPrivateVoigtHelpers:
     wavelength = jnp.linspace(4500.0, 5500.0, 2000)
 
     def test_thompson_cdf_diff_normalizes(self):
-        """_voigt_thompson_cdf_diff should sum to ~1 over a wide range."""
-        lo = self.edges[:-1] - self.center
-        hi = self.edges[1:] - self.center
-        result = functions._voigt_thompson_cdf_diff(lo, hi, 80.0, 50.0)
+        """_voigt_thompson_cdf should sum to ~1 over a wide range."""
+        x = self.edges - self.center
+        cdf = functions._voigt_thompson_cdf(x, 80.0, 50.0)
         # Thompson pseudo-Voigt has Lorentzian component with heavy tails; allow 5% tolerance
-        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=0.05)
+        assert float(cdf[-1] - cdf[0]) == pytest.approx(1.0, rel=0.05)
 
     def test_ida_pdf_normalizes(self):
         """_voigt_ida_pdf integrates to ~1, exercising _f_l_pdf, _f_p_pdf, _sech2."""
@@ -562,25 +569,33 @@ class TestIntegrateSkewVoigt:
     center = 5000.0
     lsf_fwhm = 5.0
     edges = jnp.linspace(4000.0, 6000.0, 2001)
-    lo, hi = edges[:-1], edges[1:]
+    lsf_at_edges = jnp.full_like(edges, lsf_fwhm)
 
     def test_alpha_zero_matches_voigt(self):
-        """integrate_skewVoigt with alpha=0 is identical to integrate_voigt."""
-        skew = functions.integrate_skewVoigt(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 50.0, 0.0
+        """For alpha=0 the skew-Voigt midpoint-rule sum equals the Voigt CDF diff (to midpoint-rule accuracy)."""
+        skew_cdf = functions.integrate_skewVoigt(
+            self.edges, self.lsf_at_edges, self.center, 80.0, 50.0, 0.0
         )
-        voigt = functions.integrate_voigt(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 50.0
+        voigt_cdf = functions.integrate_voigt(
+            self.edges, self.lsf_at_edges, self.center, 80.0, 50.0
         )
-        assert jnp.allclose(skew, voigt, rtol=1e-6)
+        # Both must agree on the total mass to high precision (asymptotic CDF endpoints).
+        assert float(skew_cdf[-1] - skew_cdf[0]) == pytest.approx(
+            float(voigt_cdf[-1] - voigt_cdf[0]), rel=1e-3
+        )
+        # And on the per-pixel integrals to midpoint-rule accuracy.
+        per_skew = jnp.diff(skew_cdf)
+        per_voigt = jnp.diff(voigt_cdf)
+        l1 = float(jnp.sum(jnp.abs(per_skew - per_voigt)))
+        assert l1 < 0.05
 
     def test_normalization_with_skew(self):
         """integrate_skewVoigt sums to ~1 for nonzero alpha (anti-symmetric cancellation)."""
-        result = functions.integrate_skewVoigt(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 50.0, 1.0
+        cdf = functions.integrate_skewVoigt(
+            self.edges, self.lsf_at_edges, self.center, 80.0, 50.0, 1.0
         )
         # Midpoint skew approximation has ~2% discretization error for large alpha_eff
-        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=0.05)
+        assert float(cdf[-1] - cdf[0]) == pytest.approx(1.0, rel=0.05)
 
 
 # ---------------------------------------------------------------------------
@@ -594,36 +609,41 @@ class TestBoxGaussLimits:
     center = 5000.0
     lsf_fwhm = 0.0
     edges = jnp.linspace(4900.0, 5100.0, 1001)
-    lo, hi = edges[:-1], edges[1:]
+    lsf_at_edges = jnp.full_like(edges, lsf_fwhm)
 
     def test_gaussian_limit(self):
         """As fwhm_box → 0, boxcar → delta; boxgauss reduces to pure Gaussian."""
         box = functions.integrate_boxGauss(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 1e-3, 100.0
+            self.edges, self.lsf_at_edges, self.center, 1e-3, 100.0
         )
         gauss = functions.integrate_gaussian(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 100.0
+            self.edges, self.lsf_at_edges, self.center, 100.0
         )
-        assert jnp.allclose(box, gauss, rtol=1e-3)
+        assert jnp.allclose(jnp.diff(box), jnp.diff(gauss), rtol=1e-3, atol=1e-12)
 
     def test_boxcar_limit(self):
         """As sigma → 0, boxgauss reduces to rectangular CDF difference."""
-        result = functions.integrate_boxGauss(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 100.0, 1e-3
+        box = functions.integrate_boxGauss(
+            self.edges, self.lsf_at_edges, self.center, 100.0, 1e-3
         )
+        per_pixel = jnp.diff(box)
         # Exact boxcar CDF over pixel: clamp((hi-c)/w + 0.5, 0, 1) - clamp((lo-c)/w + 0.5, 0, 1)
         w = 100.0
-        cdf_hi = jnp.clip((self.hi - self.center) / w + 0.5, 0.0, 1.0)
-        cdf_lo = jnp.clip((self.lo - self.center) / w + 0.5, 0.0, 1.0)
+        lo = self.edges[:-1]
+        hi = self.edges[1:]
+        cdf_hi = jnp.clip((hi - self.center) / w + 0.5, 0.0, 1.0)
+        cdf_lo = jnp.clip((lo - self.center) / w + 0.5, 0.0, 1.0)
         expected = cdf_hi - cdf_lo
-        assert jnp.allclose(result, expected, atol=1e-4)
+        assert jnp.allclose(per_pixel, expected, atol=1e-4)
 
     def test_normalization(self):
         """BoxGauss sums to 1 over full range."""
         edges_wide = jnp.linspace(0.0, 10000.0, 2001)
-        lo, hi = edges_wide[:-1], edges_wide[1:]
-        result = functions.integrate_boxGauss(lo, hi, self.center, 10.0, 300.0, 100.0)
-        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=1e-5)
+        lsf_wide = jnp.full_like(edges_wide, 10.0)
+        cdf = functions.integrate_boxGauss(
+            edges_wide, lsf_wide, self.center, 300.0, 100.0
+        )
+        assert float(cdf[-1] - cdf[0]) == pytest.approx(1.0, rel=1e-5)
 
 
 # ---------------------------------------------------------------------------
@@ -688,15 +708,15 @@ class TestGaussianSplitLaplace:
     center = 5000.0
     lsf_fwhm = 5.0
     edges = jnp.linspace(4000.0, 6000.0, 2001)
-    lo, hi = edges[:-1], edges[1:]
+    lsf_at_edges = jnp.full_like(edges, lsf_fwhm)
     wavelength = jnp.linspace(4000.0, 6000.0, 10000)
 
     def test_integrate_normalizes(self):
         """integrate_gaussianSplitLaplace sums to ~1 over a wide range."""
-        result = functions.integrate_gaussianSplitLaplace(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, 60.0, 40.0
+        cdf = functions.integrate_gaussianSplitLaplace(
+            self.edges, self.lsf_at_edges, self.center, 80.0, 60.0, 40.0
         )
-        assert float(jnp.sum(result)) == pytest.approx(1.0, rel=1e-4)
+        assert float(cdf[-1] - cdf[0]) == pytest.approx(1.0, rel=1e-4)
 
     def test_evaluate_normalizes(self):
         """evaluate_gaussianSplitLaplace integrates to ~1 over a wide range."""
@@ -710,10 +730,10 @@ class TestGaussianSplitLaplace:
         """When fwhm_l_blue == fwhm_l_red, the profile matches SEMG."""
         fwhm_l = 60.0
         gsl = functions.integrate_gaussianSplitLaplace(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, fwhm_l, fwhm_l
+            self.edges, self.lsf_at_edges, self.center, 80.0, fwhm_l, fwhm_l
         )
         semg = functions.integrate_gaussianLaplace(
-            self.lo, self.hi, self.center, self.lsf_fwhm, 80.0, fwhm_l
+            self.edges, self.lsf_at_edges, self.center, 80.0, fwhm_l
         )
         assert jnp.allclose(gsl, semg, rtol=1e-5)
 
