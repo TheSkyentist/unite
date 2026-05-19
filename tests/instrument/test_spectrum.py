@@ -8,7 +8,7 @@ import pytest
 from unite import line, prior
 from unite.continuum import ContinuumConfiguration, Linear
 from unite.instrument.generic import SimpleDisperser
-from unite.spectrum import Spectra, Spectrum
+from unite.spectrum import Spectra, Spectrum, from_arrays, from_centers, from_edges
 
 
 def _make_spectrum(
@@ -967,3 +967,143 @@ class TestEdgeTopology:
         np.testing.assert_allclose(
             np.asarray(spec.edges)[1:][idx], np.asarray(spec.high)
         )
+
+
+# ---------------------------------------------------------------------------
+# from_arrays / from_edges / from_centers loaders
+# ---------------------------------------------------------------------------
+
+
+def _raw_arrays(npix: int = 50):
+    """Return minimal arrays for loader tests."""
+    wl = np.linspace(6500.0, 6600.0, npix) * u.AA
+    disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='test')
+    half = 0.5 * np.gradient(wl)
+    low = wl - half
+    high = wl + half
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = np.arange(npix, dtype=float) * flux_unit
+    error = np.ones(npix) * flux_unit
+    return low, high, wl, flux, error, disperser
+
+
+class TestFromEdgesLoader:
+    """Tests for from_edges (positional low+high interface)."""
+
+    def test_basic(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec = from_edges(low, high, flux, error, disperser)
+        assert spec.npix == 50
+
+    def test_custom_name(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec = from_edges(low, high, flux, error, disperser, name='myspec')
+        assert spec.name == 'myspec'
+
+    def test_mask_removes_pixels(self):
+        low, high, _, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[10] = True
+        bad[20] = True
+        spec = from_edges(low, high, flux, error, disperser, mask=bad)
+        assert spec.npix == 48
+        assert not np.any(np.isclose(np.asarray(spec.flux), 10.0))
+        assert not np.any(np.isclose(np.asarray(spec.flux), 20.0))
+
+    def test_mask_none_no_op(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec_no_mask = from_edges(low, high, flux, error, disperser)
+        spec_none = from_edges(low, high, flux, error, disperser, mask=None)
+        assert spec_no_mask.npix == spec_none.npix
+
+    def test_mask_wrong_length_raises(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='mask length'):
+            from_edges(low, high, flux, error, disperser, mask=np.zeros(30, dtype=bool))
+
+    def test_mask_not_1d_raises(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='1-D'):
+            from_edges(low, high, flux, error, disperser, mask=np.zeros((50, 1), dtype=bool))
+
+
+class TestFromCentersLoader:
+    """Tests for from_centers (positional center interface)."""
+
+    def test_basic(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_centers(center, flux, error, disperser)
+        assert spec.npix == 50
+
+    def test_edges_derived_correctly(self):
+        """Derived low/high should bracket each centre."""
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_centers(center, flux, error, disperser)
+        np.testing.assert_allclose(
+            np.asarray(spec.midpoints), center.value, rtol=1e-10
+        )
+
+    def test_custom_name(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_centers(center, flux, error, disperser, name='myspec')
+        assert spec.name == 'myspec'
+
+    def test_mask_removes_pixels(self):
+        _, _, center, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[5] = True
+        spec = from_centers(center, flux, error, disperser, mask=bad)
+        assert spec.npix == 49
+
+    def test_mask_wrong_length_raises(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='mask length'):
+            from_centers(center, flux, error, disperser, mask=np.zeros(30, dtype=bool))
+
+
+class TestFromArraysLoader:
+    """Tests for from_arrays (keyword-only, accepts both modes)."""
+
+    def test_edges_mode(self):
+        low, high, _, flux, error, disperser = _raw_arrays()
+        spec = from_arrays(low=low, high=high, flux=flux, error=error, disperser=disperser)
+        assert spec.npix == 50
+
+    def test_center_mode(self):
+        _, _, center, flux, error, disperser = _raw_arrays()
+        spec = from_arrays(center=center, flux=flux, error=error, disperser=disperser)
+        assert spec.npix == 50
+
+    def test_edges_mode_with_mask(self):
+        low, high, _, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[0] = True
+        spec = from_arrays(low=low, high=high, flux=flux, error=error, disperser=disperser, mask=bad)
+        assert spec.npix == 49
+
+    def test_center_mode_with_mask(self):
+        _, _, center, flux, error, disperser = _raw_arrays(npix=50)
+        bad = np.zeros(50, dtype=bool)
+        bad[0] = True
+        spec = from_arrays(center=center, flux=flux, error=error, disperser=disperser, mask=bad)
+        assert spec.npix == 49
+
+    def test_center_and_edges_raises(self):
+        low, high, center, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='not both'):
+            from_arrays(low=low, high=high, center=center, flux=flux, error=error, disperser=disperser)
+
+    def test_only_low_raises(self):
+        low, _, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='both low and high'):
+            from_arrays(low=low, flux=flux, error=error, disperser=disperser)
+
+    def test_only_high_raises(self):
+        _, high, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='both low and high'):
+            from_arrays(high=high, flux=flux, error=error, disperser=disperser)
+
+    def test_neither_raises(self):
+        _, _, _, flux, error, disperser = _raw_arrays()
+        with pytest.raises(ValueError, match='must provide'):
+            from_arrays(flux=flux, error=error, disperser=disperser)

@@ -10,7 +10,7 @@ from astropy import units as u
 from astropy.table import Table
 
 from unite.instrument.sdss import SDSSDisperser
-from unite.spectrum import from_arrays, from_sdss_fits
+from unite.spectrum import from_edges, from_sdss_fits
 
 
 def _make_sdss_table(n=50, include_and_mask=True, has_bad_ivar=False):
@@ -85,8 +85,8 @@ class TestSDSSDisperser:
         assert 'SDSS-test' in repr(d2)
 
 
-class TestFromArraysSDSS:
-    """Tests for the from_arrays loader with an SDSS disperser."""
+class TestFromEdgesSDSS:
+    """Tests for the from_edges loader with an SDSS disperser."""
 
     def test_basic(self):
         npix = 50
@@ -96,7 +96,7 @@ class TestFromArraysSDSS:
         d._wavelength_grid = jnp.asarray(np.linspace(4000, 8000, npix), dtype=float)
         d._R_grid = jnp.full_like(d._wavelength_grid, 2000.0)
         d._dlam_dpix_grid = jnp.gradient(d._wavelength_grid)
-        spec = from_arrays(
+        spec = from_edges(
             wl[:-1],
             wl[1:],
             np.ones(npix) * flux_unit,

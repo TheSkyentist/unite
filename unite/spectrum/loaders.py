@@ -5,7 +5,8 @@ objects from pre-loaded arrays or instrument-native file formats.
 
 All loaders are re-exported from :mod:`unite.spectrum`::
 
-    from unite.spectrum import from_arrays, from_DJA, from_sdss_fits, from_desi_fits
+    from unite.spectrum import from_arrays, from_edges, from_centers
+    from unite.spectrum import from_DJA, from_sdss_fits, from_desi_fits
 """
 
 from __future__ import annotations
@@ -24,34 +25,158 @@ from unite.instrument.sdss.disperser import SDSSDisperser
 from unite.spectrum.spectrum import Spectrum
 
 
+def _apply_mask(
+    mask: np.ndarray | None,
+    n: int,
+    *arrays: u.Quantity | np.ndarray,
+) -> tuple[u.Quantity | np.ndarray, ...]:
+    """Validate and apply a bad-pixel mask to one or more arrays."""
+    if mask is None:
+        return arrays
+    mask_arr = np.asarray(mask, dtype=bool)
+    if mask_arr.ndim != 1:
+        msg = f'mask must be 1-D, got shape {mask_arr.shape}.'
+        raise ValueError(msg)
+    if len(mask_arr) != n:
+        msg = f'mask length ({len(mask_arr)}) does not match the number of pixels ({n}).'
+        raise ValueError(msg)
+    good = ~mask_arr
+    return tuple(a[good] for a in arrays)
+
+
 def from_arrays(
+    *,
+    low: u.Quantity | None = None,
+    high: u.Quantity | None = None,
+    center: u.Quantity | None = None,
+    flux: u.Quantity,
+    error: u.Quantity,
+    disperser: Disperser,
+    mask: np.ndarray | None = None,
+    name: str = '',
+) -> Spectrum:
+    """Construct a :class:`~unite.spectrum.Spectrum` from pre-loaded arrays.
+
+    All arguments are keyword-only.  Pixel boundaries may be supplied either
+    as explicit bin edges (*low* + *high*) or as pixel centres (*center*), but
+    not both.  Use :func:`from_edges` or :func:`from_centers` for a
+    positional-argument interface.
+
+    Parameters
+    ----------
+    low : astropy.units.Quantity, optional
+        Lower wavelength edge of each pixel.  Required when *center* is not
+        given.  Must be 1-D with wavelength (length) dimensions.
+    high : astropy.units.Quantity, optional
+        Upper wavelength edge of each pixel.  Required when *center* is not
+        given.  Same shape and compatible units as *low*.
+    center : astropy.units.Quantity, optional
+        Pixel-centre wavelengths.  Required when *low* / *high* are not given.
+        Pixel edges are derived via :func:`numpy.gradient`, so this path is
+        most accurate for gapless, reasonably uniform grids.  For spectra with
+        detector gaps or non-uniform spacing, supply *low* and *high* directly.
+    flux : astropy.units.Quantity
+        Flux density values per pixel (f_lambda).  Must be 1-D with the same
+        length as the wavelength arrays.
+    error : astropy.units.Quantity
+        Flux density uncertainty per pixel.  Same length and compatible units
+        as *flux*.
+    disperser : Disperser
+        The disperser associated with this spectrum.  Carries any calibration
+        tokens (``r_scale``, ``flux_scale``, ``pix_offset``).
+    mask : numpy.ndarray, optional
+        Boolean bad-pixel mask of shape ``(npix,)``.  ``True`` marks a pixel
+        as bad (excluded); ``False`` keeps it.  Follows the same convention as
+        :class:`numpy.ma.MaskedArray`.  ``None`` (default) keeps all pixels.
+    name : str, optional
+        Human-readable label.  Defaults to ``disperser.name``.
+
+    Returns
+    -------
+    Spectrum
+
+    Raises
+    ------
+    ValueError
+        If both *center* and *low* / *high* are provided, if only one of
+        *low* / *high* is provided, if neither *center* nor *low* / *high* are
+        provided, or if *mask* is not 1-D or its length does not match *npix*.
+    """
+    has_edges = low is not None or high is not None
+    has_center = center is not None
+
+    if has_center and has_edges:
+        msg = 'provide either center or low/high, not both.'
+        raise ValueError(msg)
+    if not has_center and not has_edges:
+        msg = 'must provide either center or both low and high.'
+        raise ValueError(msg)
+    if has_edges and (low is None or high is None):
+        msg = 'must provide both low and high, not just one.'
+        raise ValueError(msg)
+
+    if has_center:
+        n = len(center)  # type: ignore[arg-type]
+        center, flux, error = _apply_mask(mask, n, center, flux, error)  # type: ignore[assignment]
+        # Build edges as midpoints between adjacent centres so that high[i] == low[i+1]
+        # exactly, preserving the shared-edge topology.  Boundary edges are extrapolated
+        # using the local pixel spacing.
+        cval = center.value  # type: ignore[union-attr]
+        cunit = center.unit  # type: ignore[union-attr]
+        mid = (cval[:-1] + cval[1:]) / 2.0
+        low_edge = np.empty(len(cval))
+        high_edge = np.empty(len(cval))
+        low_edge[0] = cval[0] - (cval[1] - cval[0]) / 2.0
+        low_edge[1:] = mid
+        high_edge[:-1] = mid
+        high_edge[-1] = cval[-1] + (cval[-1] - cval[-2]) / 2.0
+        low = low_edge * cunit
+        high = high_edge * cunit
+    else:
+        n = len(low)  # type: ignore[arg-type]
+        low, high, flux, error = _apply_mask(mask, n, low, high, flux, error)  # type: ignore[assignment]
+
+    return Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
+    )
+
+
+def from_edges(
     low: u.Quantity,
     high: u.Quantity,
     flux: u.Quantity,
     error: u.Quantity,
     disperser: Disperser,
     *,
+    mask: np.ndarray | None = None,
     name: str = '',
 ) -> Spectrum:
-    """Construct a :class:`~unite.spectrum.Spectrum` from pre-loaded arrays.
+    """Construct a :class:`~unite.spectrum.Spectrum` from pixel bin edges.
+
+    Positional-argument convenience wrapper around :func:`from_arrays` for the
+    common case where pixel bin edges are already known.
 
     Parameters
     ----------
     low : astropy.units.Quantity
-        Lower wavelength edges of each pixel.  Must be 1-D with wavelength
+        Lower wavelength edge of each pixel.  Must be 1-D with wavelength
         (length) dimensions.
     high : astropy.units.Quantity
-        Upper wavelength edges of each pixel.  Same shape and compatible
-        units as *low*.
+        Upper wavelength edge of each pixel.  Same shape and compatible units
+        as *low*.
     flux : astropy.units.Quantity
-        Flux density values per pixel (f_lambda).  Must be 1-D with the
-        same length as *low*.
+        Flux density values per pixel (f_lambda).  Must be 1-D with the same
+        length as *low*.
     error : astropy.units.Quantity
-        Flux density uncertainty per pixel.  Must be 1-D with the same
-        length as *low* and compatible units as *flux*.
+        Flux density uncertainty per pixel.  Same length and compatible units
+        as *flux*.
     disperser : Disperser
-        The disperser associated with this spectrum.  Carries any
-        calibration tokens (``r_scale``, ``flux_scale``, ``pix_offset``).
+        The disperser associated with this spectrum.  Carries any calibration
+        tokens (``r_scale``, ``flux_scale``, ``pix_offset``).
+    mask : numpy.ndarray, optional
+        Boolean bad-pixel mask of shape ``(npix,)``.  ``True`` marks a pixel
+        as bad (excluded); ``False`` keeps it.  ``None`` (default) keeps all
+        pixels.
     name : str, optional
         Human-readable label.  Defaults to ``disperser.name``.
 
@@ -59,8 +184,66 @@ def from_arrays(
     -------
     Spectrum
     """
-    return Spectrum(
-        low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
+    return from_arrays(
+        low=low,
+        high=high,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        mask=mask,
+        name=name,
+    )
+
+
+def from_centers(
+    center: u.Quantity,
+    flux: u.Quantity,
+    error: u.Quantity,
+    disperser: Disperser,
+    *,
+    mask: np.ndarray | None = None,
+    name: str = '',
+) -> Spectrum:
+    """Construct a :class:`~unite.spectrum.Spectrum` from pixel-centre wavelengths.
+
+    Positional-argument convenience wrapper around :func:`from_arrays` for the
+    common case where only pixel centres are available.  Pixel bin edges are
+    derived via :func:`numpy.gradient`, so this path is most accurate for
+    gapless, reasonably uniform grids.  For spectra with detector gaps or
+    non-uniform spacing, supply *low* and *high* directly via :func:`from_edges`.
+
+    Parameters
+    ----------
+    center : astropy.units.Quantity
+        Pixel-centre wavelengths.  Must be 1-D with wavelength (length)
+        dimensions.
+    flux : astropy.units.Quantity
+        Flux density values per pixel (f_lambda).  Must be 1-D with the same
+        length as *center*.
+    error : astropy.units.Quantity
+        Flux density uncertainty per pixel.  Same length and compatible units
+        as *flux*.
+    disperser : Disperser
+        The disperser associated with this spectrum.  Carries any calibration
+        tokens (``r_scale``, ``flux_scale``, ``pix_offset``).
+    mask : numpy.ndarray, optional
+        Boolean bad-pixel mask of shape ``(npix,)``.  ``True`` marks a pixel
+        as bad (excluded); ``False`` keeps it.  ``None`` (default) keeps all
+        pixels.
+    name : str, optional
+        Human-readable label.  Defaults to ``disperser.name``.
+
+    Returns
+    -------
+    Spectrum
+    """
+    return from_arrays(
+        center=center,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        mask=mask,
+        name=name,
     )
 
 
