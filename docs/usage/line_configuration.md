@@ -409,7 +409,7 @@ skew correction requires Owen's T function (Gaussian part) and a separate quadra
 the profile at each pixel midpoint and multiplies by the pixel width. This is accurate
 when the profile is well-resolved (intrinsic FWHM several times the pixel width), but
 introduces sub-pixel quadrature error for marginally resolved lines. Consider using
-`integration_mode='quadrature'` as an alternative integration mode.
+`integration_mode='convolution'` as an alternative integration mode.
 :::
 
 **Parameters:** `fwhm_gauss` (km/s), `fwhm_lorentz` (km/s), `alpha` (dimensionless)
@@ -504,15 +504,15 @@ lines use a {class}`~unite.line.Tau` (optical depth) token instead of a
 **Analytic mode only:** each profile is integrated over pixels independently before the
 nonlinear transmission is applied, computing `exp(-τ·∫φ)` rather than `∫F·exp(-τ·φ)`.
 This is accurate when the absorber is well-resolved but introduces an approximation for
-unresolved or marginally resolved lines. Use `integration_mode='quadrature'` to avoid this.
+unresolved or marginally resolved lines. Use `integration_mode='convolution'` to avoid this.
 
-**Both modes:** the absorption profile `φ(λ)` passed to `exp(-τ·φ)` is the LSF-convolved
+**Analytic mode:** the absorption profile `φ(λ)` passed to `exp(-τ·φ)` is the LSF-convolved
 profile, not the intrinsic one. The correct observable requires convolving the nonlinear
-product `F·exp(-τ·φ_intrinsic)` with the LSF over its full multi-pixel support, which is not
-currently supported. This approximation is accurate when the absorber is **resolved**
-(intrinsic FWHM ≫ LSF FWHM) or **optically thin** (τ ≪ 1). For **unresolved, optically thick
-absorbers** the inferred τ will be biased high and the curve of growth misrepresented.
-See {ref}`lsf-pre-convolution-of-absorption-profiles` for a full discussion.
+product `F·exp(-τ·φ_intrinsic)` with the LSF over its full multi-pixel support. This
+approximation is accurate when the absorber is **resolved** (intrinsic FWHM ≫ LSF FWHM) or
+**optically thin** (τ ≪ 1). For **unresolved, optically thick absorbers** the inferred τ
+will be biased high and the curve of growth misrepresented. Convolution mode eliminates
+both approximations. See {ref}`lsf-pre-convolution-of-absorption-profiles` for a full discussion.
 :::
 
 ### Adding Tau-Parametrized Lines

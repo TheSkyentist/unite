@@ -39,9 +39,12 @@ def synthetic_inputs():
     key = jax.random.PRNGKey(0)
     keys = jax.random.split(key, 8)
 
-    low = jnp.linspace(6400.0, 6800.0, N_PIXELS)
-    high = low + (low[1] - low[0])
+    # Contiguous pixels — edges have length N_PIXELS + 1.
+    edges = jnp.linspace(6400.0, 6800.0, N_PIXELS + 1)
+    low = edges[:-1]
+    high = edges[1:]
     wl = (low + high) / 2.0
+    lsf_at_edges = jnp.full((N_PIXELS + 1,), 2.0)
 
     centers = 6500.0 + 300.0 * jax.random.uniform(keys[0], (N_LINES,))
     lsf_fwhm = jnp.full((N_LINES,), 2.0)
@@ -59,6 +62,8 @@ def synthetic_inputs():
     continuum = jnp.full((N_PIXELS,), 5.0)
 
     return {
+        'edges': edges,
+        'lsf_at_edges': lsf_at_edges,
         'low': low,
         'high': high,
         'wl': wl,
@@ -82,18 +87,14 @@ def synthetic_inputs():
 
 
 def test_integrate_gaussian_kernel(benchmark, synthetic_inputs):
-    """Single-profile Gaussian CDF integration over pixels."""
+    """Single-profile Gaussian cumulative CDF at edges."""
     s = synthetic_inputs
     fn = jax.jit(integrate_gaussian)
     # Warm cache before timing.
-    fn(
-        s['low'], s['high'], s['centers'][0], s['lsf_fwhm'][0], s['p0'][0]
-    ).block_until_ready()
+    fn(s['edges'], s['lsf_at_edges'], s['centers'][0], s['p0'][0]).block_until_ready()
 
     def run():
-        return block(
-            fn(s['low'], s['high'], s['centers'][0], s['lsf_fwhm'][0], s['p0'][0])
-        )
+        return block(fn(s['edges'], s['lsf_at_edges'], s['centers'][0], s['p0'][0]))
 
     benchmark(run)
 
@@ -116,19 +117,12 @@ def test_integrate_split_normal_kernel(benchmark, synthetic_inputs):
     fn = jax.jit(integrate_split_normal)
     # SplitNormal needs two FWHMs in p0, p1.
     fn(
-        s['low'], s['high'], s['centers'][0], s['lsf_fwhm'][0], s['p0'][0], s['p0'][0]
+        s['edges'], s['lsf_at_edges'], s['centers'][0], s['p0'][0], s['p0'][0]
     ).block_until_ready()
 
     def run():
         return block(
-            fn(
-                s['low'],
-                s['high'],
-                s['centers'][0],
-                s['lsf_fwhm'][0],
-                s['p0'][0],
-                s['p0'][0],
-            )
+            fn(s['edges'], s['lsf_at_edges'], s['centers'][0], s['p0'][0], s['p0'][0])
         )
 
     benchmark(run)
@@ -139,10 +133,9 @@ def test_integrate_lines_dispatch(benchmark, synthetic_inputs):
     s = synthetic_inputs
     fn = jax.jit(integrate_lines)
     fn(
-        s['low'],
-        s['high'],
+        s['edges'],
         s['centers'],
-        s['lsf_fwhm'],
+        s['lsf_at_edges'],
         s['p0'],
         s['p1'],
         s['p2'],
@@ -152,10 +145,9 @@ def test_integrate_lines_dispatch(benchmark, synthetic_inputs):
     def run():
         return block(
             fn(
-                s['low'],
-                s['high'],
+                s['edges'],
                 s['centers'],
-                s['lsf_fwhm'],
+                s['lsf_at_edges'],
                 s['p0'],
                 s['p1'],
                 s['p2'],
@@ -167,7 +159,7 @@ def test_integrate_lines_dispatch(benchmark, synthetic_inputs):
 
 
 def test_evaluate_lines_dispatch(benchmark, synthetic_inputs):
-    """Vmapped + lax.switch evaluation (quadrature path)."""
+    """Vmapped + lax.switch pointwise evaluation (convolution-mode path)."""
     s = synthetic_inputs
     fn = jax.jit(evaluate_lines)
     fn(
@@ -270,25 +262,30 @@ def _profile_kwargs(profile):
 
 @pytest.fixture(scope='module')
 def profile_edges():
-    """Pixel edges for per-profile integrate benchmarks (shared, immutable)."""
-    low = jnp.linspace(6400.0, 6800.0, N_PIXELS)
-    high = low + (low[1] - low[0])
-    return low, high, (low + high) / 2.0
+    """Pixel edges + per-edge LSF for per-profile integrate benchmarks.
+
+    Returns ``(edges, lsf_at_edges, wl)`` where ``edges`` has length
+    ``N_PIXELS + 1`` (contiguous) and ``wl`` is the per-pixel midpoint
+    array used by the evaluate benchmarks.
+    """
+    edges = jnp.linspace(6400.0, 6800.0, N_PIXELS + 1)
+    lsf_at_edges = jnp.full((N_PIXELS + 1,), 2.0)
+    wl = (edges[:-1] + edges[1:]) / 2.0
+    return edges, lsf_at_edges, wl
 
 
 @pytest.mark.parametrize('profile_cls', PROFILE_CLASSES, ids=lambda c: c.__name__)
 def test_profile_integrate(benchmark, profile_edges, profile_cls):
-    """CDF integration over pixels, one bench per registered Profile."""
-    low, high, _ = profile_edges
+    """Cumulative CDF at edges, one bench per registered Profile."""
+    edges, lsf_at_edges, _ = profile_edges
     profile = profile_cls()
     kwargs = _profile_kwargs(profile)
     center = jnp.asarray(6500.0)
-    lsf_fwhm = jnp.asarray(2.0)
 
-    fn = jax.jit(lambda lo, hi, c, lsf: profile.integrate(lo, hi, c, lsf, **kwargs))
-    fn(low, high, center, lsf_fwhm).block_until_ready()
+    fn = jax.jit(lambda e, lsf, c: profile.integrate(e, lsf, c, **kwargs))
+    fn(edges, lsf_at_edges, center).block_until_ready()
 
-    benchmark(lambda: block(fn(low, high, center, lsf_fwhm)))
+    benchmark(lambda: block(fn(edges, lsf_at_edges, center)))
 
 
 @pytest.mark.parametrize('profile_cls', PROFILE_CLASSES, ids=lambda c: c.__name__)

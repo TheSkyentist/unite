@@ -220,29 +220,20 @@ tau-parametrized (absorption) lines or non-polynomial continuum forms:
 # Analytic (default) — fast, exact for emission
 model_fn, args = builder.build(integration_mode='analytic')
 
-# Quadrature — exact pixel integration of the full composed model
-model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
-
 # Convolution — numerical LSF convolution on a fine sub-pixel grid
 model_fn, args = builder.build(integration_mode='convolution', n_super=10)
 ```
 
 | Mode | How it works | Speed | Absorption accuracy |
 |---|---|---|---|
-| `'analytic'` | CDF-based integration of each profile over pixel bins | Fast | Approximate — integrates `φ` before applying `exp(-τ·φ)` |
-| `'quadrature'` | Gauss-Legendre quadrature of the full composed model at `n_nodes` sub-pixel points | Slower | Exact pixel integration — properly integrates `∫F(λ)·exp(-τ·φ(λ)) dλ` |
-| `'convolution'` | Evaluates the intrinsic model (LSF=0) on `n_super` uniform fine-grid points per pixel, convolves with the wavelength-dependent Gaussian LSF, then pixel-averages | Slowest | Exact — correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` |
+| `'analytic'` | CDF-based integration of each profile over pixel bins | Fast | Approximate — integrates `φ` before applying `exp(-τ·φ)`, and pre-convolves `φ` with the LSF before applying `exp(-τ·φ)` |
+| `'convolution'` | Evaluates the intrinsic model (LSF=0) on `n_super` uniform fine-grid points per pixel, convolves with the wavelength-dependent Gaussian LSF, then pixel-averages | Slower | Exact — correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` |
 
 **When to use each:**
 
 - **Analytic** is the right default for most models.  It is exact for emission-only
   models.  For absorption lines, the approximation is accurate when the absorber
   is well-resolved (profile varies slowly across a pixel) or optically thin (τ ≪ 1).
-- **Quadrature** should be used when tau-parametrized lines are unresolved or
-  marginally resolved — for example, narrow absorption in low-resolution spectra
-  (NIRSpec PRISM), or when mixing emission and absorption at similar wavelengths
-  across spectrographs with very different resolutions.  It fixes the pixel-integration
-  approximation but does **not** eliminate the LSF pre-convolution error described below.
 - **Convolution** should be used when physically accurate LSF treatment is required
   for absorption lines, when lines are undersampled (intrinsic width narrower than a
   pixel), or when your model includes non-polynomial continuum forms (e.g. `PowerLaw`,
@@ -251,12 +242,12 @@ model_fn, args = builder.build(integration_mode='convolution', n_super=10)
   increase it to verify convergence for narrow lines.
 
 :::{warning}
-In both `'analytic'` and `'quadrature'` modes the LSF is applied by adding its
-FWHM in quadrature to the intrinsic profile FWHM **before** evaluating the profile —
-i.e. the code computes `exp(-τ · φ_LSF)` rather than `LSF ⊗ exp(-τ · φ_intrinsic)`.
-For unresolved, optically thick absorbers (narrow ISM lines at moderate spectral
-resolution), this underestimates the absorption depth and biases inferred τ values
-high.  Use `integration_mode='convolution'` if this matters for your science case.
+In `'analytic'` mode the LSF is applied by adding its FWHM in quadrature to the
+intrinsic profile FWHM **before** evaluating the profile — i.e. the code computes
+`exp(-τ · φ_LSF)` rather than `LSF ⊗ exp(-τ · φ_intrinsic)`.  For unresolved,
+optically thick absorbers (narrow ISM lines at moderate spectral resolution), this
+underestimates the absorption depth and biases inferred τ values high.  Use
+`integration_mode='convolution'` if this matters for your science case.
 :::
 
 #### Convolution mode parameters
@@ -350,12 +341,6 @@ reduces to the standard emission + continuum equation regardless of zorders.
 method:
 
 ```python
-samples, args = builder.fit(
-    integration_mode='quadrature',
-    n_nodes=7,
-)
-
-# Or with convolution mode:
 samples, args = builder.fit(
     integration_mode='convolution',
     n_super=10,
