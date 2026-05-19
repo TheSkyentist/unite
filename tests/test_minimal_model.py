@@ -1372,139 +1372,12 @@ class TestIntegrationMode:
         with pytest.raises(ValueError, match='integration_mode must be one of'):
             builder.build(integration_mode='invalid')
 
-    def test_analytic_mode_no_quadrature_arrays(self, basic_model):
-        """Analytic mode should not store quadrature nodes/weights."""
+    def test_analytic_mode_defaults(self, basic_model):
+        """Default integration_mode is analytic with no convolution fields set."""
         _, args, _ = basic_model
         assert args.integration_mode == 'analytic'
-        assert args.quadrature_nodes is None
-        assert args.quadrature_weights is None
-
-    def test_quadrature_mode_stores_arrays(self):
-        """Quadrature mode should store GL nodes/weights."""
-        spec = create_simple_spectrum()
-        lc = create_minimal_config()
-        spectra = Spectra([spec], redshift=0.0)
-        spectra.prepare(lc)
-        spectra.compute_scales(spectra.prepared_line_config)
-        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
-        _, args = builder.build(integration_mode='quadrature', n_nodes=5)
-        assert args.integration_mode == 'quadrature'
-        assert args.quadrature_nodes.shape == (5,)
-        assert args.quadrature_weights.shape == (5,)
-
-    def test_quadrature_predictive(self):
-        """Model with quadrature integration runs without errors."""
-        spec = create_simple_spectrum()
-        lc = create_minimal_config()
-        spectra = Spectra([spec], redshift=0.0)
-        spectra.prepare(lc)
-        spectra.compute_scales(spectra.prepared_line_config)
-        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
-        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
-        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
-        assert f'obs_{spec.name}' in samples
-
-    def test_quadrature_matches_analytic_emission(self):
-        """For emission-only models, quadrature should match analytic closely."""
-        from unite.compute import evaluate_model
-
-        spec = create_simple_spectrum()
-        lc = line.LineConfiguration()
-        lc.add_line(
-            'Ha',
-            6563.0 * u.AA,
-            redshift=line.Redshift(prior=prior.Fixed(0.0)),
-            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
-            flux=line.Flux(prior=prior.Fixed(1.0)),
-        )
-        spectra = Spectra([spec], redshift=0.0)
-        spectra.prepare(lc)
-        spectra.compute_scales(spectra.prepared_line_config)
-        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
-
-        _, args_a = builder.build(integration_mode='analytic')
-        _, args_q = builder.build(integration_mode='quadrature', n_nodes=11)
-
-        pred_a = evaluate_model({}, args_a)[0]
-        pred_q = evaluate_model({}, args_q)[0]
-
-        # Total model predictions should match to high precision
-        assert np.allclose(pred_a.total, pred_q.total, rtol=1e-4)
-
-    def test_quadrature_absorption_runs(self):
-        """Quadrature mode with tau-parametrized lines runs without errors."""
-        spec = create_simple_spectrum()
-        lc = line.LineConfiguration()
-        lc.add_line(
-            'Ha',
-            6563.0 * u.AA,
-            redshift=line.Redshift(prior=prior.Fixed(0.0)),
-            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
-            tau=line.Tau(prior=prior.Fixed(1.0)),
-        )
-        spectra = Spectra([spec], redshift=0.0)
-        spectra.prepare(lc)
-        spectra.compute_scales(spectra.prepared_line_config)
-        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
-        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
-        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
-        assert f'obs_{spec.name}' in samples
-
-    def test_quadrature_mixed_emission_absorption(self):
-        """Quadrature mode with both flux and tau lines runs without errors."""
-        spec = create_simple_spectrum()
-        lc = line.LineConfiguration()
-        z = line.Redshift('z', prior=prior.Fixed(0.0))
-        fwhm = line.FWHM('fwhm', prior=prior.Fixed(300.0))
-        lc.add_line(
-            'Ha_em',
-            6563.0 * u.AA,
-            redshift=z,
-            fwhm_gauss=fwhm,
-            flux=line.Flux(prior=prior.Fixed(1.0)),
-        )
-        lc.add_line(
-            'Ha_abs',
-            6563.0 * u.AA,
-            redshift=z,
-            fwhm_gauss=fwhm,
-            tau=line.Tau(prior=prior.Fixed(0.5)),
-        )
-        spectra = Spectra([spec], redshift=0.0)
-        spectra.prepare(lc)
-        spectra.compute_scales(spectra.prepared_line_config)
-        builder = model.ModelBuilder(spectra.prepared_line_config, None, spectra)
-        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
-        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
-        assert f'obs_{spec.name}' in samples
-
-    def test_quadrature_with_continuum(self):
-        """Quadrature mode with continuum exercises eval_continuum (non-None cont_config)."""
-        from unite.continuum import ContinuumConfiguration, ContinuumRegion, Linear
-
-        spec = create_simple_spectrum()
-        lc = line.LineConfiguration()
-        lc.add_line(
-            'Ha',
-            6563.0 * u.AA,
-            redshift=line.Redshift(prior=prior.Fixed(0.0)),
-            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
-            flux=line.Flux(prior=prior.Fixed(1.0)),
-        )
-        cont = ContinuumConfiguration(
-            [ContinuumRegion(6450.0 * u.AA, 6650.0 * u.AA, Linear())]
-        )
-        spectra = Spectra([spec], redshift=0.0)
-        spectra.prepare(lc, cont)
-        spectra.compute_scales(
-            spectra.prepared_line_config, spectra.prepared_cont_config
-        )
-        builder = model.ModelBuilder(
-            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
-        )
-        model_fn, args = builder.build(integration_mode='quadrature', n_nodes=7)
-        samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
-        assert f'obs_{spec.name}' in samples
+        assert args.n_super is None
+        assert args.conv_half_width is None
 
 
 class TestConvolutionMode:
@@ -1530,7 +1403,7 @@ class TestConvolutionMode:
         return model.ModelBuilder(spectra.prepared_line_config, None, spectra), spec
 
     def test_fields_stored(self):
-        """Convolution mode stores n_super and conv_half_width; quadrature arrays are None."""
+        """Convolution mode stores n_super and conv_half_width."""
         lc = create_minimal_config()
         builder, _ = self._make_builder(lc)
         _, args = builder.build(integration_mode='convolution', n_super=8)
@@ -1538,8 +1411,6 @@ class TestConvolutionMode:
         assert args.n_super == 8
         assert isinstance(args.conv_half_width, int)
         assert args.conv_half_width >= 1
-        assert args.quadrature_nodes is None
-        assert args.quadrature_weights is None
 
     def test_n_super_respected(self):
         """n_super=20 should be stored as-is."""

@@ -94,16 +94,10 @@ class ModelArgs:
     #: Shape ``(n_lines,)``.
     cont_applies: jnp.ndarray
     #: Line integration mode: ``'analytic'`` (default) uses exact CDF-based
-    #: integration for all line profiles individually;
-    #: ``'quadrature'`` uses Gauss-Legendre quadrature to integrate the full
-    #: composed model over pixels.
+    #: integration for all line profiles individually; ``'convolution'``
+    #: evaluates the intrinsic model on a fine sub-pixel grid and numerically
+    #: convolves with the wavelength-dependent Gaussian LSF.
     integration_mode: str = 'analytic'
-    #: Gauss-Legendre quadrature nodes on ``[-1, 1]``.
-    #: ``None`` when ``integration_mode != 'quadrature'``.
-    quadrature_nodes: jnp.ndarray | None = None
-    #: Gauss-Legendre quadrature weights.
-    #: ``None`` when ``integration_mode != 'quadrature'``.
-    quadrature_weights: jnp.ndarray | None = None
     #: Number of uniform sub-pixel evaluation points per pixel for convolution mode.
     #: ``None`` when ``integration_mode != 'convolution'``.
     n_super: int | None = None
@@ -642,7 +636,6 @@ class ModelBuilder:
         self,
         *,
         integration_mode: str = 'analytic',
-        n_nodes: int = 7,
         n_super: int = 10,
         conv_half_width: int | None = None,
     ) -> tuple[Callable, ModelArgs]:
@@ -656,9 +649,6 @@ class ModelBuilder:
             * ``'analytic'`` (default) — exact CDF-based integration
               for emission profiles and pixel-center evaluation for
               absorption profiles.
-            * ``'quadrature'`` — Gauss-Legendre quadrature for all
-              profiles (both emission and absorption).  More accurate
-              for absorption lines at the cost of speed.
             * ``'convolution'`` — evaluates the intrinsic model
               (``lsf_fwhm=0``) on a uniform fine sub-pixel grid of
               ``n_super`` points per pixel, numerically convolves with
@@ -667,11 +657,6 @@ class ModelBuilder:
               rather than ``F · exp(-τ · LSF ⊗ φ)``, eliminating the
               LSF pre-convolution approximation for absorption lines.
 
-        n_nodes : int, optional
-            Number of Gauss-Legendre quadrature nodes per pixel
-            (default: 7).  Only used when ``integration_mode='quadrature'``.
-            Higher values give more accurate integration at greater
-            computational cost.
         n_super : int, optional
             Number of uniform sub-pixel evaluation points per pixel
             (default: 10).  Only used when
@@ -699,24 +684,13 @@ class ModelBuilder:
         ValueError
             If *integration_mode* is not one of the valid values.
         """
-        valid_modes = ('analytic', 'quadrature', 'convolution')
+        valid_modes = ('analytic', 'convolution')
         if integration_mode not in valid_modes:
             msg = (
                 f'integration_mode must be one of {valid_modes}, '
                 f'got {integration_mode!r}.'
             )
             raise ValueError(msg)
-
-        # Pre-compute Gauss-Legendre nodes and weights if needed.
-        if integration_mode == 'quadrature':
-            from numpy.polynomial.legendre import leggauss
-
-            gl_nodes, gl_weights = leggauss(n_nodes)
-            quadrature_nodes = jnp.asarray(gl_nodes)
-            quadrature_weights = jnp.asarray(gl_weights)
-        else:
-            quadrature_nodes = None
-            quadrature_weights = None
 
         # Trim spectra to union of continuum regions (observed frame).
         # Pixels outside all regions have model = 0 and would corrupt the
@@ -882,8 +856,6 @@ class ModelBuilder:
             continuum_labels=continuum_labels,
             cont_applies=cont_applies,
             integration_mode=integration_mode,
-            quadrature_nodes=quadrature_nodes,
-            quadrature_weights=quadrature_weights,
             n_super=n_super_val,
             conv_half_width=conv_half_width_val,
             _profile_codes_local=local_codes,
@@ -901,7 +873,6 @@ class ModelBuilder:
         seed: int = 0,
         progress_bar: bool = True,
         integration_mode: str = 'analytic',
-        n_nodes: int = 7,
         n_super: int = 10,
     ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
@@ -926,9 +897,6 @@ class ModelBuilder:
         integration_mode : str, optional
             Line integration mode (default: ``'analytic'``).  See
             :meth:`build` for details.
-        n_nodes : int, optional
-            Gauss-Legendre quadrature nodes per pixel (default: 7).
-            See :meth:`build` for details.
         n_super : int, optional
             Sub-pixel evaluation points per pixel for convolution mode
             (default: 10).  See :meth:`build` for details.
@@ -948,7 +916,7 @@ class ModelBuilder:
         from numpyro import infer
 
         model_fn, model_args = self.build(
-            integration_mode=integration_mode, n_nodes=n_nodes, n_super=n_super
+            integration_mode=integration_mode, n_super=n_super
         )
         mcmc = infer.MCMC(
             infer.NUTS(model_fn, dense_mass=True),
