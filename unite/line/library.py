@@ -170,14 +170,27 @@ class Profile(ABC):
             A pure-JAX function suitable as a ``lax.switch`` branch.
         """
 
-    @abstractmethod
     def to_dict(self) -> dict:
-        """Serialize to a YAML-safe dictionary."""
+        """Serialize to a YAML-safe dictionary.
+
+        The default implementation returns ``{'type': type(self).__name__}``,
+        which suffices for all no-argument profile subclasses.  Override for
+        profiles that carry constructor parameters (e.g. order, degree).
+        """
+        return {'type': type(self).__name__}
 
     @classmethod
-    @abstractmethod
     def from_dict(cls, d: dict) -> Profile:
-        """Deserialize from a dictionary."""
+        """Deserialize from a dictionary.
+
+        The default implementation calls ``cls()`` with no arguments, which
+        suffices for all no-argument profile subclasses.  Override for
+        profiles that require constructor parameters.
+        """
+        return cls()
+
+    def __repr__(self) -> str:
+        return f'{type(self).__name__}()'
 
 
 # -------------------------------------------------------------------
@@ -247,19 +260,6 @@ class Gaussian(Profile):
 
         return _fn
 
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'Gaussian'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> Gaussian:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'Gaussian()'
-
 
 @_register
 class Cauchy(Profile):
@@ -298,19 +298,6 @@ class Cauchy(Profile):
 
         return _fn
 
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'Cauchy'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> Cauchy:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'Cauchy()'
-
 
 @_register
 class PseudoVoigt(Profile):
@@ -346,19 +333,6 @@ class PseudoVoigt(Profile):
 
         return _fn
 
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'PseudoVoigt'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> PseudoVoigt:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'PseudoVoigt()'
-
 
 @_register
 class Laplace(Profile):
@@ -392,19 +366,6 @@ class Laplace(Profile):
             return functions.evaluate_gaussianLaplace(wavelength, c, lsf, 0.0, p0)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'Laplace'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> Laplace:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'Laplace()'
 
 
 @_register
@@ -442,19 +403,6 @@ class SEMG(Profile):
             return functions.evaluate_gaussianLaplace(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SEMG'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SEMG:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SEMG()'
 
 
 @_register
@@ -497,19 +445,6 @@ class GaussHermite(Profile):
 
         return _fn
 
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'GaussHermite'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> GaussHermite:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'GaussHermite()'
-
 
 @_register
 class SplitNormal(Profile):
@@ -545,19 +480,6 @@ class SplitNormal(Profile):
             return functions.evaluate_split_normal(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SplitNormal'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SplitNormal:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SplitNormal()'
 
 
 @_register
@@ -611,19 +533,6 @@ class GaussianSplitLaplace(Profile):
 
         return _fn
 
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'GaussianSplitLaplace'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> GaussianSplitLaplace:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'GaussianSplitLaplace()'
-
 
 @_register
 class SkewNormal(Profile):
@@ -672,19 +581,6 @@ class SkewNormal(Profile):
 
         return _fn
 
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SkewNormal'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SkewNormal:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SkewNormal()'
-
 
 @_register
 class BoxGauss(Profile):
@@ -725,19 +621,6 @@ class BoxGauss(Profile):
             return functions.evaluate_boxGauss(wavelength, c, lsf, p0, p1)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'BoxGauss'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> BoxGauss:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'BoxGauss()'
 
 
 @_register
@@ -791,19 +674,6 @@ class SkewVoigt(Profile):
             return functions.evaluate_skewVoigt(wavelength, c, lsf, p0, p1, p2)
 
         return _fn
-
-    @override
-    def to_dict(self) -> dict:
-        return {'type': 'SkewVoigt'}
-
-    @classmethod
-    @override
-    def from_dict(cls, d: dict) -> SkewVoigt:
-        return cls()
-
-    @override
-    def __repr__(self) -> str:
-        return 'SkewVoigt()'
 
 
 _PROFILE_ALIASES: dict[str, Profile] = {
