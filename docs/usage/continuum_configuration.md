@@ -268,6 +268,7 @@ model is evaluated with the instrument's line-spread function:
 | `Blackbody` | — | `temperature` | No |
 | `ModifiedBlackbody` | — | `temperature`, `beta` | No |
 | `AttenuatedBlackbody` | `lambda_ext` | `temperature`, `tau_ext`, `alpha` | No |
+| `Template` | `path`, `wavelength_colname`, `usecols` | `{col}_scale`, `norm_wav` | See warning |
 
 Forms marked **Yes (exact)** are polynomial-based and have their coefficients
 analytically convolved with the Gaussian LSF before evaluation — a
@@ -279,7 +280,11 @@ to vary slowly enough that the unconvolved value is a good approximation at
 the spectral resolution of most instruments. For `BSpline`, the
 non-polynomial basis makes analytic convolution impractical; for `PowerLaw`
 and the blackbody family, the nonlinear functional forms do not admit
-closed-form convolution.
+closed-form convolution. `Template` is a special case: it is never
+analytically convolved (raw interpolated values are returned regardless of
+the `lsf_fwhm` argument), and its behaviour in convolution mode depends on
+the template's native spectral resolution — see the warning in the
+[Template section](#template) below.
 
 
 ### Linear
@@ -418,6 +423,51 @@ Constructor parameter: `lambda_ext` — extinction reference wavelength (default
 Accepts a bare float (interpreted as microns) or an {class}`astropy.units.Quantity` with any length unit.
 
 Model parameters: `scale`, `temperature`, `tau_ext`, `alpha`.
+
+### Template
+
+Load a user-supplied spectrum as a continuum component. The file must be readable by
+[`astropy.table.Table.read`](https://docs.astropy.org/en/stable/io/unified.html) and
+must contain one column with a length unit (the wavelength column) and one or more flux
+columns. Each flux column becomes an independent amplitude parameter `{col}_scale`,
+normalised so that `{col}_scale` equals the flux of that column at `norm_wav`.
+
+```python
+from unite.continuum import Template
+
+form = Template('path/to/template.fits')
+# select columns explicitly
+form = Template('template.ecsv', wavelength_colname='wave', usecols=['wave', 'flux_a', 'flux_b'])
+```
+
+Constructor parameters:
+- `path` — path to the template file
+- `wavelength_colname` — wavelength column name (auto-detected by unit if omitted)
+- `usecols` — list of columns to load (all columns loaded if omitted)
+
+Model parameters: `{col}_scale` (one per flux column), `norm_wav`.
+
+The template is evaluated in the rest frame via linear interpolation and must cover the
+full continuum region after redshifting.
+
+:::{warning}
+**LSF convolution is not applied to `Template` in analytic mode.**
+
+`Template.evaluate()` ignores the `lsf_fwhm` argument and returns raw interpolated
+values — no convolution with the instrument line-spread function is performed. This
+is generally acceptable when the template resolution is much higher than the instrument
+(effectively unresolved at the pixel scale), but the model does not account for any LSF
+broadening of template features.
+
+In convolution mode (`integration_mode='convolution'`) the full numerical LSF kernel is
+applied to the template along with all other model components. However, the kernel
+assumes the template is intrinsically unresolved. If the template already has native
+spectral resolution (e.g. a stellar population model convolved to some library
+resolution), the instrument LSF is applied on top, and the effective resolution of the
+template component will be the convolution of both. To avoid over-convolution, either
+use a high-resolution template whose native resolution is well below the instrument LSF,
+or deconvolve the template before use.
+:::
 
 ---
 

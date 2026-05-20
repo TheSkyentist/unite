@@ -1668,6 +1668,20 @@ class Template(ContinuumForm):
       Default prior: ``Uniform(0, 2)``.
     * ``norm_wav`` — Rest-frame reference wavelength (shared across all
       columns).  Default prior: ``Fixed(region_center_rest)``.
+
+    **LSF convolution behaviour:**
+
+    In *analytic* mode the ``lsf_fwhm`` argument is ignored — the template
+    returns raw interpolated values with no convolution applied.  In
+    *convolution* mode (``integration_mode='convolution'``) the full
+    numerical LSF kernel is applied externally by the model, but the kernel
+    assumes the template is intrinsically unresolved.  Templates that
+    already carry native spectral resolution (e.g. stellar population models
+    convolved to a library resolution) will be further broadened by the
+    instrument LSF, producing an effective resolution equal to the
+    convolution of both.  Use a template whose native resolution is well
+    below the instrument LSF, or deconvolve it beforehand, to avoid
+    over-convolution.
     """
 
     def __init__(
@@ -1857,6 +1871,12 @@ class Template(ContinuumForm):
         lsf_fwhm: ArrayLike = 0.0,
         z_sys: float = 0.0,
     ) -> Array:
+        # lsf_fwhm is intentionally ignored: Template returns raw interpolated
+        # values. In analytic mode no LSF convolution is applied. In convolution
+        # mode the full numerical LSF kernel is applied externally by the caller,
+        # which assumes the template is intrinsically unresolved — templates with
+        # native spectral resolution will be further convolved by the instrument
+        # LSF, producing an effective resolution equal to the convolution of both.
         # Convert observed-frame wavelength to rest-frame microns.
         # obs_low = rest_low_canonical * (1 + z_sys), and _rest_low_um is
         # rest_low in microns, so wavelength * _rest_low_um / obs_low gives

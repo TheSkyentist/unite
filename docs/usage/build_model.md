@@ -239,7 +239,11 @@ model_fn, args = builder.build(integration_mode='convolution', n_super=10)
   pixel), or when your model includes non-polynomial continuum forms (e.g. `PowerLaw`,
   `Blackbody`) for which the analytic LSF convolution is not applied.  The `n_super`
   parameter controls the number of uniform sub-pixel points per pixel (default 10);
-  increase it to verify convergence for narrow lines.
+  increase it to verify convergence for narrow lines.  Note that `Template` is also
+  convolved with the full numerical LSF kernel in this mode, but the kernel assumes the
+  template is intrinsically unresolved — templates with non-negligible native spectral
+  resolution will be over-convolved.  See the
+  {doc}`Template warning in the continuum guide <continuum_configuration>` for details.
 
 :::{warning}
 In `'analytic'` mode the LSF is applied by adding its FWHM in quadrature to the

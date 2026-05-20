@@ -113,11 +113,11 @@ Full documentation, tutorials, and API reference at **[unite.readthedocs.io](htt
 
 ## Citing
 
-If you use `unite` in your research, please cite the Zenodo software release. Each versioned release has a unique DOI minted automatically when a GitHub release is created.
-
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15585034.svg)](https://doi.org/10.5281/zenodo.15585034)
 
-See [CITATION.md](CITATION.md) for BibTeX and details. The Zenodo record lists all releases — visit the link to cite a specific version. GitHub's "Cite this repository" button (top-right of the repo page) also generates citation text directly from [`CITATION.cff`](CITATION.cff).
+If you use `unite` in your research, please cite the Zenodo software release. If you use the built in NIRSpec LSF data, please also cite the appropriate LSF source (de Graaff et al. 2024 for `point`, Jakobsen et al. 2022 for `uniform`).
+
+See [CITATION.md](CITATION.md) for BibTeX entries and full details.
 
 ## License
 
