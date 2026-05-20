@@ -27,36 +27,24 @@ pixi add unite --pypi
 
 ## JAX 64-bit Mode
 
-JAX defaults to 32-bit arithmetic. `unite` works in 32-bit but **64-bit is strongly
-recommended**, particularly when sampling posteriors with long tails or tight
-constraints where numerical precision matters. Enable it before any JAX computation:
+JAX defaults to 32-bit arithmetic, which is almost certainly sufficient for moderate
+to high SNR spectroscopy. For very high-SNR data or long-tailed profiles (`SEMG`,
+`GaussianSplitLaplace`), consider enabling 64-bit — `unite` is explicitly tested at
+64-bit and it is not necessary for all science cases. Note that 64-bit may degrade
+performance on GPUs. Enable it before any JAX import:
 
 ```python
 import jax
 jax.enable_64(True)
 
-# Now import unite and other JAX-dependent packages
 from unite import line, model, prior
 ```
 
-Alternatively, set the environment variable before starting Python:
+Or via environment variable:
 
 ```bash
 JAX_ENABLE_X64=1 python my_script.py
 ```
-
-Or via `pixi`'s environment configuration:
-
-```toml
-[activation.env]
-JAX_ENABLE_X64 = "1"
-```
-
-
-:::{note}
-If you see unexpected posterior shapes or numerical instabilities (especially with
-Lorentzian or heavy-tailed profiles), enabling 64-bit mode is the first thing to try.
-:::
 
 ---
 

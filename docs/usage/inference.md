@@ -12,27 +12,23 @@ In this section we only provide a quick introduction to running inference with N
 
 ### JAX 64-bit Mode
 
-JAX defaults to 32-bit. 64-bit is strongly recommended especially for line profiles with long tails. 
+JAX defaults to 32-bit arithmetic, which is almost certainly sufficient for moderate
+to high SNR spectroscopy. For very high-SNR data or long-tailed profiles (`SEMG`,
+`GaussianSplitLaplace`), consider enabling 64-bit — `unite` is explicitly tested at
+64-bit and it is not necessary for all science cases. Note that 64-bit may degrade
+performance on GPUs. Enable it before any JAX import:
 
 ```python
 import jax
-jax.config.update('jax_enable_x64', True)
+jax.enable_64(True)
 
-# Import unite and other JAX-dependent packages after
 from unite import line, model, prior
 ```
 
-Or via environment variable before starting Python:
+Or via environment variable:
 
 ```bash
 JAX_ENABLE_X64=1 python my_script.py
-```
-
-Or via `pixi`'s environment configuration:
-
-```toml
-[activation.env]
-JAX_ENABLE_X64 = "1"
 ```
 
 ### GPU Acceleration
