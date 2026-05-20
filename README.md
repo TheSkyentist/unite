@@ -6,6 +6,7 @@
 [![Tests](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml/badge.svg)](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/TheSkyentist/unite/branch/main/graph/badge.svg)](https://codecov.io/gh/TheSkyentist/unite)
 [![Documentation](https://img.shields.io/badge/docs-readthedocs-blue)](https://unite.readthedocs.io/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15585034.svg)](https://doi.org/10.5281/zenodo.15585034)
 
 `unite` is a Python package for fast, Bayesian inference of emission lines from astronomical spectra. It is built on [JAX](https://jax.readthedocs.io/), [NumPyro](https://num.pyro.ai/), and [Astropy](https://www.astropy.org/), and supports fitting multiple spectra simultaneously with shared kinematics, calibration tokens, and flexible priors.
 
@@ -113,9 +114,7 @@ Full documentation, tutorials, and API reference at **[unite.readthedocs.io](htt
 
 ## Citing
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.15585034.svg)](https://doi.org/10.5281/zenodo.15585034)
-
-If you use `unite` in your research, please cite the Zenodo software release. If you use the built in NIRSpec LSF data, please also cite the appropriate LSF source (de Graaff et al. 2024 for `point`, Jakobsen et al. 2022 for `uniform`).
+If you use `unite` in your research, please cite the appropriate software version on [Zenodo](https://doi.org/10.5281/zenodo.15585034). If you use the built in NIRSpec LSF data, please also cite the appropriate LSF source (de Graaff et al. 2024 for `point`, Jakobsen et al. 2022 for `uniform`).
 
 See [CITATION.md](CITATION.md) for BibTeX entries and full details.
 
