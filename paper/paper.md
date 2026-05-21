@@ -68,7 +68,8 @@ The target audience is observational astronomers, especially those working with 
 # Software design
 
 When fitting spectroscopic data sets, fitting routines typically assume that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually measures. 
-This approximation is well justified when the spectrum is critically sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly over the pixel domain, as is the case for NIRSpec.
+This approximation is well justified when the spectrum is critically sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly over the pixel domain.
+In the case for NIRSpec, which for a point source is undersampled by a factor of $\sim 1.5$ [@graaff2024nirspec], this can lead to a bias of $10-20\%$ in recovered line widths if not properly accounted for.
 This can be addressed integrating the model over the pixel domain, providing the exact solution for the observed signal regardless of the degree of undersampling.
 We rely on the assumption that the LSF is well approximated by a Gaussian kernel, which is a good approximation for NIRSpec [@shajib2025nirspec] and many other spectrographs, especially in the undersampled regime.
 
