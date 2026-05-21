@@ -24,6 +24,10 @@ authors:
     orcid: 0000-0003-0660-9776
     corresponding: false
     affiliation: 4
+  - name: Morgan Fouesneau
+    orcid: 0000-0001-9256-5516
+    corresponding: false
+    affiliation: 1
 affiliations:
   - name: Max-Planck-Institut für Astronomie
     index: 1
@@ -66,7 +70,7 @@ The target audience is observational astronomers, especially those working with 
 When fitting spectroscopic data sets, fitting routines typically assume that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually measures. 
 This approximation is well justified when the spectrum is critically sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly over the pixel domain, as is the case for NIRSpec.
 This can be addressed integrating the model over the pixel domain, providing the exact solution for the observed signal regardless of the degree of undersampling.
-We rely on the assumption that the LSF is well approximated by a Gaussian kernel, which is a good approximation for NIRSpec and many other spectrographs, especially in the undersampled regime.
+We rely on the assumption that the LSF is well approximated by a Gaussian kernel, which is a good approximation for NIRSpec [@shajib2025nirspec] and many other spectrographs, especially in the undersampled regime.
 
 `unite` computes the integrals of continua and line models analytically where possible. However, analytic pixel integration is not possible for all model setups, in particular in the presence of optical-depth parametrized absorption lines where the nonlinear transmission $e^{-\tau\phi}$ couples the line depth and profile shape in a way that prevents closed-form solutions for the pixel integrals.
 In these cases, `unite` provides a numerical convolution mode which supersamples the intrinsic model on a fine wavelength grid and convolves with the wavelength-dependent LSF kernel to produce a pixel-convolved model. 
@@ -103,10 +107,9 @@ The dominant paradigm for emission-line fitting is non-linear least squares, wit
 
 `BADASS` [@sexton2021badass; @sexton2024badass] is a comprehensive Bayesian emission-line code to simultaneously infer AGN power-law continuum, FeII pseudo-continuum, stellar LOSVD (via `pPXF`), and multi-component Gaussian emission lines in a single posterior.
 
-These codes occupy various niches but none provide pixel integration or first-class joint multi-grating fitting. 
-In addition, the fitting paradigm for many of these codes is least-squares optimization, which does not provide the posterior distribution over parameters. 
-For those that do provide Bayesian inference, they typically rely on `emcee` [@foremanmackey2013emcee] or `pymc3` [@abrilpla2023pymc] which can struggle in high-dimensional parameter spaces and do not natively support (GPU) acceleration.
-However many incorporate templates into their fitting frameworks, which `unite` does not currently support. 
+These codes occupy various niches but none provide analytic pixel integration or first-class joint multi-grating fitting. 
+Many of these codes provide either least-squares optimization, which does not provide posterior distributions, or Bayesian inference via `emcee` [@foremanmackey2013emcee] or `pymc` [@abrilpla2023pymc]. 
+`unite` is more closely comparable to the latter category of Bayesian tools and builds natively on JAX and NumPyro, inheriting JIT compilation, automatic differentiation, and GPU support, enabling scalable inference across large spectroscopic samples.
 
 # Research impact statement
 
