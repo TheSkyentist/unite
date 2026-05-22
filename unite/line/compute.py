@@ -63,7 +63,11 @@ def _build_line_params(cm, context, n_lines, z_sys):
         flux_per_line = jnp.zeros(n_lines)
 
     if cm.tau_names:
-        tau_per_line = jnp.stack([context[n] for n in cm.tau_names]) @ cm.tau_matrix
+        tau_per_line = (
+            jnp.stack([context[n] for n in cm.tau_names])
+            @ cm.tau_matrix
+            * cm.strengths
+        )
     else:
         tau_per_line = jnp.zeros(n_lines)
 
