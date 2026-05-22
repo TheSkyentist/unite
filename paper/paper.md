@@ -96,13 +96,13 @@ This model accurately captures the nonlinear coupling of line depth and profile 
 At its core, `unite` is a domain-specific language for building probabilistic models of spectroscopic data.
 Users build a declarative configuration of line and continuum components and assign priors to physical parameters via token instances that can be shared across multiple model components and combined arithmetically.
 The prior system is expressive: priors on any parameter can depend on other parameters through arithmetic expressions and topologically sorted dependency chains, enabling physical constraints such as requiring a broad component's velocity width to exceed that of a narrow component by a certain amount, or fixing flux ratios between doublet lines.
+All configurations are serializable to human-readable YAML for reproducibility and sharing.
 
 In addition, users specify the instrumental configuration carrying empirical calibrations of the wavelength-dependent resolving power, pixel scale, and flux normalization for each disperser, which can be shared across instruments. 
 One aspect that sets `unite` apart from other spectral fitting tools is that it treats instrumental calibration parameters as first-class citizens in the inference process; priors can be specified on each of the aforementioned calibrations and are sampled jointly with astrophysical parameters, allowing for systematic instrumental uncertainties to directly propagate to the inferred properties.
 For example, when fitting NIRSpec data, users can incorporate the empirically measured wavelength and flux calibration offsets from @degraaff2025rubies as priors to obtain realistic uncertainty estimates on fluxes and kinematics by marginalizing over instrumental uncertainties. 
 
-All configurations are serializable to human-readable YAML for reproducibility and sharing.
-`unite` leverages NumPyro's probabilistic programming framework to assemble a model for inference with any compatible sampler, including SVI for quick exploratory fits, NUTS for full posterior sampling, and nested sampling for model comparison and evidence calculation.
+`unite` leverages NumPyro's probabilistic programming framework to assemble an inference model compatible with a wide range of samplers: SVI for quick fits, NUTS for full posteriors, or nested sampling for model comparison.
 Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS files, carrying physical units throughout, via Astropy.
 
 The package is publicly available on GitHub and PyPI under the GPL-3.0-or-later license, with a DOI minted via Zenodo [@hviding2026unite] and accompanied by Sphinx documentation including narrative guides, an API reference, and executable tutorials. CI/CD workflows ensure that the code is tested and documented with each update, and the project is open to feedback and contributions from the community.
