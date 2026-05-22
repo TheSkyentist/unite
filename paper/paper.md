@@ -32,6 +32,10 @@ authors:
     orcid: 0000-0001-5586-6950
     corresponding: false
     affiliation: 6
+  - name: Rana Osman
+    orcid: 0000-0002-6807-9611
+    corresponding: false
+    affiliation: 5
   - name: Morgan Fouesneau
     orcid: 0000-0001-9256-5516
     corresponding: false
