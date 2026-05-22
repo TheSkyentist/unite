@@ -66,8 +66,8 @@ bibliography: paper.bib
 Astronomical spectroscopy, whereby light from celestial sources is dispersed into its constituent wavelengths (colors), is a cornerstone of modern astrophysical research.
 In particular, spectral lines arising from atomic and molecular transitions in astrophysical gas encode fundamental physical properties such as redshift, chemical composition, temperature, density, and kinematics, making the flexibility, speed, and accuracy of spectral line-fitting tools directly impactful on the scientific return of spectroscopic observations.
 
-`unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of flexible spectral line/continuum configurations from one or more spectra simultaneously.
-It is built primarily on JAX [@bradbury2018jax] (for speed and automatic differentiation), NumPyro [@phan2019numpyro; @bingham2019pyro] (for probabilistic programming), and Astropy [@astropy2013package; @astropy2018project; @astropy2022sustaining] (for units and FITS handling).
+`unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of spectral line and continuum models with flexible configurations from one or more spectra simultaneously.
+It is built primarily on JAX [@bradbury2018jax], NumPyro [@phan2019numpyro; @bingham2019pyro], and Astropy [@astropy2013package; @astropy2018project; @astropy2022sustaining].
 
 # Statement of need
 
@@ -102,8 +102,8 @@ One aspect that sets `unite` apart from other spectral fitting tools is that it 
 For example, when fitting NIRSpec data, users can incorporate the empirically measured wavelength and flux calibration offsets from @degraaff2025rubies as priors to obtain realistic uncertainty estimates on fluxes and kinematics by marginalizing over instrumental uncertainties. 
 
 All configurations are serializable to human-readable YAML for reproducibility and sharing.
-`unite` assembles a NumPyro probabilistic model for inference with any compatible sampler, including SVI for quick exploratory fits, NUTS for full posterior sampling, and nested sampling for model comparison and evidence calculation.
-Finally, `unite` provides convenience functions for extracting results as parameter tables, per-spectrum model predictions, and domain-appropriate FITS HDU lists.
+`unite` leverages NumPyro's probabilistic programming framework to assemble a model for inference with any compatible sampler, including SVI for quick exploratory fits, NUTS for full posterior sampling, and nested sampling for model comparison and evidence calculation.
+Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS files, carrying physical units throughout, via Astropy.
 
 The package is publicly available on GitHub and PyPI under the GPL-3.0-or-later license, with a DOI minted via Zenodo [@hviding2026unite] and accompanied by Sphinx documentation including narrative guides, an API reference, and executable tutorials. CI/CD workflows ensure that the code is tested and documented with each update, and the project is open to feedback and contributions from the community.
 
