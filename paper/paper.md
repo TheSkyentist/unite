@@ -8,7 +8,7 @@ tags:
   - NumPyro
   - inference
 authors:
-  - name: Raphael Erik Hviding
+  - name: Raphael E. Hviding
     orcid: 0000-0002-4684-9005
     corresponding: true
     affiliation: 1
