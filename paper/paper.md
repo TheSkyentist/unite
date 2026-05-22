@@ -70,7 +70,7 @@ bibliography: paper.bib
 Astronomical spectroscopy, whereby light from celestial sources is dispersed into its constituent wavelengths (colors), is a cornerstone of modern astrophysical research.
 In particular, spectral lines arising from atomic and molecular transitions in astrophysical gas encode fundamental physical properties such as redshift, chemical composition, temperature, density, and kinematics, making the flexibility, speed, and accuracy of spectral line-fitting tools directly impactful on the scientific return of spectroscopic observations.
 
-`unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of spectral line and continuum models with flexible configurations from one or more spectra simultaneously.
+`unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of spectral lines and continua with flexible configurations from one or more spectra simultaneously.
 It is built primarily on JAX [@bradbury2018jax], NumPyro [@phan2019numpyro; @bingham2019pyro], and Astropy [@astropy2013package; @astropy2018project; @astropy2022sustaining].
 
 # Statement of need
