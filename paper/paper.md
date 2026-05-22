@@ -76,14 +76,14 @@ Making the most of the growing volume and diversity of spectroscopic observation
 This requires enforcing shared astrophysical parameters while accounting for and propagating systematic uncertainties in instrument-specific calibrations. 
 An additional challenge arises when the data are undersampled, as evaluating the model at pixel centers rather than integrating over the pixel domain introduces systematic errors in recovered line shapes, yet existing tools that account for this typically do so via computationally expensive supersampling and convolution, limiting their scalability to large datasets and heterogeneous, multi-spectrograph configurations.
 
-The Near-Infrared Spectrograph (NIRSpec; @jakobsen2022nirspec) on the James Webb Space Telescope (JWST; @gardner2023jwst) is a prime example where all of these challenges arise simultaneously: it critically undersamples the LSF across all gratings and observing modes, typical programs combine multiple gratings with complementary strengths (high-resolution to measure kinematics, low-resolution to constrain fluxes and continuum shapes), and systematic uncertainties in resolving power, absolute normalization, and wavelength solution have measurable impacts on the data [@degraaff2025rubies]
+The Near-Infrared Spectrograph (NIRSpec; @jakobsen2022nirspec) on the James Webb Space Telescope (JWST; @gardner2023jwst) is a prime example where all of these challenges arise simultaneously: it critically undersamples the LSF across all gratings and observing modes, observations routinely span multiple gratings with complementary strengths (high-resolution to measure kinematics, low-resolution to constrain fluxes and continuum shapes), and systematic uncertainties in resolving power, absolute normalization, and wavelength solution have measurable impacts on the data [@degraaff2025rubies].
 
 `unite` is designed to address these challenges while providing a flexible, extensible, and reproducible framework for spectroscopic analysis applicable to any spectrograph, rigorously carrying instrumental systematics through to the final parameter uncertainties.
 By relying on existing optimized libraries for probabilistic programming and automatic differentiation, `unite` delivers scientifically rigorous Bayesian inference without compromising on computational efficiency, enabling the analysis of large and mixed spectroscopic datasets with accurate uncertainty quantification.
 
 # Software design
 
-When fitting spectroscopic data sets, fitting routines typically assume that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually records. 
+Spectral fitting routines typically assume that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually records. 
 This approximation is well justified when the spectrum is critically (Nyquist) sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly over the pixel domain.
 In the case of NIRSpec, a point source is undersampled by a factor of $\sim 1.5$ [@graaff2024nirspec], leading to a bias of $10-20\%$ in recovered line widths if not properly accounted for.
 This can be addressed by integrating the model over the pixel domain, providing the exact solution for the observed signal regardless of the degree of undersampling.
@@ -95,7 +95,7 @@ This model accurately captures the nonlinear coupling of line depth and profile 
 
 `unite` is computationally efficient thanks to its JAX backend, which provides just-in-time (JIT) compilation and native GPU support.
 At its core, `unite` is a domain-specific language for building probabilistic models of spectroscopic data.
-Users build a declarative configuration of line and continuum components and assign priors to physical parameters via token instances which can be shared across multiple model components with arithmetic combinations.
+Users build a declarative configuration of line and continuum components and assign priors to physical parameters via token instances that can be shared across multiple model components and combined arithmetically.
 The prior system is expressive: priors on any parameter can depend on other parameters through arithmetic expressions and topologically sorted dependency chains, enabling physical constraints such as requiring a broad component's velocity width to exceed that of a narrow component by a certain amount, or fixing flux ratios between doublet lines.
 
 In addition, users specify the instrumental configuration carrying empirical calibrations of the wavelength-dependent resolving power, pixel scale, and flux normalization for each disperser, which can be shared across instruments. 
@@ -104,7 +104,7 @@ For example, when fitting NIRSpec data, users can incorporate the empirically me
 
 All configurations are serializable to human-readable YAML for reproducibility and sharing.
 `unite` assembles a NumPyro probabilistic model for inference with any compatible sampler, including SVI for quick exploratory fits, NUTS for full posterior sampling, and nested sampling for model comparison and evidence calculation.
-Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS HDU lists.
+Finally, `unite` provides convenience functions for extracting results as parameter tables, per-spectrum model predictions, and domain-appropriate FITS HDU lists.
 
 The package is publicly available on GitHub and PyPI under the GPL-3.0-or-later license, with a DOI minted via Zenodo [@hviding2026unite] and accompanied by Sphinx documentation including narrative guides, an API reference, and executable tutorials. CI/CD workflows ensure that the code is tested and documented with each update, and the project is open to feedback and contributions from the community.
 
@@ -122,7 +122,7 @@ Spectral line analysis is among the most common operations in observational astr
 
 `BADASS` [@sexton2021badass; @sexton2024badass] is a comprehensive Bayesian emission-line code to simultaneously infer AGN power-law continuum, FeII pseudo-continuum, stellar LOSVD (via `pPXF`), and multi-component Gaussian emission lines in a single posterior.
 
-Many of these codes provide either least-squares optimization, built on `LMFIT` [@newville2014lmfit] or `scipy.optimize` [@virtanen2020scipy], which does not provide posterior distributions, or Bayesian inference via `emcee` [@foremanmackey2013emcee] or `pymc` [@abrilpla2023pymc]. 
+Many of these codes rely on least-squares optimization (`LMFIT` [@newville2014lmfit] or `scipy.optimize` [@virtanen2020scipy]), which does not yield posterior distributions, or on Bayesian inference via `emcee` [@foremanmackey2013emcee] or `pymc` [@abrilpla2023pymc]. 
 `unite` is more closely comparable to the latter category of Bayesian tools and builds natively on JAX and NumPyro, inheriting JIT compilation, automatic differentiation, and GPU support, enabling scalable inference across large spectroscopic samples.
 
 # Research impact statement
@@ -130,8 +130,8 @@ Many of these codes provide either least-squares optimization, built on `LMFIT` 
 `unite` has already been used in several published JWST/NIRSpec analyses, demonstrating its utility for emission line characterization. 
 
 - **Accurate Line Fluxes and Kinematics**: By accurately accounting for undersampling, `unite` has been used to robustly characterize fluxes and kinematics for both emission lines and absorption features in high-redshift galaxies, providing insights into the physical processes driving star formation and black hole growth. [@degraaff2025bhstar; @naidu2025bhstar; @sun2026bhstar; @wang2025photons; @wang2026water]
-- **Multi-Component Line Fitting**: `unite` has been used to identify broad Balmer emission (broad H$\alpha$, H$\beta$) in high-redshift ($z \gtrsim 4$) galaxies observed with NIRSpec, providing evidence for active supermassive black hole growth in the early universe. Multi-grating joint fitting is critical, as grating spectroscopy often lacks signal-to-noise, but by coupling physical constraints on flux from low-resolution gratings, `unite` enables robust detections of these components. [@hviding2025rubies; @degraaff2025bhstar; @hviding2026xraydot]
-- **Redshift Precision**: `unite` was used in the analysis of MoM-z14, which at the time of publication was (and is currently) the most distant spectroscopically confirmed galaxy. Coupling line parameters and properly accounting for undersampling allowed for a factor of 5 improvement in redshift precision over continuum estimates alone even with faint, marginally detected, emission lines. [@naidu2026cosmic]
+- **Multi-Component Line Fitting**: `unite` has been used to identify broad Balmer emission (broad H$\alpha$, H$\beta$) in high-redshift ($z \gtrsim 4$) galaxies observed with NIRSpec, providing evidence for active supermassive black hole growth in the early universe. Individual dispersers often lack sufficient signal-to-noise for such detections, making multi-disperser joint fitting critical; by coupling flux constraints from low-resolution prism and kinematic constraints from medium-resolution grating observations, `unite` enables robust detections of these components. [@hviding2025rubies; @degraaff2025bhstar; @hviding2026xraydot]
+- **Redshift Precision**: `unite` was used in the analysis of MoM-z14, which at the time of publication was (and is currently) the most distant spectroscopically confirmed galaxy. Even with faint, marginally detected emission lines, jointly fitting line parameters and accounting for undersampling yielded a factor of 5 improvement in redshift precision over continuum estimates alone. [@naidu2026cosmic]
 
 # AI usage disclosure
 
