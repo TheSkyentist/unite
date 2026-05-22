@@ -16,8 +16,8 @@ from typing import Final
 
 import jax.numpy as jnp
 import numpy as np
-from jax import Array, config, jit, lax
-from jax.scipy.special import erf, erfc
+from jax import Array, config, jit
+from jax.scipy.special import erf, erfc, owens_t
 from jax.typing import ArrayLike
 
 # Conversion: FWHM to sigma for the half-variance parametrization of erf.
@@ -503,91 +503,6 @@ def _alpha_eff_skewnormal(
     return alpha * fwhm_g / jnp.sqrt(fwhm_g**2 + (1.0 + alpha**2) * lsf_fwhm**2)
 
 
-_OWENS_T_QUAD_PTS = np.array(
-    [
-        0.0035082039676451715,
-        0.031279042338030754,
-        0.085266826283219451,
-        0.16245071730812277,
-        0.25851196049125435,
-        0.36807553840697534,
-        0.48501092905604697,
-        0.60277514152618577,
-        0.71477884217753227,
-        0.81475510988760099,
-        0.89711029755948966,
-        0.95723808085944262,
-        0.99178832974629704,
-    ]
-)
-
-_OWENS_T_QUAD_WTS = np.array(
-    [
-        0.018831438115323503,
-        0.018567086243977649,
-        0.018042093461223386,
-        0.017263829606398753,
-        0.016243219975989857,
-        0.014994592034116705,
-        0.013535474469662088,
-        0.011886351605820165,
-        0.010070377242777432,
-        0.0081130545742299587,
-        0.0060419009528470239,
-        0.0038862217010742058,
-        0.0016793031084546090,
-    ]
-)
-
-
-def _owens_t_quadrature(h, a):
-    r = jnp.square(a)[..., None] * _OWENS_T_QUAD_PTS
-    integrand = jnp.exp(-0.5 * jnp.square(h)[..., None] * (1.0 + r)) / (1.0 + r)
-    return a * jnp.sum(integrand * _OWENS_T_QUAD_WTS, axis=-1)
-
-
-def _owens_t(h, a):
-    h = jnp.abs(h)
-    abs_a = jnp.abs(a)
-
-    modified_a = jnp.where(abs_a <= 1.0, abs_a, jnp.reciprocal(abs_a))
-    modified_h = jnp.where(abs_a <= 1.0, h, abs_a * h)
-
-    result = _owens_t_quadrature(modified_h, modified_a)
-
-    # Exact values for h=0 and a=1, which are not captured by the quadrature
-    result = jnp.where(modified_h == 0.0, jnp.arctan(modified_a) / (2 * np.pi), result)
-    result = jnp.where(
-        modified_a == 1.0,
-        0.125
-        * lax.erfc(-modified_h / np.sqrt(2.0))
-        * lax.erfc(modified_h / np.sqrt(2.0)),
-        result,
-    )
-
-    # Reciprocal correction for |a| > 1
-    normh = lax.erfc(h / np.sqrt(2.0))
-    normah = lax.erfc(abs_a * h / np.sqrt(2.0))
-    result = jnp.where(
-        abs_a > 1.0,
-        jnp.where(
-            abs_a * h <= 0.67,
-            (
-                0.25
-                - 0.25 * lax.erf(h / np.sqrt(2.0)) * lax.erf(abs_a * h / np.sqrt(2.0))
-                - result
-            ),
-            0.25 * (normh + normah - normh * normah) - result,
-        ),
-        result,
-    )
-
-    result = lax.sign(a) * result
-    return jnp.where(
-        jnp.isnan(a) | jnp.isnan(h), jnp.full_like(result, jnp.nan), result
-    )
-
-
 @jit
 def integrate_skewNormal(
     edges: ArrayLike,
@@ -628,7 +543,7 @@ def integrate_skewNormal(
 
     z = (edges - center) / sigma_tot
     gaussian_cdf = 0.5 * (1.0 + erf(z / np.sqrt(2)))
-    owens_correction = _owens_t(z, alpha_eff)
+    owens_correction = owens_t(z, alpha_eff)
     return gaussian_cdf - 2.0 * owens_correction
 
 
