@@ -64,11 +64,10 @@ bibliography: paper.bib
 # Summary
 
 Astronomical spectroscopy, whereby light from celestial sources is dispersed into its constituent wavelengths (colors), is a cornerstone of modern astrophysical research.
-In particular, the characterization of spectral lines, which arise from atomic and molecular transitions in astrophysical gas, allows astronomers to measure fundamental physical properties such as redshift, chemical composition, temperature, density, and kinematics of the emitting or absorbing material. 
-Therefore, the flexibility, speed, and accuracy of spectral line-fitting tools directly impact the scientific return of spectroscopic observations.
+In particular, spectral lines arising from atomic and molecular transitions in astrophysical gas encode fundamental physical properties such as redshift, chemical composition, temperature, density, and kinematics, making the flexibility, speed, and accuracy of spectral line-fitting tools directly impactful on the scientific return of spectroscopic observations.
 
-`unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of spectral line features from one or more spectra simultaneously.
-It is built primarily on JAX [@bradbury2018jax] (for speed and automatic differentiation), NumPyro [@phan2019numpyro; @bingham2019pyro] (for probabilistic programming), and Astropy [@astropy2013package; @astropy2018project; @astropy2022sustaining] (for units and FITS handling), and is designed to be flexible and extensible to a wide range of spectroscopic applications.
+`unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of flexible spectral line/continuum configurations from one or more spectra simultaneously.
+It is built primarily on JAX [@bradbury2018jax] (for speed and automatic differentiation), NumPyro [@phan2019numpyro; @bingham2019pyro] (for probabilistic programming), and Astropy [@astropy2013package; @astropy2018project; @astropy2022sustaining] (for units and FITS handling).
 
 # Statement of need
 
@@ -79,7 +78,7 @@ An additional challenge arises when the data are undersampled, as evaluating the
 The Near-Infrared Spectrograph (NIRSpec; @jakobsen2022nirspec) on the James Webb Space Telescope (JWST; @gardner2023jwst) is a prime example where all of these challenges arise simultaneously: it critically undersamples the LSF across all gratings and observing modes, observations routinely span multiple gratings with complementary strengths (high-resolution to measure kinematics, low-resolution to constrain fluxes and continuum shapes), and systematic uncertainties in resolving power, absolute normalization, and wavelength solution have measurable impacts on the data [@degraaff2025rubies].
 
 `unite` is designed to address these challenges while providing a flexible, extensible, and reproducible framework for spectroscopic analysis applicable to any spectrograph, rigorously carrying instrumental systematics through to the final parameter uncertainties.
-By relying on existing optimized libraries for probabilistic programming and automatic differentiation, `unite` delivers scientifically rigorous Bayesian inference without compromising on computational efficiency, enabling the analysis of large and mixed spectroscopic datasets with accurate uncertainty quantification.
+By leveraging optimized libraries for probabilistic programming and automatic differentiation, `unite` delivers scientifically rigorous Bayesian inference without compromising on computational efficiency, enabling the analysis of large and mixed spectroscopic datasets with accurate error estimation.
 
 # Software design
 
