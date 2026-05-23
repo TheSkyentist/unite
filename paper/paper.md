@@ -14,7 +14,7 @@ authors:
     affiliation: 1
   - name: Anna de Graaff
     orcid: 0000-0002-2380-9801
-    corresponding: true
+    corresponding: false
     affiliation: "2, 1"
   # - name: Ivo Labbé
   #   orcid: 0000-0002-2057-5376
@@ -52,7 +52,7 @@ affiliations:
     index: 2
     ror: "03c3r2d17"
   # - name: Swinburne University of Technology
-  #   index: 2
+  #   index: 3
   #   ror: "031rekg67"
   - name: MIT Kavli Institute
     index: 4
