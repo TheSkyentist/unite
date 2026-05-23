@@ -36,7 +36,7 @@ authors:
     orcid: 0000-0001-5586-6950
     corresponding: false
     affiliation: 6
-  - name: Bingjie Wang
+  - name: Bingjie (王冰洁) Wang
     orcid: 0000-0001-9269-5046
     corresponding: false
     affiliation: 5
