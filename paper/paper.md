@@ -28,12 +28,16 @@ authors:
     orcid: 0000-0003-0660-9776
     corresponding: false
     affiliation: 5
+  - name: Rana Osman
+    orcid: 0000-0002-6807-9611
+    corresponding: false
+    affiliation: 5
   - name: Alberto Torralba
     orcid: 0000-0001-5586-6950
     corresponding: false
     affiliation: 6
-  - name: Rana Osman
-    orcid: 0000-0002-6807-9611
+  - name: Bingjie Wang
+    orcid: 0000-0001-9269-5046
     corresponding: false
     affiliation: 5
   - name: Morgan Fouesneau
@@ -147,6 +151,7 @@ All scientific decisions, algorithmic design choices, and final content were mad
 REH acknowledges support by the German Aerospace Center (DLR) and the Federal Ministry for Economic Affairs and Energy (BMWi) through program 50OR2403 `RUBIES'. 
 AdG acknowledges support from a Clay Fellowship awarded by the Smithsonian Astrophysical Observatory.
 RPN thanks Neil Pappalardo and Jane Pappalardo for their generous support of the MIT Pappalardo Fellowships in Physics.
+BW acknowledges support provided by NASA through Hubble Fellowship grant HST-HF2-51592.001 awarded by the Space Telescope Science Institute, which is operated by the Association of Universities for Research in Astronomy, Inc., for NASA, under the contract NAS 5-26555.
 
 We acknowledge the support of the Data Science Group at the Max Planck Institute for Astronomy (MPIA) and especially Morgan Fouesneau and Ivelina Momcheva for their invaluable assistance providing high-level feedback for the development of the core `unite` routines.
 
