@@ -32,7 +32,7 @@ authors:
     orcid: 0000-0002-6807-9611
     corresponding: false
     affiliation: 5
-  - name: Jenny Greene
+  - name: Jenny E. Greene
     orcid: 0000-0002-5612-3427
     corresponding: false
     affiliation: 5
