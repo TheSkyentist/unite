@@ -104,7 +104,6 @@ We rely on the assumption that the LSF is well approximated by a Gaussian kernel
 In these cases, `unite` provides a numerical convolution mode which supersamples the intrinsic model on a fine wavelength grid and convolves with the wavelength-dependent LSF kernel to produce a pixel-convolved model. 
 This model accurately captures the nonlinear coupling of line depth and profile shape, but is more computationally expensive than the analytic integration mode; users can choose the appropriate mode for their application.
 
-`unite` is computationally efficient thanks to its JAX backend, which provides just-in-time (JIT) compilation and native GPU support.
 At its core, `unite` is a domain-specific language for building probabilistic models of spectroscopic data.
 Users build a declarative configuration of line and continuum components and assign priors to physical parameters via token instances that can be shared across multiple model components and combined arithmetically.
 The prior system is expressive: priors on any parameter can depend on other parameters through arithmetic expressions and topologically sorted dependency chains, enabling physical constraints such as requiring a broad component's velocity width to exceed that of a narrow component by a certain amount, or fixing flux ratios between doublet lines.
@@ -114,7 +113,7 @@ In addition, users specify the instrumental configuration carrying empirical cal
 One aspect that sets `unite` apart from other spectral fitting tools is that it treats instrumental calibration parameters as first-class citizens in the inference process; priors can be specified on each of the aforementioned calibrations and are sampled jointly with astrophysical parameters, allowing for systematic instrumental uncertainties to directly propagate to the inferred properties.
 For example, when fitting NIRSpec data, users can incorporate the empirically measured wavelength and flux calibration offsets from @degraaff2025rubies as priors to obtain realistic uncertainty estimates on fluxes and kinematics by marginalizing over instrumental uncertainties. 
 
-`unite` leverages NumPyro's probabilistic programming framework to assemble an inference model compatible with a wide range of samplers: SVI for quick fits, NUTS for full posteriors, or nested sampling for model comparison.
+`unite` leverages NumPyro's probabilistic programming framework, built on JAX for automatic differentiation, JIT compilation, and native GPU support, to assemble an inference model compatible with a wide range of samplers: SVI for quick fits, NUTS for full posteriors, or nested sampling for model comparison.
 Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS files, carrying physical units throughout, via Astropy.
 
 The package is publicly available on GitHub and PyPI under the GPL-3.0-or-later license, with a DOI minted via Zenodo [@hviding2026unite] and accompanied by Sphinx documentation including narrative guides, an API reference, and executable tutorials. CI/CD workflows ensure that the code is tested and documented with each update, and the project is open to feedback and contributions from the community.
