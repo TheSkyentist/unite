@@ -32,6 +32,10 @@ authors:
     orcid: 0000-0002-6807-9611
     corresponding: false
     affiliation: 5
+  - name: Jenny Greene
+    orcid: 0000-0002-5612-3427
+    corresponding: false
+    affiliation: 5
   - name: Alberto Torralba
     orcid: 0000-0001-5586-6950
     corresponding: false
