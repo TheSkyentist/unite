@@ -95,9 +95,9 @@ By leveraging optimized libraries for probabilistic programming and automatic di
 # Software design
 
 Spectral fitting routines typically assume that the model evaluated at the pixel center is a good representation of the average of the model over the pixel domain, which is what the instrument actually records. 
-This approximation is well justified when the spectrum is critically (Nyquist) sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly over the pixel domain.
+This approximation is well justified when the spectrum is critically (Nyquist) sampled or over-sampled, i.e. when the signal changes slowly over the pixel domain, but breaks down when the spectrum is undersampled and the signal changes rapidly.
 In the case of NIRSpec, a point source is undersampled by a factor of $\sim 1.5$ [@graaff2024nirspec], leading to a bias of $10-20\%$ in recovered line widths if not properly accounted for.
-This can be addressed by integrating the model over the pixel domain, providing the exact solution for the observed signal regardless of the degree of undersampling.
+This can be addressed by integrating the model over each pixel, providing the exact solution for the observed signal regardless of the degree of undersampling.
 We rely on the assumption that the LSF is well approximated by a Gaussian kernel, which is representative of NIRSpec [@shajib2025nirspec] and many other spectrographs.
 
 `unite` computes the integrals of continua and line models analytically where possible. However, analytic pixel integration is not possible for all model setups, in particular in the presence of optical-depth parametrized absorption lines where the nonlinear transmission $e^{-\tau\phi}$ couples the line depth and profile shape in a way that prevents closed-form solutions for the pixel integrals.
