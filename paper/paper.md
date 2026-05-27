@@ -79,7 +79,7 @@ Astronomical spectroscopy, whereby light from celestial sources is dispersed int
 In particular, spectral lines arising from atomic and molecular transitions in astrophysical gas encode fundamental physical properties such as redshift, chemical composition, temperature, density, and kinematics, making the flexibility, speed, and accuracy of spectral line-fitting tools directly impactful on the scientific return of spectroscopic observations.
 
 `unite` (Unified liNe Integration Turbo Engine) is a Python package for fast and accurate Bayesian inference of spectral lines and continua with flexible configurations from one or more spectra simultaneously.
-It is built on JAX [@bradbury2018jax], NumPyro [@phan2019numpyro; @bingham2019pyro], and Astropy [@astropy2013package; @astropy2018project; @astropy2022sustaining].
+It is built on `JAX` [@bradbury2018jax], `NumPyro` [@phan2019numpyro; @bingham2019pyro], and `Astropy` [@astropy2013package; @astropy2018project; @astropy2022sustaining].
 
 # Statement of need
 
@@ -113,8 +113,8 @@ In addition, users specify the instrumental configuration carrying empirical cal
 One aspect that sets `unite` apart from other spectral fitting tools is that it treats instrumental calibration parameters as first-class citizens in the inference process; priors can be specified on each of the aforementioned calibrations and are sampled jointly with astrophysical parameters, allowing for systematic instrumental uncertainties to directly propagate to the inferred properties.
 For example, when fitting NIRSpec data, users can incorporate the empirically measured wavelength and flux calibration offsets from @degraaff2025rubies as priors to obtain realistic uncertainty estimates on fluxes and kinematics by marginalizing over instrumental uncertainties. 
 
-`unite` leverages NumPyro's probabilistic programming framework, built on JAX for automatic differentiation, JIT compilation, and native GPU support, to assemble an inference model compatible with a wide range of samplers: SVI for quick fits, NUTS for full posteriors, or nested sampling for model comparison.
-Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS files, carrying physical units throughout, via Astropy.
+`unite` leverages `NumPyro`'s probabilistic programming framework, built on `JAX` for automatic differentiation, JIT compilation, and native GPU support, to assemble an inference model compatible with a wide range of samplers: SVI for quick fits, NUTS for full posteriors, or nested sampling for model comparison.
+Finally, `unite` provides convenience functions for extracting results as parameter tables and per-spectrum model predictions into domain-appropriate FITS files, carrying physical units throughout, via `Astropy`.
 
 The package is publicly available on GitHub and PyPI under the GPL-3.0-or-later license, with a DOI minted via Zenodo [@hviding2026unite] and accompanied by Sphinx documentation including narrative guides, an API reference, and executable tutorials. CI/CD workflows ensure that the code is tested and documented with each update, and the project is open to feedback and contributions from the community.
 
@@ -133,7 +133,7 @@ Spectral line analysis is among the most common operations in observational astr
 `BADASS` [@sexton2021badass; @sexton2024badass] is a comprehensive Bayesian emission-line code to simultaneously infer AGN power-law continuum, FeII pseudo-continuum, stellar LOSVD (via `pPXF`), and multi-component Gaussian emission lines in a single posterior.
 
 Many of these codes rely on least-squares optimization (`LMFIT` [@newville2014lmfit] or `scipy.optimize` [@virtanen2020scipy]), which does not yield posterior distributions, or on Bayesian inference via `emcee` [@foremanmackey2013emcee] or `pymc` [@abrilpla2023pymc]. 
-`unite` is more closely comparable to the latter category of Bayesian tools and builds natively on JAX and NumPyro, inheriting JIT compilation, automatic differentiation, and GPU support, enabling scalable inference across large spectroscopic samples.
+`unite` is more closely comparable to the latter category of Bayesian tools and builds natively on `JAX` and `NumPyro`, inheriting JIT compilation, automatic differentiation, and GPU support, enabling scalable inference across large spectroscopic samples.
 
 # Research impact statement
 
