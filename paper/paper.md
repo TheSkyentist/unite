@@ -23,27 +23,27 @@ authors:
   - name: Rohan P. Naidu
     orcid: 0000-0003-3997-5705
     corresponding: false
-    affiliation: 4
+    affiliation: 3
   - name: Helena Treiber
     orcid: 0000-0003-0660-9776
     corresponding: false
-    affiliation: 5
+    affiliation: 4
   - name: Rana Osman
     orcid: 0000-0002-6807-9611
     corresponding: false
-    affiliation: 5
+    affiliation: 4
   - name: Jenny E. Greene
     orcid: 0000-0002-5612-3427
     corresponding: false
-    affiliation: 5
+    affiliation: 4
   - name: Alberto Torralba
     orcid: 0000-0001-5586-6950
     corresponding: false
-    affiliation: 6
+    affiliation: 5
   - name: Bingjie Wang
     orcid: 0000-0001-9269-5046
     corresponding: false
-    affiliation: 5
+    affiliation: 4
   - name: Morgan Fouesneau
     orcid: 0000-0001-9256-5516
     corresponding: false
@@ -59,13 +59,13 @@ affiliations:
   #   index: 3
   #   ror: "031rekg67"
   - name: MIT Kavli Institute
-    index: 4
+    index: 3
     ror: "042nb2s44"
   - name: Princeton University
-    index: 5
+    index: 4
     ror: "00hx57361"
   - name: Institute of Science and Technology Austria
-    index: 6
+    index: 5
     ror: "03gnh5541"
 
 
@@ -151,11 +151,12 @@ All scientific decisions, algorithmic design choices, and final content were mad
 
 # Acknowledgements
 
+We thank Ivo Labbé for his contributions to the early development of `unite`.
+We acknowledge the support of the Data Science Group at the Max Planck Institute for Astronomy (MPIA) and especially Morgan Fouesneau and Ivelina Momcheva for their invaluable assistance providing high-level feedback for the development of the core `unite` routines.
+
 REH acknowledges support by the German Aerospace Center (DLR) and the Federal Ministry for Economic Affairs and Energy (BMWi) through program 50OR2403 `RUBIES'. 
 AdG acknowledges support from a Clay Fellowship awarded by the Smithsonian Astrophysical Observatory.
 RPN thanks Neil Pappalardo and Jane Pappalardo for their generous support of the MIT Pappalardo Fellowships in Physics.
 BW acknowledges support provided by NASA through Hubble Fellowship grant HST-HF2-51592.001 awarded by the Space Telescope Science Institute, which is operated by the Association of Universities for Research in Astronomy, Inc., for NASA, under the contract NAS 5-26555.
-
-We acknowledge the support of the Data Science Group at the Max Planck Institute for Astronomy (MPIA) and especially Morgan Fouesneau and Ivelina Momcheva for their invaluable assistance providing high-level feedback for the development of the core `unite` routines.
 
 # References
