@@ -165,8 +165,8 @@ class _ParamLeaf(_Expr):
 
     def __repr__(self) -> str:
         label = (
-            getattr(self.param, 'label', None)
-            or getattr(self.param, 'name', None)
+            getattr(self.param, '_name', None)
+            or getattr(self.param, 'label', None)
             or type(self.param).__name__
         )
         return label
