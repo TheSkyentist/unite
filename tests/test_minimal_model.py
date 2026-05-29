@@ -222,18 +222,25 @@ class TestMinimalModel:
         assert unite_args.spectra[0].npix == 100
         assert unite_args.redshift == 0.0
 
-    def test_auto_prepare_warns(self):
-        """ModelBuilder should warn when spectra are not prepared."""
+    def test_no_config_unprepared_raises(self):
+        """ModelBuilder raises when no configs supplied and spectra not prepared."""
+        spectrum = create_simple_spectrum()
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        with pytest.raises(ValueError, match='No line_config supplied'):
+            model.ModelBuilder(None, None, spectra)
+
+    def test_passed_config_takes_priority(self):
+        """ModelBuilder uses passed configs even when spectra is already prepared."""
         spectrum = create_simple_spectrum()
         line_config = create_minimal_config()
         spectra = Spectra([spectrum], redshift=0.0)
+        spectra.prepare(line_config, None)
+        spectra.compute_scales(line_config, None)
 
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter('always')
-            model.ModelBuilder(line_config, None, spectra)
-            msgs = [str(x.message) for x in w]
-            assert any('Spectra not prepared' in m for m in msgs)
-            assert any('Line scale not set' in m for m in msgs)
+        # Pass the same config — should not raise and should work normally.
+        builder = model.ModelBuilder(line_config, None, spectra)
+        assert builder is not None
 
 
 class TestModelOutputValidation:

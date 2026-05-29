@@ -423,10 +423,13 @@ class ModelBuilder:
 
     Parameters
     ----------
-    line_config : LineConfiguration
-        Emission/absorption line configuration.
+    line_config : LineConfiguration or None
+        Emission/absorption line configuration.  If ``None``, the configs
+        stored on ``spectra`` from a prior :py:meth:`~unite.spectrum.Spectra.prepare`
+        call are used; raises ``ValueError`` if ``spectra`` has not been prepared.
     continuum_config : ContinuumConfiguration or None
-        Continuum configuration.  ``None`` for a lines-only model.
+        Continuum configuration.  ``None`` for a lines-only model.  Ignored
+        when ``line_config`` is ``None`` (the stored continuum config is used).
     spectra : Spectra
         Spectrum collection with systemic redshift.
 
@@ -440,26 +443,25 @@ class ModelBuilder:
 
     def __init__(
         self,
-        line_config: LineConfiguration,
+        line_config: LineConfiguration | None,
         continuum_config: ContinuumConfiguration | None,
         spectra: Spectra,
     ) -> None:
         self._spectra = spectra
 
-        # --- Auto-prepare if needed ---
-        if not spectra.is_prepared:
-            warnings.warn(
-                'Spectra not prepared; calling spectra.prepare() with defaults. '
-                'Call spectra.prepare(line_config, continuum_config) explicitly '
-                'for full control.',
-                UserWarning,
-                stacklevel=2,
-            )
+        if line_config is not None:
+            # Caller supplied configs — prepare (or re-prepare) with them.
             line_config, continuum_config = spectra.prepare(
                 line_config, continuum_config
             )
         else:
-            # Use the prepared configs.
+            # No configs supplied — require that spectra was already prepared.
+            if not spectra.is_prepared:
+                raise ValueError(
+                    'No line_config supplied and spectra has not been prepared. '
+                    'Either pass line_config to ModelBuilder or call '
+                    'spectra.prepare(line_config, continuum_config) first.'
+                )
             prepared_lc = spectra.prepared_line_config
             assert prepared_lc is not None, (
                 'prepared_line_config is None despite is_prepared=True'
