@@ -1,7 +1,7 @@
 """JWST NIRSpec disperser implementations.
 
-This module provides :class:`NIRSpecDisperser`, a concrete
-:class:`~unite.instrument.base.Disperser` for every NIRSpec grating/prism
+This module provides :class:`NIRSpec`, a generic
+:class:`~unite.instrument.base.Disperser` for any NIRSpec grating/prism
 configuration.  Two resolving-power calibrations are available:
 
 * ``"uniform"`` or ``"uniformly-illuminated"`` — the official JDOX tabulated *R(λ)* curves shipped with the
@@ -11,10 +11,10 @@ configuration.  Two resolving-power calibrations are available:
 
 Both calibrations share the same JDOX linear-dispersion (*dλ/dpix*) tables.
 
-In addition to the generic :class:`NIRSpecDisperser` class, convenience
-subclasses are provided for each grating:
+In addition to the generic :class:`NIRSpec` class, named subclasses are
+provided for each grating:
 
-* :class:`Prism`
+* :class:`PRISM`
 * :class:`G140M`, :class:`G140H`
 * :class:`G235M`, :class:`G235H`
 * :class:`G395M`, :class:`G395H`
@@ -80,20 +80,6 @@ _DEGRAAFF25_R_COEFFS: dict[str, tuple[float, ...]] = {
 RSource = Literal['uniform', 'point']
 
 # ---------------------------------------------------------------------------
-# Mapping from lower-case grating name to class name
-# ---------------------------------------------------------------------------
-
-_GRATING_CLASS_NAMES: dict[str, str] = {
-    'prism': 'PRISM',
-    'g140m': 'G140M',
-    'g140h': 'G140H',
-    'g235m': 'G235M',
-    'g235h': 'G235H',
-    'g395m': 'G395M',
-    'g395h': 'G395H',
-}
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -124,11 +110,11 @@ def _load_uniform_disp(grating: str) -> dict[str, jnp.ndarray]:
 
 
 # ---------------------------------------------------------------------------
-# NIRSpecDisperser
+# NIRSpec
 # ---------------------------------------------------------------------------
 
 
-class NIRSpecDisperser(Disperser):
+class NIRSpec(Disperser):
     """Disperser for a JWST NIRSpec grating or prism configuration.
 
     Parameters
@@ -160,13 +146,13 @@ class NIRSpecDisperser(Disperser):
 
     Examples
     --------
-    >>> d = NIRSpecDisperser("g235h")
+    >>> d = NIRSpec("g235h")
     >>> d.grating
     'g235h'
     >>> d.r_source
     'point'
 
-    >>> d_uniform = NIRSpecDisperser("prism", r_source="uniform")
+    >>> d_uniform = NIRSpec("prism", r_source="uniform")
     >>> d_uniform.r_source
     'uniform'
     """
@@ -246,39 +232,23 @@ class NIRSpecDisperser(Disperser):
 
 
 # ---------------------------------------------------------------------------
-# Per-grating convenience subclasses, generated in a loop
+# Per-grating convenience subclasses
 # ---------------------------------------------------------------------------
 
 
-def _make_grating_class(grating: str, class_name: str) -> type[NIRSpecDisperser]:
-    """Create a ``NIRSpecDisperser`` subclass with a fixed grating.
+class PRISM(NIRSpec):
+    """NIRSpec **PRISM** disperser.
 
-    Parameters
-    ----------
-    grating : str
-        Lower-case grating name.
-    class_name : str
-        PascalCase name for the generated class.
-
-    Returns
-    -------
-    type[NIRSpecDisperser]
-        A new subclass that fixes the *grating* argument.
-    """
-
-    class _GratingDisperser(NIRSpecDisperser):
-        __doc__ = f"""NIRSpec **{grating.upper()}** disperser.
-
-    Convenience subclass of :class:`NIRSpecDisperser` with the grating
-    fixed to ``"{grating}"``.  Only ``r_source`` and calibration tokens
-    need to be specified.
+    Convenience subclass of :class:`NIRSpec` with the grating fixed to
+    ``"prism"``.  Only ``r_source`` and calibration tokens need to be
+    specified.
 
     Parameters
     ----------
     r_source : ``"uniform"``, ``"uniformly-illuminated"``, ``"point"``, or ``"point-source"``, optional
         Which resolving-power calibration to use (default ``"point"``).
     name : str, optional
-        Human-readable label.  Defaults to ``"{class_name}"``.
+        Human-readable label.  Defaults to ``"PRISM"``.
     r_scale : RScale, optional
         Token for the resolving-power scale.
     flux_scale : FluxScale, optional
@@ -288,64 +258,336 @@ def _make_grating_class(grating: str, class_name: str) -> type[NIRSpecDisperser]
 
     Examples
     --------
-    >>> d = {class_name}()
+    >>> d = PRISM()
     >>> d.grating
-    '{grating}'
+    'prism'
     """
 
-        def __init__(
-            self,
-            r_source: RSource = 'point',
-            *,
-            name: str = '',
-            r_scale: RScale | None = None,
-            flux_scale: FluxScale | None = None,
-            pix_offset: PixOffset | None = None,
-        ) -> None:
-            super().__init__(
-                grating=grating,
-                r_source=r_source,
-                name=name or class_name,
-                r_scale=r_scale,
-                flux_scale=flux_scale,
-                pix_offset=pix_offset,
-            )
+    def __init__(
+        self,
+        r_source: RSource = 'point',
+        *,
+        name: str = '',
+        r_scale: RScale | None = None,
+        flux_scale: FluxScale | None = None,
+        pix_offset: PixOffset | None = None,
+    ) -> None:
+        super().__init__(
+            'prism',
+            r_source=r_source,
+            name=name or 'PRISM',
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
 
-        def __repr__(self) -> str:
-            """Return a readable string representation of this disperser."""
-            return f'{class_name}(r_source={self.r_source!r})'
-
-    _GratingDisperser.__name__ = class_name
-    _GratingDisperser.__qualname__ = class_name
-
-    return _GratingDisperser
+    def __repr__(self) -> str:
+        """Return a readable string representation of this disperser."""
+        return f'PRISM(r_source={self.r_source!r})'
 
 
-# Build and inject per-grating classes into the module namespace.
-for _grating, _class_name in _GRATING_CLASS_NAMES.items():
-    globals()[_class_name] = _make_grating_class(_grating, _class_name)
+class G140M(NIRSpec):
+    """NIRSpec **G140M** disperser.
 
-# Explicit type-visible references to dynamically generated classes.
-# These are set by the loop above; re-declared here for type checkers.
-G140H: type[NIRSpecDisperser] = globals()['G140H']
-G140M: type[NIRSpecDisperser] = globals()['G140M']
-G235H: type[NIRSpecDisperser] = globals()['G235H']
-G235M: type[NIRSpecDisperser] = globals()['G235M']
-G395H: type[NIRSpecDisperser] = globals()['G395H']
-G395M: type[NIRSpecDisperser] = globals()['G395M']
-PRISM: type[NIRSpecDisperser] = globals()['PRISM']
+    Convenience subclass of :class:`NIRSpec` with the grating fixed to
+    ``"g140m"``.  Only ``r_source`` and calibration tokens need to be
+    specified.
+
+    Parameters
+    ----------
+    r_source : ``"uniform"``, ``"uniformly-illuminated"``, ``"point"``, or ``"point-source"``, optional
+        Which resolving-power calibration to use (default ``"point"``).
+    name : str, optional
+        Human-readable label.  Defaults to ``"G140M"``.
+    r_scale : RScale, optional
+        Token for the resolving-power scale.
+    flux_scale : FluxScale, optional
+        Token for the flux normalisation.
+    pix_offset : PixOffset, optional
+        Token for the detector pixel displacement.
+
+    Examples
+    --------
+    >>> d = G140M()
+    >>> d.grating
+    'g140m'
+    """
+
+    def __init__(
+        self,
+        r_source: RSource = 'point',
+        *,
+        name: str = '',
+        r_scale: RScale | None = None,
+        flux_scale: FluxScale | None = None,
+        pix_offset: PixOffset | None = None,
+    ) -> None:
+        super().__init__(
+            'g140m',
+            r_source=r_source,
+            name=name or 'G140M',
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
+
+    def __repr__(self) -> str:
+        """Return a readable string representation of this disperser."""
+        return f'G140M(r_source={self.r_source!r})'
+
+
+class G140H(NIRSpec):
+    """NIRSpec **G140H** disperser.
+
+    Convenience subclass of :class:`NIRSpec` with the grating fixed to
+    ``"g140h"``.  Only ``r_source`` and calibration tokens need to be
+    specified.
+
+    Parameters
+    ----------
+    r_source : ``"uniform"``, ``"uniformly-illuminated"``, ``"point"``, or ``"point-source"``, optional
+        Which resolving-power calibration to use (default ``"point"``).
+    name : str, optional
+        Human-readable label.  Defaults to ``"G140H"``.
+    r_scale : RScale, optional
+        Token for the resolving-power scale.
+    flux_scale : FluxScale, optional
+        Token for the flux normalisation.
+    pix_offset : PixOffset, optional
+        Token for the detector pixel displacement.
+
+    Examples
+    --------
+    >>> d = G140H()
+    >>> d.grating
+    'g140h'
+    """
+
+    def __init__(
+        self,
+        r_source: RSource = 'point',
+        *,
+        name: str = '',
+        r_scale: RScale | None = None,
+        flux_scale: FluxScale | None = None,
+        pix_offset: PixOffset | None = None,
+    ) -> None:
+        super().__init__(
+            'g140h',
+            r_source=r_source,
+            name=name or 'G140H',
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
+
+    def __repr__(self) -> str:
+        """Return a readable string representation of this disperser."""
+        return f'G140H(r_source={self.r_source!r})'
+
+
+class G235M(NIRSpec):
+    """NIRSpec **G235M** disperser.
+
+    Convenience subclass of :class:`NIRSpec` with the grating fixed to
+    ``"g235m"``.  Only ``r_source`` and calibration tokens need to be
+    specified.
+
+    Parameters
+    ----------
+    r_source : ``"uniform"``, ``"uniformly-illuminated"``, ``"point"``, or ``"point-source"``, optional
+        Which resolving-power calibration to use (default ``"point"``).
+    name : str, optional
+        Human-readable label.  Defaults to ``"G235M"``.
+    r_scale : RScale, optional
+        Token for the resolving-power scale.
+    flux_scale : FluxScale, optional
+        Token for the flux normalisation.
+    pix_offset : PixOffset, optional
+        Token for the detector pixel displacement.
+
+    Examples
+    --------
+    >>> d = G235M()
+    >>> d.grating
+    'g235m'
+    """
+
+    def __init__(
+        self,
+        r_source: RSource = 'point',
+        *,
+        name: str = '',
+        r_scale: RScale | None = None,
+        flux_scale: FluxScale | None = None,
+        pix_offset: PixOffset | None = None,
+    ) -> None:
+        super().__init__(
+            'g235m',
+            r_source=r_source,
+            name=name or 'G235M',
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
+
+    def __repr__(self) -> str:
+        """Return a readable string representation of this disperser."""
+        return f'G235M(r_source={self.r_source!r})'
+
+
+class G235H(NIRSpec):
+    """NIRSpec **G235H** disperser.
+
+    Convenience subclass of :class:`NIRSpec` with the grating fixed to
+    ``"g235h"``.  Only ``r_source`` and calibration tokens need to be
+    specified.
+
+    Parameters
+    ----------
+    r_source : ``"uniform"``, ``"uniformly-illuminated"``, ``"point"``, or ``"point-source"``, optional
+        Which resolving-power calibration to use (default ``"point"``).
+    name : str, optional
+        Human-readable label.  Defaults to ``"G235H"``.
+    r_scale : RScale, optional
+        Token for the resolving-power scale.
+    flux_scale : FluxScale, optional
+        Token for the flux normalisation.
+    pix_offset : PixOffset, optional
+        Token for the detector pixel displacement.
+
+    Examples
+    --------
+    >>> d = G235H()
+    >>> d.grating
+    'g235h'
+    """
+
+    def __init__(
+        self,
+        r_source: RSource = 'point',
+        *,
+        name: str = '',
+        r_scale: RScale | None = None,
+        flux_scale: FluxScale | None = None,
+        pix_offset: PixOffset | None = None,
+    ) -> None:
+        super().__init__(
+            'g235h',
+            r_source=r_source,
+            name=name or 'G235H',
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
+
+    def __repr__(self) -> str:
+        """Return a readable string representation of this disperser."""
+        return f'G235H(r_source={self.r_source!r})'
+
+
+class G395M(NIRSpec):
+    """NIRSpec **G395M** disperser.
+
+    Convenience subclass of :class:`NIRSpec` with the grating fixed to
+    ``"g395m"``.  Only ``r_source`` and calibration tokens need to be
+    specified.
+
+    Parameters
+    ----------
+    r_source : ``"uniform"``, ``"uniformly-illuminated"``, ``"point"``, or ``"point-source"``, optional
+        Which resolving-power calibration to use (default ``"point"``).
+    name : str, optional
+        Human-readable label.  Defaults to ``"G395M"``.
+    r_scale : RScale, optional
+        Token for the resolving-power scale.
+    flux_scale : FluxScale, optional
+        Token for the flux normalisation.
+    pix_offset : PixOffset, optional
+        Token for the detector pixel displacement.
+
+    Examples
+    --------
+    >>> d = G395M()
+    >>> d.grating
+    'g395m'
+    """
+
+    def __init__(
+        self,
+        r_source: RSource = 'point',
+        *,
+        name: str = '',
+        r_scale: RScale | None = None,
+        flux_scale: FluxScale | None = None,
+        pix_offset: PixOffset | None = None,
+    ) -> None:
+        super().__init__(
+            'g395m',
+            r_source=r_source,
+            name=name or 'G395M',
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
+
+    def __repr__(self) -> str:
+        """Return a readable string representation of this disperser."""
+        return f'G395M(r_source={self.r_source!r})'
+
+
+class G395H(NIRSpec):
+    """NIRSpec **G395H** disperser.
+
+    Convenience subclass of :class:`NIRSpec` with the grating fixed to
+    ``"g395h"``.  Only ``r_source`` and calibration tokens need to be
+    specified.
+
+    Parameters
+    ----------
+    r_source : ``"uniform"``, ``"uniformly-illuminated"``, ``"point"``, or ``"point-source"``, optional
+        Which resolving-power calibration to use (default ``"point"``).
+    name : str, optional
+        Human-readable label.  Defaults to ``"G395H"``.
+    r_scale : RScale, optional
+        Token for the resolving-power scale.
+    flux_scale : FluxScale, optional
+        Token for the flux normalisation.
+    pix_offset : PixOffset, optional
+        Token for the detector pixel displacement.
+
+    Examples
+    --------
+    >>> d = G395H()
+    >>> d.grating
+    'g395h'
+    """
+
+    def __init__(
+        self,
+        r_source: RSource = 'point',
+        *,
+        name: str = '',
+        r_scale: RScale | None = None,
+        flux_scale: FluxScale | None = None,
+        pix_offset: PixOffset | None = None,
+    ) -> None:
+        super().__init__(
+            'g395h',
+            r_source=r_source,
+            name=name or 'G395H',
+            r_scale=r_scale,
+            flux_scale=flux_scale,
+            pix_offset=pix_offset,
+        )
+
+    def __repr__(self) -> str:
+        """Return a readable string representation of this disperser."""
+        return f'G395H(r_source={self.r_source!r})'
+
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-__all__ = [
-    'G140H',
-    'G140M',
-    'G235H',
-    'G235M',
-    'G395H',
-    'G395M',
-    'PRISM',
-    'NIRSpecDisperser',
-]
+__all__ = ['G140H', 'G140M', 'G235H', 'G235M', 'G395H', 'G395M', 'PRISM', 'NIRSpec']

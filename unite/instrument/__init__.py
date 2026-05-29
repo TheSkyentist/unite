@@ -7,7 +7,7 @@ Generic building blocks are in :mod:`unite.instrument.generic`::
 Instrument-specific dispersers::
 
     from unite.instrument import nirspec, sdss
-    nirspec.G235H, nirspec.G395H, nirspec.NIRSpecDisperser
+    nirspec.NIRSpec, nirspec.G235H, nirspec.G395H, nirspec.PRISM
     sdss.SDSSDisperser
 
 Calibration tokens and configuration::

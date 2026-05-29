@@ -69,7 +69,7 @@ from unite.instrument.nirspec.disperser import (
     G395H,
     G395M,
     PRISM,
-    NIRSpecDisperser,
+    NIRSpec,
 )
 from unite.instrument.sdss.disperser import SDSSDisperser
 from unite.prior import Parameter, prior_from_dict
@@ -142,7 +142,7 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
         raise TypeError(msg)
 
     d: dict = {'type': cls_name, 'name': disperser.name}
-    if isinstance(disperser, NIRSpecDisperser):
+    if isinstance(disperser, NIRSpec):
         d['grating'] = disperser.grating
         d['r_source'] = disperser.r_source
 
@@ -175,7 +175,7 @@ def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disp
     cls = _DISPERSER_REGISTRY[cls_name]
 
     kwargs: dict = {'name': d.get('name', '')}
-    if cls_name == 'NIRSpecDisperser':
+    if cls_name == 'NIRSpec':
         kwargs['grating'] = d['grating']
         kwargs['r_source'] = d.get('r_source', 'point')
     elif 'r_source' in d:

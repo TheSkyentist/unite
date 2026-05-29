@@ -16,49 +16,49 @@ from unite.instrument.nirspec import (
     G395H,
     G395M,
     PRISM,
-    NIRSpecDisperser,
+    NIRSpec,
 )
 from unite.spectrum import from_DJA, from_edges
 
 # ---------------------------------------------------------------------------
-# NIRSpecDisperser — construction and validation
+# NIRSpec — construction and validation
 # ---------------------------------------------------------------------------
 
 
-class TestNIRSpecDisperserConstruction:
-    """Tests for NIRSpecDisperser construction and basic properties."""
+class TestNIRSpecConstruction:
+    """Tests for NIRSpec construction and basic properties."""
 
     def test_default_construction(self):
-        d = NIRSpecDisperser('g235h')
+        d = NIRSpec('g235h')
         assert d.grating == 'g235h'
         assert d.r_source == 'point'
         assert d.unit == u.um
         assert d.name == 'G235H'
 
     def test_case_insensitive_grating(self):
-        d = NIRSpecDisperser('G395M')
+        d = NIRSpec('G395M')
         assert d.grating == 'g395m'
 
     def test_invalid_grating_raises(self):
         with pytest.raises(ValueError, match='Unknown NIRSpec grating'):
-            NIRSpecDisperser('invalid')
+            NIRSpec('invalid')
 
     def test_r_source_uniform(self):
-        d = NIRSpecDisperser('g235h', r_source='uniform')
+        d = NIRSpec('g235h', r_source='uniform')
         assert d.r_source == 'uniform'
 
     def test_r_source_aliases(self):
-        d1 = NIRSpecDisperser('g235h', r_source='uniformly-illuminated')
+        d1 = NIRSpec('g235h', r_source='uniformly-illuminated')
         assert d1.r_source == 'uniform'
-        d2 = NIRSpecDisperser('g235h', r_source='point-source')
+        d2 = NIRSpec('g235h', r_source='point-source')
         assert d2.r_source == 'point'
 
     def test_invalid_r_source_raises(self):
         with pytest.raises(ValueError, match='Unknown r_source'):
-            NIRSpecDisperser('g235h', r_source='invalid')
+            NIRSpec('g235h', r_source='invalid')
 
     def test_custom_name(self):
-        d = NIRSpecDisperser('prism', name='my_prism')
+        d = NIRSpec('prism', name='my_prism')
         assert d.name == 'my_prism'
 
 
@@ -84,7 +84,7 @@ class TestNIRSpecR:
 
     @pytest.mark.parametrize('grating', _ALL_GRATINGS)
     def test_R_point_returns_positive(self, grating):
-        d = NIRSpecDisperser(grating, r_source='point')
+        d = NIRSpec(grating, r_source='point')
         lo, hi = _GRATING_WL_RANGES[grating]
         wl = jnp.linspace(lo, hi, 50)
         r = d.R(wl)
@@ -92,7 +92,7 @@ class TestNIRSpecR:
 
     @pytest.mark.parametrize('grating', _ALL_GRATINGS)
     def test_R_uniform_returns_positive(self, grating):
-        d = NIRSpecDisperser(grating, r_source='uniform')
+        d = NIRSpec(grating, r_source='uniform')
         lo, hi = _GRATING_WL_RANGES[grating]
         wl = jnp.linspace(lo, hi, 50)
         r = d.R(wl)
@@ -100,7 +100,7 @@ class TestNIRSpecR:
 
     @pytest.mark.parametrize('grating', _ALL_GRATINGS)
     def test_dlam_dpix_positive(self, grating):
-        d = NIRSpecDisperser(grating)
+        d = NIRSpec(grating)
         lo, hi = _GRATING_WL_RANGES[grating]
         wl = jnp.linspace(lo, hi, 50)
         dlam = d.dlam_dpix(wl)
@@ -116,15 +116,15 @@ class TestNIRSpecR:
     def test_point_vs_uniform_differ(self):
         """Point and uniform R sources should give different values."""
         wl = jnp.array([2.0, 2.5, 3.0])
-        r_point = NIRSpecDisperser('g235h', r_source='point').R(wl)
-        r_uniform = NIRSpecDisperser('g235h', r_source='uniform').R(wl)
+        r_point = NIRSpec('g235h', r_source='point').R(wl)
+        r_uniform = NIRSpec('g235h', r_source='uniform').R(wl)
         # They should not be identical
         assert not jnp.allclose(r_point, r_uniform, atol=1.0)
 
     @pytest.mark.parametrize('grating', _ALL_GRATINGS)
     def test_R_reasonable_range(self, grating):
         """R should be in a physically reasonable range."""
-        d = NIRSpecDisperser(grating)
+        d = NIRSpec(grating)
         lo, hi = _GRATING_WL_RANGES[grating]
         wl = jnp.linspace(lo, hi, 50)
         r = d.R(wl)
@@ -162,9 +162,9 @@ class TestConvenienceClasses:
         assert d.r_source == 'uniform'
 
     @pytest.mark.parametrize('cls', _CONVENIENCE_CLASSES)
-    def test_is_nirspec_disperser(self, cls):
+    def test_is_nirspec(self, cls):
         d = cls()
-        assert isinstance(d, NIRSpecDisperser)
+        assert isinstance(d, NIRSpec)
 
     def test_repr(self):
         d = G235H()
