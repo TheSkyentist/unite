@@ -29,6 +29,7 @@ with shared kinematics, calibration tokens, and flexible priors.
 installation
 concepts
 contributing
+citing
 ```
 
 ```{toctree}
