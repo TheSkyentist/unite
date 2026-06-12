@@ -156,6 +156,30 @@ def _cheb_to_mono_matrix(n: int) -> Array:
     return jnp.array(M)
 
 
+def _legendre_to_mono_matrix(n: int) -> Array:
+    """Build the (n x n) Legendre-to-monomial conversion matrix.
+
+    Returns a matrix *M* such that ``M @ leg_coeffs`` gives monomial
+    coefficients in **ascending** order (``[a0, a1, ..., a_{n-1}]``).
+
+    ``leg_coeffs = [a0, a1, ..., a_{n-1}]`` represents
+    ``a0*P0(x) + a1*P1(x) + ... + a_{n-1}*P_{n-1}(x)``.
+
+    Built at Python time (not traced), so the matrix is a static constant.
+    """
+    import numpy as np
+    from numpy.polynomial.legendre import leg2poly
+
+    M = np.zeros((n, n))  # noqa: N806
+    for k in range(n):
+        basis = np.zeros(n)
+        basis[k] = 1.0
+        # leg2poly returns ascending monomial coefficients for P_k
+        poly = leg2poly(basis)
+        M[: len(poly), k] = poly
+    return jnp.array(M)
+
+
 def _bernstein_to_mono_matrix(n: int) -> Array:
     """Build the ((n+1) x (n+1)) Bernstein-to-monomial conversion matrix.
 
@@ -880,6 +904,143 @@ class Chebyshev(ContinuumForm):
     @override
     def __repr__(self) -> str:
         return f'Chebyshev(order={self._order}, stretch={self._stretch})'
+
+
+@_register
+class Legendre(ContinuumForm):
+    """Legendre polynomial continuum of configurable order.
+
+    Evaluates a Legendre series on coordinates normalized to ``[-1, 1]``
+    within the continuum region.  Unlike :class:`Chebyshev` and
+    :class:`Polynomial`, there is no ``norm_wav`` parameter: ``scale`` is
+    the **mean continuum level** over the region (the coefficient of
+    ``P_0``).  The higher-order terms ``P_1, P_2, ...`` each integrate to
+    zero over ``[-1, 1]``, so ``p1, p2, ...`` are pure shape parameters
+    with no net contribution to the mean flux.
+
+    This differs from all other polynomial continuum forms where ``scale``
+    is the value at a reference wavelength.  Here ``scale`` is the
+    integral-averaged flux density over the region.
+
+    The x-coordinate is ``(wavelength - center) / ((obs_high - obs_low) / 2)``,
+    mapping the region bounds exactly to ``[-1, 1]``.
+
+    Parameters
+    ----------
+    order : int
+        Legendre order (default 2).  Number of free parameters = order + 1
+        (``scale`` plus ``p1`` through ``p{order}``).
+
+    Notes
+    -----
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — Mean continuum flux density over the region (coefficient
+      of ``P_0``).  Default prior: ``Uniform(0, 2)``.  Set to
+      ``Uniform(-2, 2)`` for regions with calibration artefacts that may
+      drive the continuum negative.
+    * ``p1, p2, ...`` — Higher-order Legendre coefficients, same flux units
+      as ``scale``.  Each integrates to zero over the region.
+      Default prior: ``Uniform(-10, 10)`` each.
+
+    """
+
+    def __init__(self, order: int = 2) -> None:
+        if order < 0:
+            msg = f'Legendre order must be >= 0, got {order}'
+            raise ValueError(msg)
+        self._order = order
+        self._leg2mono = _legendre_to_mono_matrix(order + 1)
+
+    @property
+    @override
+    def is_linear(self) -> bool:
+        return False
+
+    @property
+    def order(self) -> int:
+        """Legendre order."""
+        return self._order
+
+    @override
+    def param_names(self) -> tuple[str, ...]:
+        if self._order == 0:
+            return ('scale',)
+        return ('scale', *(f'p{i}' for i in range(1, self._order + 1)))
+
+    @override
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        priors: dict[str, Prior] = {'scale': Uniform(0, 2)}
+        for i in range(1, self._order + 1):
+            priors[f'p{i}'] = Uniform(-10, 10)
+        return priors
+
+    @override
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        # Legendre coordinates are dimensionless, so all coefficients share flux_unit.
+        d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
+        for i in range(1, self._order + 1):
+            d[f'p{i}'] = (True, flux_unit)
+        return d
+
+    @override
+    def evaluate(
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
+    ) -> Array:
+        x, scale_factor = _normalize_wavelength(
+            wavelength, center, obs_low, obs_high, 1.0
+        )
+        leg_coeffs = jnp.array(
+            [params['scale']] + [params[f'p{i}'] for i in range(1, self._order + 1)]
+        )
+        mono = (self._leg2mono @ leg_coeffs)[::-1]  # ascending → descending
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
+        return jnp.polyval(convolved, x)
+
+    @override
+    def integrate(
+        self,
+        edges: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
+    ) -> Array:
+        x, scale_factor = _normalize_wavelength(edges, center, obs_low, obs_high, 1.0)
+        leg_coeffs = jnp.array(
+            [params['scale']] + [params[f'p{i}'] for i in range(1, self._order + 1)]
+        )
+        mono = (self._leg2mono @ leg_coeffs)[::-1]  # ascending → descending
+        lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
+        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
+        # Antiderivative in normalised coord; rescale to λ by dλ/du = scale_factor.
+        return _polyint_at(convolved, x) * scale_factor
+
+    @override
+    def to_dict(self) -> dict:
+        return {'type': 'Legendre', 'order': self._order}
+
+    @classmethod
+    @override
+    def from_dict(cls, d: dict) -> Legendre:
+        return cls(order=d['order'])
+
+    @override
+    def __repr__(self) -> str:
+        return f'Legendre(order={self._order})'
 
 
 @_register

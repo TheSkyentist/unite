@@ -262,6 +262,7 @@ model is evaluated with the instrument's line-spread function:
 | `Linear` | — | `angle` | Yes (exact) |
 | `Polynomial` | `degree` | `c1`…`cN` | Yes (exact) |
 | `Chebyshev` | `order`, `stretch` | `c1`…`cN` | Yes (exact) |
+| `Legendre` | `order` | `p1`…`pN` | Yes (exact) |
 | `Bernstein` | `degree`, `stretch` | `c1`…`cN` | Yes (exact) |
 | `PowerLaw` | — | `beta` | No |
 | `BSpline` | `knots`, `degree` | `c1`… | No |
@@ -358,6 +359,29 @@ form = BSpline(knots=knots, degree=3)
 Constructor parameters: `knots` (knot vector), `degree` (default 3 for cubic).
 
 Model parameters: `scale`, `c1`, `c2`, .... `cn` where `n` is the degree.
+
+### Legendre
+
+Legendre polynomial expansion on $[-1, 1]$.
+
+:::{note}
+`scale` here means the **mean continuum level** over the region — not the value at a reference
+wavelength. Because $P_1, P_2, \ldots$ each integrate to zero over $[-1, 1]$, the higher-order
+parameters `p1, p2, ...` are pure shape perturbations with no net effect on the mean flux.
+This differs from every other polynomial form where `scale` is the value at `norm_wav`.
+There is no `norm_wav` parameter for this form.
+:::
+
+Unlike `Chebyshev`, `scale` may be negative (e.g. for regions dominated by calibration artefacts); set the prior accordingly with `Uniform(-2, 2)`.
+
+```python
+from unite.continuum import Legendre
+form = Legendre(order=3)
+```
+
+Constructor parameter: `order` (default 2).
+
+Model parameters: `scale`, `p1`, `p2`, ..., `pN` where `N` is the order.
 
 ### Bernstein
 

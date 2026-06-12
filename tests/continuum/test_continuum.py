@@ -13,6 +13,7 @@ from unite.continuum import (
     ContinuumConfiguration,
     ContinuumRegion,
     ContShape,
+    Legendre,
     Linear,
     ModifiedBlackbody,
     NormWavelength,
@@ -1169,6 +1170,124 @@ class TestBernstein:
         assert b2.degree == 3
 
 
+class TestLegendre:
+    def test_param_names_order0(self):
+        assert Legendre(order=0).param_names() == ('scale',)
+
+    def test_param_names_order2(self):
+        assert Legendre(order=2).param_names() == ('scale', 'p1', 'p2')
+
+    def test_no_norm_wav(self):
+        assert 'norm_wav' not in Legendre(order=2).param_names()
+
+    def test_negative_order_raises(self):
+        with pytest.raises(ValueError, match='>= 0'):
+            Legendre(order=-1)
+
+    def test_evaluate_shape(self):
+        f = Legendre(order=2)
+        params = {'scale': jnp.array(1.0), 'p1': jnp.array(0.0), 'p2': jnp.array(0.0)}
+        result = f.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
+        assert result.shape == _WL.shape
+
+    def test_flat_when_shape_params_zero(self):
+        """With p1=p2=0, the continuum should be flat at scale."""
+        f = Legendre(order=2)
+        params = {'scale': jnp.array(3.0), 'p1': jnp.array(0.0), 'p2': jnp.array(0.0)}
+        result = f.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
+        assert jnp.allclose(result, 3.0, atol=1e-5)
+
+    def test_scale_is_mean_level(self):
+        """scale is the mean continuum level: integral over [-1,1] / 2 = scale."""
+
+        f = Legendre(order=2)
+        params = {'scale': jnp.array(2.0), 'p1': jnp.array(0.5), 'p2': jnp.array(0.3)}
+        # Integrate numerically over the full region.
+        wl = jnp.linspace(_OBS_LOW, _OBS_HIGH, 10000)
+        vals = f.evaluate(wl, _CENTER, params, _OBS_LOW, _OBS_HIGH)
+        mean = float(jnp.mean(vals))
+        assert mean == pytest.approx(2.0, rel=1e-3)
+
+    def test_shape_params_zero_mean(self):
+        """p1 and p2 individually contribute zero to the mean (orthogonality)."""
+        f2 = Legendre(order=2)
+        for pname, pval in [('p1', 1.0), ('p2', 1.0)]:
+            params_base = {
+                'scale': jnp.array(0.0),
+                'p1': jnp.array(0.0),
+                'p2': jnp.array(0.0),
+            }
+            params_base[pname] = jnp.array(pval)
+            wl = jnp.linspace(_OBS_LOW, _OBS_HIGH, 10000)
+            vals = f2.evaluate(wl, _CENTER, params_base, _OBS_LOW, _OBS_HIGH)
+            assert float(jnp.mean(vals)) == pytest.approx(0.0, abs=1e-3)
+
+    def test_negative_scale_allowed(self):
+        f = Legendre(order=2)
+        params = {'scale': jnp.array(-1.0), 'p1': jnp.array(0.0), 'p2': jnp.array(0.0)}
+        result = f.evaluate(_WL, _CENTER, params, _OBS_LOW, _OBS_HIGH)
+        assert jnp.all(result < 0)
+
+    def test_integrate_consistent_with_evaluate(self):
+        """integrate() pixel averages should match a fine numerical integral of evaluate()."""
+        f = Legendre(order=2)
+        params = {'scale': jnp.array(1.5), 'p1': jnp.array(0.2), 'p2': jnp.array(-0.1)}
+        edges = jnp.linspace(_OBS_LOW, _OBS_HIGH, 21)
+        anti = f.integrate(edges, _CENTER, params, _OBS_LOW, _OBS_HIGH)
+        pixel_avg = jnp.diff(anti) / jnp.diff(edges)
+        # Numerical reference: 1000-point Riemann sum per pixel.
+        numerical = jnp.array(
+            [
+                float(
+                    jnp.mean(
+                        f.evaluate(
+                            jnp.linspace(edges[i], edges[i + 1], 1000),
+                            _CENTER,
+                            params,
+                            _OBS_LOW,
+                            _OBS_HIGH,
+                        )
+                    )
+                )
+                for i in range(len(edges) - 1)
+            ]
+        )
+        assert jnp.allclose(pixel_avg, numerical, rtol=1e-4)
+
+    def test_all_param_units_are_flux(self):
+        """All Legendre parameters share the same flux unit."""
+        f = Legendre(order=2)
+        pu = f.param_units(_FLUX_UNIT, _WL_UNIT)
+        for name in f.param_names():
+            apply_cs, unit = pu[name]
+            assert apply_cs is True
+            assert unit == _FLUX_UNIT
+
+    def test_default_priors_keys(self):
+        priors = Legendre(order=3).default_priors(region_center=1.5)
+        assert 'scale' in priors
+        assert 'p1' in priors
+        assert 'p2' in priors
+        assert 'p3' in priors
+        assert 'norm_wav' not in priors
+
+    def test_roundtrip(self):
+        f2 = form_from_dict(Legendre(order=3).to_dict())
+        assert isinstance(f2, Legendre)
+        assert f2.order == 3
+
+    def test_repr(self):
+        r = repr(Legendre(order=2))
+        assert 'Legendre' in r
+        assert '2' in r
+
+
+class TestLegendreValidation:
+    def test_negative_order_raises(self):
+        with pytest.raises(ValueError, match='>= 0'):
+            Legendre(order=-1)
+
+
 # ---------------------------------------------------------------------------
 # get_form string registry
 # ---------------------------------------------------------------------------
@@ -1302,6 +1421,7 @@ _NONLINEAR_FORMS = [
     Chebyshev(2, 0.1),
     BSpline([1.0] * u.um, degree=3),
     Bernstein(degree=3),
+    Legendre(order=2),
 ]
 
 
@@ -1330,6 +1450,7 @@ class TestParamUnits:
             Chebyshev(2, 0.1),
             BSpline([1.0] * u.um, degree=3),
             Bernstein(degree=3),
+            Legendre(order=2),
             Blackbody(),
             ModifiedBlackbody(),
             AttenuatedBlackbody(),
@@ -1410,6 +1531,7 @@ class TestFormHash:
             AttenuatedBlackbody(),
             BSpline([1] * u.um, degree=3),
             Bernstein(degree=3),
+            Legendre(order=2),
         ],
     )
     def test_hashable(self, form):

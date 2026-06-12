@@ -18,7 +18,7 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 - **Simultaneous multi-spectrum fitting** across gratings and instruments with shared kinematic parameters (redshift, FWHM)
 - **Multiple line profiles**: Gaussian, Cauchy, Pseudo-Voigt, Laplace, SEMG, Gauss-Hermite, Split-Normal, Skew-Normal, Skew-Voigt, Box-Gauss, Gaussian-Split-Laplace (asymmetric EMG)
 - **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)`, with per-component depth ordering (`zorder`) so each absorber selectively attenuates only the sources behind it
-- **Flexible continuum models**: Linear, Polynomial, Chebyshev, Bernstein, B-Spline, Power-Law, Blackbody, Modified Blackbody, Attenuated Blackbody, Template (user-supplied file) — auto-generated from line configurations
+- **Flexible continuum models**: Linear, Polynomial, Chebyshev, Legendre, Bernstein, B-Spline, Power-Law, Blackbody, Modified Blackbody, Attenuated Blackbody, Template (user-supplied file) — auto-generated from line configurations
 - **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
 - **YAML serialization** for reproducible, human-editable configurations
 - **User-controlled sampler** — `ModelBuilder` returns `(model_fn, model_args)` for use with any NumPyro backend (NUTS, SVI, nested sampling, ...)
