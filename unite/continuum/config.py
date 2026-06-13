@@ -254,6 +254,9 @@ def _param_class_for(pn: str) -> type[Parameter]:
         return Scale
     if pn == 'norm_wav':
         return NormWavelength
+    if pn == 'redshift':
+        # Accept both ContShape (independent) and Redshift (shared with a line token).
+        return Parameter
     return ContShape
 
 

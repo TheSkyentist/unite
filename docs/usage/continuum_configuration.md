@@ -265,6 +265,7 @@ model is evaluated with the instrument's line-spread function:
 | `Legendre` | `order` | `p1`…`pN` | Yes (exact) |
 | `Bernstein` | `degree`, `stretch` | `c1`…`cN` | Yes (exact) |
 | `PowerLaw` | — | `beta` | No |
+| `DLAPowerLaw` | — | `beta`, `log_NHI`, `b`, `redshift` | No |
 | `BSpline` | `knots`, `degree` | `c1`… | No |
 | `Blackbody` | — | `temperature` | No |
 | `ModifiedBlackbody` | — | `temperature`, `beta` | No |
@@ -341,6 +342,90 @@ form = Chebyshev(order=3, stretch=1)  # half_width in same units as region bound
 Constructor parameters: `order` (default 2), `stretch` (default 1.0)
 
 Model parameters: `scale`, `c1`, `c2`, .... `cn` where `n` is the degree.
+
+### DLAPowerLaw
+
+UV power law attenuated by a damped Lyman-alpha (DLA) system, with a hard Lyman break:
+
+$$
+F(\lambda_\text{obs}) = \text{scale} \times \left(\frac{\lambda_\text{obs}}{\lambda_\text{norm}}\right)^\beta \times T(\lambda_\text{rest})
+$$
+
+$$
+T = \begin{cases} 0 & \lambda_\text{rest} \leq 1215.67\,\text{Å} \\ \exp(-\tau_\text{DLA}) & \lambda_\text{rest} > 1215.67\,\text{Å} \end{cases}
+$$
+
+where $\lambda_\text{rest} = \lambda_\text{obs} / (1 + z_\text{sys} + \delta z)$ and $\tau_\text{DLA}$ is the Voigt optical depth computed via the Humlicek W4 Faddeeva approximation.
+
+```python
+from unite.continuum import DLAPowerLaw
+form = DLAPowerLaw()
+```
+
+Model parameters: `scale`, `beta`, `log_NHI`, `b`, `redshift`.
+
+| Parameter | Description | Default prior |
+|-----------|-------------|---------------|
+| `scale` | UV continuum amplitude at `norm_wav` | `Uniform(0, 2)` |
+| `beta` | UV power-law slope | `Uniform(-3, 0)` |
+| `norm_wav` | Reference wavelength | `Fixed(region_center)` |
+| `log_NHI` | Base-10 log HI column density (cm⁻²) | `Uniform(17, 22)` |
+| `b` | Total Doppler parameter (km s⁻¹); turbulent + thermal in quadrature | `Uniform(10, 200)` |
+| `redshift` | DLA redshift **offset from** `z_sys` | `Uniform(-0.05, 0.05)` |
+
+:::{important}
+**`redshift` is an offset from `z_sys`, not an absolute redshift.** A value of `0` places the DLA
+exactly at the galaxy systemic redshift. Small positive or negative values shift the absorber in
+front of or behind the galaxy. This differs from emission-line
+{class}`~unite.line.config.Redshift` tokens, which carry the absolute systemic redshift.
+:::
+
+#### Sharing the DLA redshift with a line redshift
+
+The `redshift` slot accepts both a {class}`~unite.continuum.ContShape` token (independent
+continuum parameter) and a {class}`~unite.line.config.Redshift` token (shared with a line
+system redshift). To share, construct the {class}`~unite.line.config.LineConfiguration`
+**before** building the {class}`~unite.continuum.ContinuumConfiguration`, so the token's
+site name is already set when the continuum resolves its parameters.
+
+```python
+from unite import line, continuum
+from unite.prior import Uniform, Fixed
+from astropy import units as u
+
+# 1. Define the shared redshift token on the line config first.
+z_galaxy = line.Redshift('galaxy', prior=Uniform(6.0, 6.5))
+lc = line.LineConfiguration()
+lc.add_line('Lya', 1215.67 * u.AA, redshift=z_galaxy, fwhm_gauss=line.FWHM('lya'))
+
+# 2. Place the same token in the DLA 'redshift' slot.
+#    The value received by DLAPowerLaw.evaluate() is treated as a *delta-z* from z_sys,
+#    so sharing z_galaxy here means the DLA sits at exactly the galaxy redshift.
+dla_region = continuum.ContinuumRegion(
+    0.8 * u.um, 0.9 * u.um,
+    form=continuum.DLAPowerLaw(),
+    params={
+        'redshift': z_galaxy,              # shared with line config
+        'log_NHI': continuum.ContShape('NHI', prior=Uniform(20, 22)),
+        'b': continuum.ContShape('b_dla', prior=Uniform(10, 100)),
+        'norm_wav': continuum.NormWavelength('uv', prior=Fixed(0.85)),
+    },
+)
+cc = continuum.ContinuumConfiguration([dla_region])
+```
+
+If you want the DLA to float independently from the galaxy redshift, use a
+{class}`~unite.continuum.ContShape` token instead:
+
+```python
+dla_region = continuum.ContinuumRegion(
+    0.8 * u.um, 0.9 * u.um,
+    form=continuum.DLAPowerLaw(),
+    params={
+        'redshift': continuum.ContShape('dz', prior=Uniform(-0.02, 0.02)),
+    },
+)
+```
 
 ### Clamped BSpline
 

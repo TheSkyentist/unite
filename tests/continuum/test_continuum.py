@@ -13,6 +13,7 @@ from unite.continuum import (
     ContinuumConfiguration,
     ContinuumRegion,
     ContShape,
+    DLAPowerLaw,
     Legendre,
     Linear,
     ModifiedBlackbody,
@@ -1759,6 +1760,160 @@ class TestModifiedBlackbodyDefaultPriors:
         assert 'norm_wav' in priors
         # norm_wav should be fixed at region_center
         assert isinstance(priors['norm_wav'], Fixed)
+
+
+# ---------------------------------------------------------------------------
+# DLAPowerLaw
+# ---------------------------------------------------------------------------
+
+_DLA_WL = jnp.linspace(0.09, 0.16, 200)  # um, covers rest 900-1600 AA at z_sys=0
+_DLA_LOW, _DLA_HIGH = 0.09, 0.16  # um
+
+
+def _make_dla():
+    """Return a prepared DLAPowerLaw and a minimal params dict."""
+    f = DLAPowerLaw()
+    f._prepare(low=_DLA_LOW * u.um, high=_DLA_HIGH * u.um)
+    params = {
+        'scale': 1.0,
+        'beta': -2.0,
+        'norm_wav': 0.13,
+        'log_NHI': 21.0,
+        'b': 30.0,
+        'redshift': 0.0,
+    }
+    return f, params
+
+
+class TestDLAPowerLaw:
+    def test_param_names(self):
+        assert DLAPowerLaw().param_names() == (
+            'scale',
+            'beta',
+            'norm_wav',
+            'log_NHI',
+            'b',
+            'redshift',
+        )
+
+    def test_default_priors_keys(self):
+        priors = DLAPowerLaw().default_priors(region_center=0.12)
+        assert set(priors) == {'scale', 'beta', 'norm_wav', 'log_NHI', 'b', 'redshift'}
+
+    def test_default_priors_types(self):
+        priors = DLAPowerLaw().default_priors(region_center=0.12)
+        assert isinstance(priors['norm_wav'], Fixed)
+        assert isinstance(priors['scale'], Uniform)
+        assert isinstance(priors['log_NHI'], Uniform)
+
+    def test_evaluate_returns_correct_shape(self):
+        f, params = _make_dla()
+        out = f.evaluate(_DLA_WL, 0.12, params, _DLA_LOW, _DLA_HIGH, z_sys=0.0)
+        assert out.shape == _DLA_WL.shape
+
+    def test_zero_flux_blueward_lya(self):
+        # At z_sys=0, wavelengths below 0.121567 um are blueward of Lya rest-frame.
+        f, params = _make_dla()
+        wl_blue = jnp.array([0.09, 0.10, 0.11])
+        out = f.evaluate(wl_blue, 0.10, params, _DLA_LOW, _DLA_HIGH, z_sys=0.0)
+        assert jnp.all(out == 0.0)
+
+    def test_nonzero_flux_redward_lya(self):
+        # At z_sys=0, wavelengths above 0.121567 um are redward of Lya.
+        f, params = _make_dla()
+        wl_red = jnp.array([0.13, 0.14, 0.15])
+        out = f.evaluate(wl_red, 0.14, params, _DLA_LOW, _DLA_HIGH, z_sys=0.0)
+        assert jnp.all(out > 0.0)
+
+    def test_high_nhi_suppresses_flux_near_lya(self):
+        f, params_hi = _make_dla()
+        params_lo = {**params_hi, 'log_NHI': 17.0}
+        wl_near = jnp.array([0.125, 0.130])
+        out_hi = f.evaluate(wl_near, 0.13, params_hi, _DLA_LOW, _DLA_HIGH, z_sys=0.0)
+        out_lo = f.evaluate(wl_near, 0.13, params_lo, _DLA_LOW, _DLA_HIGH, z_sys=0.0)
+        assert jnp.all(out_hi < out_lo)
+
+    def test_far_redward_recovers_power_law(self):
+        # Far from Lya, tau_DLA -> 0 so transmission -> 1 and flux matches the power law.
+        f = DLAPowerLaw()
+        f._prepare(low=0.9 * u.um, high=1.1 * u.um)
+        params = {
+            'scale': 1.0,
+            'beta': -2.0,
+            'norm_wav': 1.0,
+            'log_NHI': 20.0,
+            'b': 30.0,
+            'redshift': 0.0,
+        }
+        out = f.evaluate(jnp.array([1.0]), 1.0, params, 0.9, 1.1, z_sys=0.0)
+        # At norm_wav the power law evaluates to scale=1.0
+        assert float(out[0]) == pytest.approx(1.0, rel=1e-4)
+
+    def test_redshift_offset_shifts_feature(self):
+        # A positive redshift offset shifts lambda_rest down, moving the break to longer obs wavelengths.
+        f, params_base = _make_dla()
+        wl = jnp.linspace(0.121, 0.14, 50)
+        out_z0 = f.evaluate(
+            wl, 0.13, {**params_base, 'redshift': 0.0}, _DLA_LOW, _DLA_HIGH, z_sys=0.0
+        )
+        out_zp = f.evaluate(
+            wl, 0.13, {**params_base, 'redshift': 0.05}, _DLA_LOW, _DLA_HIGH, z_sys=0.0
+        )
+        assert not jnp.allclose(out_z0, out_zp)
+
+    def test_prepare_sets_angstrom_factor_from_um(self):
+        f = DLAPowerLaw()
+        f._prepare(low=1.0 * u.um, high=2.0 * u.um)
+        assert f._angstrom_factor == pytest.approx(1e4, rel=1e-6)
+
+    def test_prepare_sets_angstrom_factor_from_aa(self):
+        f = DLAPowerLaw()
+        f._prepare(low=1000.0 * u.AA, high=2000.0 * u.AA)
+        assert f._angstrom_factor == pytest.approx(1.0, rel=1e-6)
+
+    def test_to_dict(self):
+        assert DLAPowerLaw().to_dict() == {'type': 'DLAPowerLaw'}
+
+    def test_from_dict_round_trip(self):
+        f = form_from_dict({'type': 'DLAPowerLaw'})
+        assert isinstance(f, DLAPowerLaw)
+
+    def test_repr(self):
+        assert repr(DLAPowerLaw()) == 'DLAPowerLaw()'
+
+    def test_eq(self):
+        assert DLAPowerLaw() == DLAPowerLaw()
+
+    def test_param_units(self):
+        pu = DLAPowerLaw().param_units(u.Unit('erg s-1 cm-2 AA-1'), u.um)
+        assert set(pu) == {'scale', 'beta', 'norm_wav', 'log_NHI', 'b', 'redshift'}
+        assert pu['log_NHI'] == (False, None)
+        assert pu['redshift'] == (False, None)
+
+    def test_contshape_token_in_redshift_slot_accepted(self):
+        tok = ContShape('dla_z', prior=Uniform(-0.05, 0.05))
+        ContinuumRegion(
+            0.10 * u.um, 0.16 * u.um, DLAPowerLaw(), params={'redshift': tok}
+        )
+
+    def test_redshift_token_in_redshift_slot_accepted(self):
+        from unite.line.config import Redshift
+
+        tok = Redshift('galaxy', prior=Uniform(-0.05, 0.05))
+        tok.name = 'z_galaxy'  # simulate prior line-config registration
+        ContinuumRegion(
+            0.10 * u.um, 0.16 * u.um, DLAPowerLaw(), params={'redshift': tok}
+        )
+
+    def test_in_continuum_configuration(self):
+        cc = ContinuumConfiguration(
+            [ContinuumRegion(0.10 * u.um, 0.16 * u.um, DLAPowerLaw())]
+        )
+        assert len(cc.resolved_params[0]) == 6
+
+    def test_get_form_by_name(self):
+        f = get_form('DLAPowerLaw')
+        assert isinstance(f, DLAPowerLaw)
 
 
 # ---------------------------------------------------------------------------

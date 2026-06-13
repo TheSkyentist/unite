@@ -9,17 +9,24 @@ from typing import TYPE_CHECKING, cast, override
 import jax
 import jax.numpy as jnp
 import numpy as np
-from astropy import units as u
+from astropy import constants as const, units as u
+from astropy.units import Quantity
 from jax import Array
 from jax.typing import ArrayLike
 
-from unite._utils import _ensure_wavelength, _get_conversion_factor, _make_register
+from unite._utils import (
+    C_KMS,
+    _ensure_wavelength,
+    _get_conversion_factor,
+    _make_register,
+)
 from unite.continuum.functions import (
     bernstein_eval,
     bspline_eval,
     chebval,
     planck_function,
 )
+from unite.line.functions import _faddeeva_humlicek
 from unite.prior import Fixed, Prior, Uniform
 
 if TYPE_CHECKING:
@@ -2106,3 +2113,177 @@ class Template(ContinuumForm):
     def __repr__(self) -> str:
         cols = ', '.join(self._flux_cols)
         return f'Template({self._path.name!r}, columns=[{cols}])'
+
+
+# ---------------------------------------------------------------------------
+# DLA + power-law physical constants (precomputed at import time)
+# ---------------------------------------------------------------------------
+
+_LYA: Quantity = 1215.67 * u.AA
+_LYA_AA: float = float(_LYA.to(u.AA).value)
+_LYA_KM: float = float(_LYA.to(u.km).value)
+# Values from NIST ASD (Wiese & Fuhr 2009, J. Phys. Chem. Ref. Data, 38, 565)
+_A_LYA: float = 6.2649e8  # Einstein A coefficient, s^-1
+_F_LYA: float = 0.41641  # absorption oscillator strength
+# Cross-section amplitude (cm^2 s^-1)
+_K_LYA: float = (
+    (_F_LYA * const.e.si**2 / (4 * np.sqrt(np.pi) * const.eps0 * const.m_e * const.c))  # ty: ignore[unresolved-attribute]
+    .to(u.cm**2 / u.s)
+    .value
+)
+
+
+def _tau_dla(wave_rest_aa: ArrayLike, nhi: ArrayLike, b_kms: ArrayLike) -> Array:
+    """Compute the DLA Lyman-alpha optical depth at rest-frame wavelengths.
+
+    Uses the Humlicek W4 Faddeeva approximation for the Voigt profile H(a, x).
+    The cross-section is evaluated as ``sigma = K_LYA / delta_nu_D * H(a, x)``
+    where ``a = A_Lya / (4*pi*delta_nu_D)`` is the dimensionless damping
+    parameter and ``H(a, x) = Re[w(x + ia)]`` is computed via the Faddeeva
+    function.
+
+    Parameters
+    ----------
+    wave_rest_aa : ArrayLike
+        Rest-frame wavelengths in Angstroms.
+    nhi : ArrayLike
+        HI column density in cm^-2.
+    b_kms : ArrayLike
+        Total Doppler parameter in km s^-1 (turbulent + thermal in quadrature).
+
+    Returns
+    -------
+    Array
+        Dimensionless optical depth at each wavelength.
+    """
+    # wavelengths cancel: keep in Å; C_KMS/b_kms is also dimensionless
+    x = C_KMS * (_LYA_AA - wave_rest_aa) / (wave_rest_aa * b_kms)
+    a = _A_LYA * _LYA_KM / (4.0 * jnp.pi * b_kms)
+    voigt_h = jnp.real(_faddeeva_humlicek(cast(Array, x + 1j * a)))
+    sigma = _K_LYA * _LYA_KM / b_kms * voigt_h  # cm^2
+    return cast(Array, nhi * sigma)  # NHI [cm^-2] * sigma [cm^2]
+
+
+@_register
+class DLAPowerLaw(ContinuumForm):
+    """UV power law attenuated by a damped Lyman-alpha (DLA) absorber.
+
+    Evaluates:
+
+    .. code-block:: text
+
+        F(λ_obs) = scale * (λ_obs / norm_wav)^beta * T(λ_rest)
+
+        T = 0                          λ_rest ≤ 1215.67 Å  (Lyman break)
+        T = exp(-τ_DLA(λ_rest))       λ_rest > 1215.67 Å
+
+        λ_rest = λ_obs / (1 + z_sys + redshift)
+
+    The Voigt optical depth ``τ_DLA`` uses the Humlicek W4 approximation with
+    the total Doppler parameter ``b = sqrt(b_turb^2 + 2kT/m_p)``.
+
+    This form has no constructor parameters.
+
+    Notes
+    -----
+    **The** ``redshift`` **parameter is an offset from** ``z_sys``, not an
+    absolute redshift.  Unlike emission-line :class:`~unite.line.config.Redshift`
+    tokens — which carry the absolute systemic redshift — this parameter
+    shifts the DLA absorption feature relative to the galaxy redshift already
+    encoded in ``z_sys``.  A value of ``0`` places the DLA at exactly
+    ``z_sys``; small positive or negative values allow the absorber to sit
+    slightly in front of or behind the galaxy.
+
+    The ``redshift`` slot accepts both a
+    :class:`~unite.continuum.config.ContShape` token (independent continuum
+    parameter) and a :class:`~unite.line.config.Redshift` token (shared with
+    an emission-line redshift).  To share with a line, construct and register
+    the :class:`~unite.line.config.LineConfiguration` **before** building the
+    :class:`~unite.continuum.config.ContinuumConfiguration` so that the token's
+    site name is already set when the continuum config resolves its parameters.
+    Note that even when shared, the value is still treated as an *offset* from
+    ``z_sys`` inside this form's ``evaluate`` method.
+
+    **Model parameters** (sampled with priors, overridable via
+    ``ContinuumRegion(params={...})``):
+
+    * ``scale`` — UV continuum amplitude at ``norm_wav``.
+      Default prior: ``Uniform(0, 2)``.
+    * ``beta`` — UV power-law slope.
+      Default prior: ``Uniform(-3, 0)``.
+    * ``norm_wav`` — Reference wavelength.
+      Default prior: ``Fixed(region_center)``.
+    * ``log_NHI`` — Base-10 logarithm of the HI column density in cm^-2.
+      Default prior: ``Uniform(17, 22)``.
+    * ``b`` — Total Doppler parameter (turbulent + thermal in quadrature)
+      in km s^-1.  Default prior: ``Uniform(10, 200)``.
+    * ``redshift`` — DLA redshift offset from ``z_sys``.
+      Default prior: ``Uniform(-0.05, 0.05)``.
+    """
+
+    def __init__(self) -> None:
+        # Cached by _prepare(); conversion from canonical wavelength unit to Angstroms.
+        self._angstrom_factor: float = 1.0
+
+    @override
+    def param_names(self) -> tuple[str, ...]:
+        return ('scale', 'beta', 'norm_wav', 'log_NHI', 'b', 'redshift')
+
+    @override
+    def default_priors(self, region_center: float = 1.0) -> dict[str, Prior]:
+        return {
+            'scale': Uniform(0, 2),
+            'beta': Uniform(-3, 0),
+            'norm_wav': Fixed(region_center),
+            'log_NHI': Uniform(17, 22),
+            'b': Uniform(10, 200),
+            'redshift': Uniform(-0.05, 0.05),
+        }
+
+    @override
+    def param_units(
+        self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
+    ) -> dict[str, tuple[bool, u.UnitBase | None]]:
+        return {
+            'scale': (True, flux_unit),
+            'beta': (False, None),
+            'norm_wav': (False, wl_unit),
+            'log_NHI': (False, None),
+            'b': (False, u.km / u.s),
+            'redshift': (False, None),
+        }
+
+    @override
+    def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
+        """Cache the Angström conversion factor for the region's wavelength unit."""
+        self._angstrom_factor = _get_conversion_factor(low.unit, u.AA)
+
+    @override
+    def evaluate(
+        self,
+        wavelength: ArrayLike,
+        center: float,
+        params: dict[str, ArrayLike],
+        obs_low: float,
+        obs_high: float,
+        lsf_fwhm: ArrayLike = 0.0,
+        z_sys: float = 0.0,
+    ) -> Array:
+        wl = jnp.asarray(wavelength)
+        nw = params['norm_wav']
+        pl = params['scale'] * (wl / nw) ** params['beta']
+        z_dla = z_sys + params['redshift']
+        wave_rest_aa = wl * self._angstrom_factor / (1.0 + z_dla)
+        nhi = 10.0 ** params['log_NHI']
+        tau = _tau_dla(wave_rest_aa, nhi, params['b'])
+        transmission = jnp.where(wave_rest_aa > _LYA_AA, jnp.exp(-tau), 0.0)
+        return cast(Array, pl * transmission)
+
+    @override
+    def to_dict(self) -> dict:
+        return {'type': 'DLAPowerLaw'}
+
+    @classmethod
+    @override
+    def from_dict(cls, d: dict) -> DLAPowerLaw:
+        return cls()
