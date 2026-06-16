@@ -49,22 +49,22 @@ authors:
     corresponding: false
     affiliation: 1
 affiliations:
-  - name: Max-Planck-Institut für Astronomie
+  - name: Max-Planck-Institut für Astronomie, Heidelberg, Germany
     index: 1
     ror: "01vhnrs90"
-  - name: Center for Astrophysics Harvard & Smithsonian
+  - name: Center for Astrophysics Harvard & Smithsonian, Cambridge, MA, USA
     index: 2
     ror: "03c3r2d17"
-  # - name: Swinburne University of Technology
+  # - name: Swinburne University of Technology, Hawthorn, Australia
   #   index: 3
   #   ror: "031rekg67"
-  - name: MIT Kavli Institute
+  - name: MIT Kavli Institute for Astrophysics and Space Research, Cambridge, MA, USA
     index: 3
     ror: "042nb2s44"
-  - name: Princeton University
+  - name: Princeton University, Princeton, NJ, USA
     index: 4
     ror: "00hx57361"
-  - name: Institute of Science and Technology Austria
+  - name: Institute of Science and Technology Austria, Klosterneuburg, Austria
     index: 5
     ror: "03gnh5541"
 
@@ -87,7 +87,7 @@ Making the most of the growing volume and diversity of spectroscopic observation
 This requires enforcing shared astrophysical parameters while accounting for and propagating systematic uncertainties in instrument-specific calibrations. 
 An additional challenge arises when the data are undersampled, as evaluating the model at pixel centers rather than integrating over the pixel domain introduces systematic errors in recovered line shapes, yet existing tools that account for this typically do so via computationally expensive supersampling and convolution, limiting their scalability to large datasets and heterogeneous, multi-spectrograph configurations.
 
-The Near-Infrared Spectrograph (NIRSpec; @jakobsen2022nirspec) on the James Webb Space Telescope (JWST; @gardner2023jwst) is a prime example where all of these challenges arise simultaneously: it critically undersamples the LSF across all gratings and observing modes, observations routinely span multiple gratings with complementary strengths (high-resolution to measure kinematics, low-resolution to constrain fluxes and continuum shapes), and systematic uncertainties in resolving power, absolute normalization, and wavelength solution have measurable impacts on the data [@degraaff2025rubies].
+The Near-Infrared Spectrograph (NIRSpec; @jakobsen2022nirspec) on the James Webb Space Telescope (JWST; @gardner2023jwst) is a prime example where all of these challenges arise simultaneously: it critically undersamples the line-spread function (LSF) across all gratings and observing modes, observations routinely span multiple gratings with complementary strengths (high-resolution to measure kinematics, low-resolution to constrain fluxes and continuum shapes), and systematic uncertainties in resolving power, absolute normalization, and wavelength solution have measurable impacts on the data [@degraaff2025rubies].
 
 `unite` is designed to address these challenges while providing a flexible, extensible, and reproducible framework for spectroscopic analysis applicable to any spectrograph, rigorously carrying instrumental systematics through to the final parameter uncertainties.
 By leveraging optimized libraries for probabilistic programming and automatic differentiation, `unite` delivers scientifically rigorous Bayesian inference without compromising on computational efficiency, enabling the analysis of large and mixed spectroscopic datasets with accurate error estimation.
