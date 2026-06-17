@@ -164,21 +164,16 @@ def make_parameter_table(
 
     def _add_param(pname: str, *, pct_arr: np.ndarray | None = None) -> None:
         prior = args.all_priors[pname]
-        if pct_arr is not None:
-            if isinstance(prior, Fixed):
-                val = float(prior.resolved_value({}))
-                table[pname] = _to_column(pname, np.full(len(pct_arr), val))
-            else:
-                arr = np.asarray(samples[pname])
-                table[pname] = _to_column(pname, np.percentile(arr, pct_arr * 100))
+        if isinstance(prior, Fixed):
+            arr = _resolve_fixed(prior, samples, args.name_to_token, _get_n_samples(samples))
+            if pct_arr is not None:
+                arr = np.percentile(arr, pct_arr * 100)
+            table[pname] = _to_column(pname, arr)
+        elif pct_arr is not None:
+            arr = np.asarray(samples[pname])
+            table[pname] = _to_column(pname, np.percentile(arr, pct_arr * 100))
         else:
-            n_samp = _get_n_samples(samples)
-            if isinstance(prior, Fixed):
-                table[pname] = _to_column(
-                    pname, np.full(n_samp, float(prior.resolved_value({})))
-                )
-            else:
-                table[pname] = _to_column(pname, np.asarray(samples[pname]))
+            table[pname] = _to_column(pname, np.asarray(samples[pname]))
 
     def _add_rew(
         rew_arr: np.ndarray, col_name: str, *, pct_arr: np.ndarray | None = None
@@ -522,6 +517,29 @@ def _get_n_samples(samples: dict[str, np.ndarray]) -> int:
     return 1
 
 
+def _resolve_fixed(
+    prior: Fixed,
+    samples: dict,
+    name_to_token: dict,
+    n_samples: int,
+) -> np.ndarray:
+    """Evaluate a Fixed prior to an (n_samples,) array.
+
+    For literal Fixed values, returns a constant array.  For expressions that
+    reference sampled parameters, evaluates the expression per sample using
+    the token-object context required by :meth:`~unite.prior.Fixed.resolved_value`.
+    """
+    deps = prior.dependencies()
+    if not deps:
+        return np.full(n_samples, float(prior.resolved_value({})))
+    context = {
+        tok: np.asarray(samples[name])
+        for name, tok in name_to_token.items()
+        if tok in deps and name in samples
+    }
+    return np.asarray(prior.resolved_value(context))
+
+
 def _compute_percentiles(
     arr: np.ndarray, percentiles: np.ndarray | list[float]
 ) -> np.ndarray:
@@ -593,7 +611,7 @@ def _compute_rew_columns(
         """Return (n_samples,) array for parameter n, from Fixed value or samples."""
         p = args.all_priors[n]
         if isinstance(p, Fixed):
-            return np.full(n_samples, float(p.resolved_value({})))
+            return _resolve_fixed(p, samples, args.name_to_token, n_samples)
         return np.asarray(samples[n])
 
     # --- flux per line: (n_samples, n_lines) ---
@@ -653,7 +671,7 @@ def _compute_rew_columns(
                 tok_name = tok.name
                 prior = args.all_priors[tok_name]
                 val: np.ndarray = (
-                    np.full(n_samples, float(prior.resolved_value({})))
+                    _resolve_fixed(prior, samples, args.name_to_token, n_samples)
                     if isinstance(prior, Fixed)
                     else np.asarray(samples[tok_name])
                 )

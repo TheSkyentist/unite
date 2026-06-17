@@ -710,3 +710,80 @@ class TestUnitPreservation:
         assert flux_cols, 'No flux_ columns found in parameter table'
         for col in flux_cols:
             assert qt[col].unit == t_ref[col].unit
+
+
+# ---------------------------------------------------------------------------
+# Fixed prior referencing a sampled parameter (ref: expression)
+# ---------------------------------------------------------------------------
+
+_FIXED_REF_RATIO = 0.23907
+
+
+@pytest.fixture(scope='module')
+def fixed_ref_setup():
+    """Two-line model where child flux = Fixed(parent_flux * ratio)."""
+    z_tok = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
+    fwhm_tok = line.FWHM('fwhm', prior=prior.Uniform(100, 1000))
+    flux_parent = line.Flux('flux_parent', prior=prior.Uniform(0.0, 1.0))
+    flux_child = line.Flux('flux_child', prior=prior.Fixed(flux_parent * _FIXED_REF_RATIO))
+
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'line_parent',
+        5266.27 * u.AA,
+        redshift=z_tok,
+        fwhm_gauss=fwhm_tok,
+        flux=flux_parent,
+    )
+    lc.add_line(
+        'line_child',
+        5364.35 * u.AA,
+        redshift=z_tok,
+        fwhm_gauss=fwhm_tok,
+        flux=flux_child,
+    )
+
+    wavelength = np.linspace(5200, 5450, 80) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='s')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    rng = np.random.default_rng(7)
+    flux = (5.0 + rng.normal(0, 1, 80)) * flux_unit
+    error = np.full(80, 1.0) * flux_unit
+    spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='s')
+
+    spectra = Spectra([spectrum], redshift=0.0)
+    spectra.prepare(lc)
+    spectra.compute_scales(spectra.prepared_line_config)
+    model_fn, args = model.ModelBuilder(spectra.prepared_line_config, None, spectra).build()
+    samples = Predictive(model_fn, num_samples=4)(random.PRNGKey(0), args)
+    return samples, args
+
+
+class TestFixedRefParam:
+    """make_parameter_table must not raise when a Fixed flux prior uses a ref: expression."""
+
+    def test_make_parameter_table_no_error(self, fixed_ref_setup):
+        """make_parameter_table must not raise KeyError for Fixed(ref:) flux."""
+        samples, args = fixed_ref_setup
+        tbl = make_parameter_table(samples, args)
+        assert 'flux_flux_parent' in tbl.colnames
+        assert 'flux_flux_child' in tbl.colnames
+
+    def test_child_values_match_ratio(self, fixed_ref_setup):
+        """Child flux column must equal parent flux column times the fixed ratio."""
+        samples, args = fixed_ref_setup
+        tbl = make_parameter_table(samples, args)
+        parent_vals = np.asarray(tbl['flux_flux_parent'])
+        child_vals = np.asarray(tbl['flux_flux_child'])
+        np.testing.assert_allclose(child_vals, parent_vals * _FIXED_REF_RATIO, rtol=1e-6)
+
+    def test_make_parameter_table_percentiles_no_error(self, fixed_ref_setup):
+        """Percentile mode must also work for Fixed(ref:) flux."""
+        samples, args = fixed_ref_setup
+        tbl = make_parameter_table(samples, args, percentiles=np.array([0.16, 0.5, 0.84]))
+        assert len(tbl) == 3
+        parent_vals = np.asarray(tbl['flux_flux_parent'])
+        child_vals = np.asarray(tbl['flux_flux_child'])
+        np.testing.assert_allclose(child_vals, parent_vals * _FIXED_REF_RATIO, rtol=1e-6)
