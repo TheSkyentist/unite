@@ -279,11 +279,15 @@ class ContinuumConfiguration:
     ----------
     regions : list of ContinuumRegion, optional
         Continuum regions.  Will be sorted by ``low`` bound.
+    allow_overlap : bool, optional
+        If ``True``, suppress the warning when two regions overlap.
+        Overlapping contributions are always summed in the model regardless
+        of this flag.
 
     Raises
     ------
     ValueError
-        If any two regions overlap.
+        If any two regions share the same name.
 
     Examples
     --------
@@ -338,13 +342,18 @@ class ContinuumConfiguration:
     """
 
     def __init__(
-        self, regions: list[ContinuumRegion] | None = None, *, zorder: int = 0
+        self,
+        regions: list[ContinuumRegion] | None = None,
+        *,
+        zorder: int = 0,
+        allow_overlap: bool = False,
     ) -> None:
         self._regions: list[ContinuumRegion] = sorted(
             list(regions) if regions else [], key=lambda r: r.low
         )
         self.zorder: int = int(zorder)
-        self._check_overlaps()
+        if not allow_overlap:
+            self._check_overlaps()
         self._check_duplicate_region_names()
         self._resolved_params: list[dict[str, Parameter]] = self._resolve_params()
 
