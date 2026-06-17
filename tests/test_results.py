@@ -725,7 +725,9 @@ def fixed_ref_setup():
     z_tok = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
     fwhm_tok = line.FWHM('fwhm', prior=prior.Uniform(100, 1000))
     flux_parent = line.Flux('flux_parent', prior=prior.Uniform(0.0, 1.0))
-    flux_child = line.Flux('flux_child', prior=prior.Fixed(flux_parent * _FIXED_REF_RATIO))
+    flux_child = line.Flux(
+        'flux_child', prior=prior.Fixed(flux_parent * _FIXED_REF_RATIO)
+    )
 
     lc = line.LineConfiguration()
     lc.add_line(
@@ -751,12 +753,16 @@ def fixed_ref_setup():
     rng = np.random.default_rng(7)
     flux = (5.0 + rng.normal(0, 1, 80)) * flux_unit
     error = np.full(80, 1.0) * flux_unit
-    spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser, name='s')
+    spectrum = Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='s'
+    )
 
     spectra = Spectra([spectrum], redshift=0.0)
     spectra.prepare(lc)
     spectra.compute_scales(spectra.prepared_line_config)
-    model_fn, args = model.ModelBuilder(spectra.prepared_line_config, None, spectra).build()
+    model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, None, spectra
+    ).build()
     samples = Predictive(model_fn, num_samples=4)(random.PRNGKey(0), args)
     return samples, args
 
@@ -777,13 +783,19 @@ class TestFixedRefParam:
         tbl = make_parameter_table(samples, args)
         parent_vals = np.asarray(tbl['flux_flux_parent'])
         child_vals = np.asarray(tbl['flux_flux_child'])
-        np.testing.assert_allclose(child_vals, parent_vals * _FIXED_REF_RATIO, rtol=1e-6)
+        np.testing.assert_allclose(
+            child_vals, parent_vals * _FIXED_REF_RATIO, rtol=1e-6
+        )
 
     def test_make_parameter_table_percentiles_no_error(self, fixed_ref_setup):
         """Percentile mode must also work for Fixed(ref:) flux."""
         samples, args = fixed_ref_setup
-        tbl = make_parameter_table(samples, args, percentiles=np.array([0.16, 0.5, 0.84]))
+        tbl = make_parameter_table(
+            samples, args, percentiles=np.array([0.16, 0.5, 0.84])
+        )
         assert len(tbl) == 3
         parent_vals = np.asarray(tbl['flux_flux_parent'])
         child_vals = np.asarray(tbl['flux_flux_child'])
-        np.testing.assert_allclose(child_vals, parent_vals * _FIXED_REF_RATIO, rtol=1e-6)
+        np.testing.assert_allclose(
+            child_vals, parent_vals * _FIXED_REF_RATIO, rtol=1e-6
+        )

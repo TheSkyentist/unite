@@ -165,7 +165,9 @@ def make_parameter_table(
     def _add_param(pname: str, *, pct_arr: np.ndarray | None = None) -> None:
         prior = args.all_priors[pname]
         if isinstance(prior, Fixed):
-            arr = _resolve_fixed(prior, samples, args.name_to_token, _get_n_samples(samples))
+            arr = _resolve_fixed(
+                prior, samples, args.name_to_token, _get_n_samples(samples)
+            )
             if pct_arr is not None:
                 arr = np.percentile(arr, pct_arr * 100)
             table[pname] = _to_column(pname, arr)
@@ -518,10 +520,7 @@ def _get_n_samples(samples: dict[str, np.ndarray]) -> int:
 
 
 def _resolve_fixed(
-    prior: Fixed,
-    samples: dict,
-    name_to_token: dict,
-    n_samples: int,
+    prior: Fixed, samples: dict, name_to_token: dict, n_samples: int
 ) -> np.ndarray:
     """Evaluate a Fixed prior to an (n_samples,) array.
 

@@ -396,7 +396,7 @@ class Uniform(Prior):
     >>> Uniform(low=base_redshift, high=base_redshift + 0.1)
     """
 
-    def __init__(self, low: Bound = 0, high: Bound = 1) -> None:
+    def __init__(self, low: Bound | Parameter = 0, high: Bound | Parameter = 1) -> None:
         self.low = _normalize_bound(low)
         self.high = _normalize_bound(high)
 
@@ -441,7 +441,13 @@ class TruncatedNormal(Prior):
         Upper truncation bound.
     """
 
-    def __init__(self, loc: Bound, scale: float, low: Bound, high: Bound) -> None:
+    def __init__(
+        self,
+        loc: Bound | Parameter,
+        scale: float,
+        low: Bound | Parameter,
+        high: Bound | Parameter,
+    ) -> None:
         self.loc = _normalize_bound(loc)
         self.scale = float(scale)
         self.low = _normalize_bound(low)
