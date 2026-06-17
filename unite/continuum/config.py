@@ -352,6 +352,7 @@ class ContinuumConfiguration:
             list(regions) if regions else [], key=lambda r: r.low
         )
         self.zorder: int = int(zorder)
+        self.allow_overlap: bool = bool(allow_overlap)
         if not allow_overlap:
             self._check_overlaps()
         self._check_duplicate_region_names()
@@ -813,7 +814,9 @@ class ContinuumConfiguration:
             raise ValueError(msg)
 
         return ContinuumConfiguration(
-            list(self._regions) + list(other._regions), zorder=self.zorder
+            list(self._regions) + list(other._regions),
+            zorder=self.zorder,
+            allow_overlap=self.allow_overlap and other.allow_overlap,
         )
 
     def __repr__(self) -> str:

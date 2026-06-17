@@ -553,7 +553,11 @@ class Spectra:
                 if has_line:
                     kept.append(region)
             filtered_cont = (
-                ContinuumConfiguration(kept, zorder=filtered_cont.zorder)
+                ContinuumConfiguration(
+                    kept,
+                    zorder=filtered_cont.zorder,
+                    allow_overlap=filtered_cont.allow_overlap,
+                )
                 if kept
                 else None
             )
@@ -648,7 +652,9 @@ class Spectra:
                 if region_covered:
                     kept.append(region)
             filtered_cont: ContinuumConfiguration | None = ContinuumConfiguration(
-                kept, zorder=continuum_config.zorder
+                kept,
+                zorder=continuum_config.zorder,
+                allow_overlap=continuum_config.allow_overlap,
             )
         else:
             filtered_cont = None
