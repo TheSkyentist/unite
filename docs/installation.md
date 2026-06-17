@@ -63,9 +63,9 @@ from numpyro import infer
 
 from unite import line, model, prior
 from unite.continuum import ContinuumConfiguration, Linear
-from unite.disperser.generic import SimpleDisperser
+from unite.instrument.generic import SimpleDisperser
 from unite.results import make_hdul, make_parameter_table
-from unite.spectrum import Spectra, Spectrum
+from unite.spectrum import Spectra, from_edges
 
 # --- Simulate a spectrum ---
 rng = np.random.default_rng(42)
@@ -86,7 +86,7 @@ high = wavelength + 0.5 * np.gradient(wavelength)
 
 # --- Build the model ---
 disperser = SimpleDisperser(wavelength=wl, unit=u.AA, R=3000.0, name='sim')
-spectrum = Spectrum(low=low, high=high, flux=flux, error=error, disperser=disperser)
+spectrum = from_edges(low, high, flux, error, disperser)
 
 z = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
 fwhm = line.FWHM('fwhm', prior=prior.Uniform(1.0, 10.0))

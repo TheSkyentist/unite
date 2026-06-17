@@ -295,18 +295,23 @@ def from_DJA(
 
     δλ = np.diff(λ) / 2
     mid = λ[:-1] + δλ
-    edges = np.concatenate([λ[0:1] - δλ[0:1], mid, λ[-2:-1] + δλ[-2:-1]])
-    low = edges[:-1]
-    high = edges[1:]
 
-    mask = ~spec['flux'].mask
-    low = low[mask]
-    high = high[mask]
-    fλ = fλ[mask]
-    eλ = eλ[mask]
+    low = u.Quantity(np.empty(len(λ)), unit=λ.unit)
+    low[0:1] = λ[0:1] - δλ[0:1]
+    low[1:] = mid
 
-    return Spectrum(
-        low=low, high=high, flux=fλ, error=eλ, disperser=disperser, name=name
+    high = u.Quantity(np.empty(len(λ)), unit=λ.unit)
+    high[:-1] = mid
+    high[-1:] = λ[-2:-1] + δλ[-2:-1]
+
+    return from_arrays(
+        low=low,
+        high=high,
+        flux=fλ,
+        error=eλ,
+        disperser=disperser,
+        mask=np.asarray(spec['flux'].mask),
+        name=name,
     )
 
 
@@ -383,14 +388,9 @@ def from_sdss_fits(
 
     if 'and_mask' in data.colnames:
         and_mask = np.asarray(data['and_mask'], dtype=int)
-        good_pixels = (and_mask == 0) & (ivar > 0)
+        bad_pixels = (and_mask != 0) | (ivar <= 0)
     else:
-        good_pixels = ivar > 0
-
-    low = low[good_pixels]  # type: ignore[index]
-    high = high[good_pixels]  # type: ignore[index]
-    flux = flux[good_pixels]  # type: ignore[index]
-    error = error[good_pixels]  # type: ignore[index]
+        bad_pixels = ivar <= 0
 
     wdisp = np.asarray(data['wdisp'], dtype=float)
     disperser._wavelength_grid = jnp.asarray(wavelength, dtype=float)
@@ -399,8 +399,14 @@ def from_sdss_fits(
         jnp.ndarray, jnp.gradient(disperser._wavelength_grid)
     )
 
-    return Spectrum(
-        low=low, high=high, flux=flux, error=error, disperser=disperser, name=name
+    return from_arrays(
+        low=low,
+        high=high,
+        flux=flux,
+        error=error,
+        disperser=disperser,
+        mask=bad_pixels,
+        name=name,
     )
 
 
@@ -569,12 +575,13 @@ def from_desi_fits(
 
             spec_name = f'{name}_{arm.lower()}' if name else arm.lower()
             result.append(
-                Spectrum(
-                    low=low[good],
-                    high=high[good],
-                    flux=flux_1d[good] * flux_unit,
-                    error=error_vals[good] * flux_unit,
+                from_arrays(
+                    low=low,
+                    high=high,
+                    flux=flux_1d * flux_unit,
+                    error=error_vals * flux_unit,
                     disperser=disp,
+                    mask=~good,
                     name=spec_name,
                 )
             )

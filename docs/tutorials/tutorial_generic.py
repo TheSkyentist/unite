@@ -59,7 +59,6 @@ pyplot.style.use('unite.mplstyle')
 
 from unite.instrument import RScale
 from unite.instrument.generic import GenericDisperser
-from unite.spectrum import Spectrum
 
 WL_MIN, WL_MAX, N_PIX = 6200.0, 6900.0, 500
 dlam_pix = (WL_MAX - WL_MIN) / (N_PIX - 1)  # Å/pixel (uniform grid)
@@ -90,13 +89,14 @@ print(disperser)
 # * A gently sloping linear continuum
 # * Gaussian noise at S/N ≈ 5 per pixel on the continuum
 #
-# :class:`~unite.spectrum.Spectrum` takes pixel *edges* (``low``,
-# ``high``) rather than centers, which ``unite`` uses for exact pixel
-# integration.  Flux and error must be :class:`~astropy.units.Quantity` with
-# f-lambda units.
+# :func:`~unite.spectrum.from_edges` constructs a spectrum from pixel bin
+# edges (``low``, ``high``), which ``unite`` uses for exact pixel integration.
+# Flux and error must be :class:`~astropy.units.Quantity` with f-lambda units.
+# Use :func:`~unite.spectrum.from_centers` when only pixel centres are
+# available, or :func:`~unite.spectrum.from_arrays` for a keyword-only
+# interface that also accepts a bad-pixel ``mask``.
 #
-# See :doc:`../usage/instrument` (Generic Dispersers section) for the full
-# ``Spectrum`` API.
+# See :doc:`../usage/instrument` for the full loader reference.
 
 rng = np.random.default_rng(0)
 
@@ -139,14 +139,7 @@ half = 0.5 * dlam_pix
 low_q = (wl - half) * u.AA
 high_q = (wl + half) * u.AA
 
-spec = Spectrum(
-    low=low_q,
-    high=high_q,
-    flux=flux_q,
-    error=error_q,
-    disperser=disperser,
-    name='custom',
-)
+spec = spectrum.from_edges(low_q, high_q, flux_q, error_q, disperser, name='custom')
 print(spec)
 
 # %%
