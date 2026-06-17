@@ -148,7 +148,7 @@ class TestConvenienceClasses:
     """Tests for per-grating convenience subclasses."""
 
     @pytest.mark.parametrize(
-        'cls,name', zip(_CONVENIENCE_CLASSES, _CONVENIENCE_NAMES, strict=True)
+        'cls,name', list(zip(_CONVENIENCE_CLASSES, _CONVENIENCE_NAMES, strict=True))
     )
     def test_construction(self, cls, name):
         d = cls()
