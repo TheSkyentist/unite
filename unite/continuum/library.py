@@ -12,6 +12,7 @@ import numpy as np
 from astropy import constants as const, units as u
 from astropy.units import Quantity
 from jax import Array
+from jax.scipy.special import wofz
 from jax.typing import ArrayLike
 
 from unite._utils import (
@@ -26,7 +27,6 @@ from unite.continuum.functions import (
     chebval,
     planck_function,
 )
-from jax.scipy.special import wofz
 from unite.prior import Fixed, Prior, Uniform
 
 if TYPE_CHECKING:
