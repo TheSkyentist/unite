@@ -244,6 +244,48 @@ def cfg_single_grating_with_absorber():
     return lc, cc
 
 
+def cfg_single_grating_voigt():
+    """5 PseudoVoigt lines (4 narrow + 1 broad) + linear continuum.
+
+    Mirrors :func:`cfg_single_grating` but uses PseudoVoigt profiles so that
+    ``evaluate_voigt`` (the Faddeeva / wofz path) is exercised in convolution
+    mode.  Shared ``fwhm_lorentz`` tokens across the narrow group and a
+    separate one for the broad component.
+    """
+    lc = line.LineConfiguration()
+    z_narrow = line.Redshift(prior=prior.Uniform(-0.005, 0.005))
+    fwhm_g_narrow = line.FWHM(prior=prior.Uniform(100.0, 500.0))
+    fwhm_l_narrow = line.FWHM(prior=prior.Uniform(50.0, 300.0))
+    for name, centre in [
+        ('H_alpha_narrow', 6563.0),
+        ('NII_6548', 6548.0),
+        ('NII_6584', 6584.0),
+        ('SII_6717', 6717.0),
+    ]:
+        lc.add_line(
+            name,
+            center=centre * u.AA,
+            profile='pseudovoigt',
+            redshift=z_narrow,
+            fwhm_gauss=fwhm_g_narrow,
+            fwhm_lorentz=fwhm_l_narrow,
+            flux=line.Flux(prior=prior.Uniform(0.0, 200.0)),
+        )
+    lc.add_line(
+        'H_alpha_broad',
+        center=6563.0 * u.AA,
+        profile='pseudovoigt',
+        redshift=line.Redshift(prior=prior.Uniform(-0.01, 0.01)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(1000.0, 5000.0)),
+        fwhm_lorentz=line.FWHM(prior=prior.Uniform(200.0, 1000.0)),
+        flux=line.Flux(prior=prior.Uniform(0.0, 300.0)),
+    )
+    cc = ContinuumConfiguration(
+        [ContinuumRegion(6400.0 * u.AA, 6800.0 * u.AA, Linear())]
+    )
+    return lc, cc
+
+
 def cfg_multi_grating():
     """4 narrow + 1 absorption, intended for use with two spectra."""
     lc = line.LineConfiguration()

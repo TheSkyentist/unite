@@ -17,7 +17,7 @@ from typing import Final
 import jax.numpy as jnp
 import numpy as np
 from jax import Array, config, jit
-from jax.scipy.special import erf, erfc, owens_t
+from jax.scipy.special import erf, erfc, owens_t, wofz
 from jax.typing import ArrayLike
 
 # Conversion: FWHM to sigma for the half-variance parametrization of erf.
@@ -815,101 +815,20 @@ def _voigt_ida_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
     return gauss + lorentz + irrat + hyper
 
 
-# -------------------------------------------------------------------
-# Rational Faddeeva Approximation
-# Humlíck (1982), JQSRT, 27, 4, 437-444
-# DOI: 10.1016/0022-4073(82)90078-4
-# -------------------------------------------------------------------
-
-
-def _horner(x, *coeffs):
-    """Evaluate polynomial p(x) via Horner's method.
-
-    Coefficients are ordered from highest to lowest degree,
-    i.e. ``coeffs = [a_n, a_{n-1}, ..., a_1, a_0]`` evaluates
-    ``p(x) = a_n x^n + ... + a_1 x + a_0``.
-    """
-    result = coeffs[0]
-    for c in coeffs[1:]:
-        result = result * x + c
-    return result
-
-
-def _faddeeva_humlicek(z: Array) -> Array:
-    """Humlicek (1982) W4 rational approximation to the Faddeeva function w(z).
-
-    Computes w(z) = exp(-z²) erfc(-iz) for complex z wi_absth Im(z) >= 0.
-    Accurate to ~1e-4 relative error across the upper half-plane.
-
-    The four regions are selected on S = |Re(z)| + Im(z) and a near-axis
-    condition, matching Humlicek's original partitioning.
-
-    Parameters
-    ----------
-    z : Array
-        Complex array wi_absth Im(z) >= 0.
-
-    Returns
-    -------
-    Array
-        w(z) (complex).
-
-    References
-    ----------
-    Humlicek (1982), J. Quant. Spectrosc. Radiat. Transfer 27, 437-444.
-    """
-    x = jnp.real(z)
-    y = jnp.imag(z)
-    s = jnp.abs(x) + y
-
-    t = y - 1j * x  # T = -iz
-    t2 = t * t  # T² = -z²
-    u = -t2  # u = z²; substituting u = -t2 makes all region-4 coefficients positive
-
-    # Region 1: S >= 15 — single-term asymptotic
-    w1 = t * 0.5641896 / (t2 + 0.5)
-
-    # Region 2: S >= 5.5
-    w2 = t * _horner(t2, 0.5641896, 1.410474) / _horner(t2, 1.0, 3.0, 0.75)
-
-    # Region 3: Y >= 0.195|X| - 0.176 (and S < 5.5)
-    w3 = _horner(t, 0.5642236, 3.778987, 11.96482, 20.20933, 16.4955) / _horner(
-        t, 1.0, 6.699398, 21.69274, 39.27121, 38.82363, 16.4955
-    )
-
-    # Region 4: small S, near real axis
-    w4_num = _horner(
-        u, 0.56419, 1.320522, 35.7668, 219.031, 1540.787, 3321.99, 36183.31
-    )
-    w4_den = _horner(
-        u, 1.0, 1.841439, 61.57037, 364.2191, 2186.181, 9022.228, 24322.84, 32066.6
-    )
-    w4 = jnp.exp(t2) - t * w4_num / w4_den  # exp(T²) = exp(-z²)
-
-    reg3_cond = (0.195 * jnp.abs(x) - 0.176) <= y
-    out = jnp.where(s >= 15, w1, jnp.where(s >= 5.5, w2, jnp.where(reg3_cond, w3, w4)))
-    return out
-
-
 def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
     """Evaluate a normalised Voigt profile at wavelength points via the Faddeeva function.
 
     Computes the exact Voigt profile (convolution of Gaussian and Lorentzian)
-    using Re[w(z)] where w is the Faddeeva function approximated by the
-    Humlicek (1982) W4 rational scheme (~1e-4 relative error). The LSF
-    Gaussian is added in quadrature to the intrinsic Gaussian wi_absdth before
+    using Re[w(z)] where w is the Faddeeva function (``jax.scipy.special.wofz``).
+    The LSF Gaussian is added in quadrature to the intrinsic Gaussian width before
     computing the Voigt parameters.
 
     Parameters
     ----------
-    wavelength : ArrayLike
-        Wavelength points at which to evaluate the profile.
-    center : ArrayLike
-        Line center wavelength.
-    lsf_fwhm : ArrayLike
-        Instrumental line spread function FWHM at the line center.
+    x : ArrayLike
+        Wavelength offsets at which to evaluate the profile.
     fwhm_g : ArrayLike
-        Intrinsic Gaussian component FWHM.
+        Total Gaussian component FWHM (intrinsic + LSF in quadrature).
     fwhm_l : ArrayLike
         Lorentzian component FWHM (= 2 * Lorentzian HWHM).
 
@@ -917,14 +836,8 @@ def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> A
     -------
     Array
         Normalised profile value at each wavelength point.
-
-    References
-    ----------
-    Humlicek (1982), J. Quant. Spectrosc. Radiat. Transfer 27, 437-444.
     """
-    # Gaussian sigma (standard deviation) from total Gaussian FWHM
     sigma_g = _fwhm_to_sigma(fwhm_g)
-    # Lorentzian HWHM
     gamma_l = 0.5 * fwhm_l
 
     # Voigt complex argument: z = (dx + i*gamma) / (sigma * sqrt(2))
@@ -932,7 +845,7 @@ def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> A
     z = (x + 1j * gamma_l) / denom
 
     # Voigt profile: V(x) = Re[w(z)] / (sigma * sqrt(2*pi))
-    return jnp.real(_faddeeva_humlicek(z)) / (sigma_g * np.sqrt(2.0 * np.pi))
+    return jnp.real(wofz(z)) / (sigma_g * np.sqrt(2.0 * np.pi))
 
 
 # -------------------------------------------------------------------
@@ -989,9 +902,8 @@ def evaluate_voigt(
 ) -> Array:
     """Evaluate a normalised Voigt profile at wavelength points via the Faddeeva function.
 
-    Computes the exact Voigt profile using the Humlicek (1982) W4 rational approximation
-    to the Faddeeva function, which is accurate to ~1e-4 relative error across the upper
-    half-plane.
+    Computes the exact Voigt profile (convolution of Gaussian and Lorentzian)
+    using Re[w(z)] where w is ``jax.scipy.special.wofz``.
 
     Parameters
     ----------
@@ -1088,7 +1000,7 @@ def integrate_skewVoigt(
     evaluated at pixel midpoints.  This matches the prior implementation
     semantically (exact symmetric integration, midpoint rule on the skew
     factor only) while fitting the edges-only contract.  Avoiding the
-    Faddeeva W4 PDF gives roughly an order-of-magnitude speedup over a
+    Faddeeva PDF gives roughly an order-of-magnitude speedup over a
     pure cumsum-midpoint construction.
 
     Parameters

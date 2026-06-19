@@ -26,6 +26,7 @@ from benchmarks._helpers import (
     cfg_minimal,
     cfg_multi_grating,
     cfg_single_grating,
+    cfg_single_grating_voigt,
     cfg_single_grating_with_absorber,
     make_spectrum,
     one_prior_draw,
@@ -80,6 +81,28 @@ def single_grating_absorber_bench() -> Bench:
     spec = make_spectrum(6400, 6800, 400, 'sg_abs')
     spectra = Spectra([spec], redshift=0.0)
     model_fn, args = build_model(lc, cc, spectra)
+    sample = one_prior_draw(model_fn, args)
+    return Bench(model_fn=model_fn, args=args, sample=sample)
+
+
+@pytest.fixture(scope='session')
+def single_grating_voigt_bench() -> Bench:
+    """5 PseudoVoigt lines + linear continuum, 1 spectrum, ~400 pixels."""
+    lc, cc = cfg_single_grating_voigt()
+    spec = make_spectrum(6400, 6800, 400, 'sg_voigt')
+    spectra = Spectra([spec], redshift=0.0)
+    model_fn, args = build_model(lc, cc, spectra)
+    sample = one_prior_draw(model_fn, args)
+    return Bench(model_fn=model_fn, args=args, sample=sample)
+
+
+@pytest.fixture(scope='session', params=INTEGRATION_MODES)
+def single_grating_voigt_by_mode(request) -> Bench:
+    """PseudoVoigt single-grating built under each integration mode."""
+    lc, cc = cfg_single_grating_voigt()
+    spec = make_spectrum(6400, 6800, 400, f'sg_voigt_{request.param}')
+    spectra = Spectra([spec], redshift=0.0)
+    model_fn, args = build_model(lc, cc, spectra, integration_mode=request.param)
     sample = one_prior_draw(model_fn, args)
     return Bench(model_fn=model_fn, args=args, sample=sample)
 

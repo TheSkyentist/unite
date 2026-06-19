@@ -26,7 +26,7 @@ from unite.continuum.functions import (
     chebval,
     planck_function,
 )
-from unite.line.functions import _faddeeva_humlicek
+from jax.scipy.special import wofz
 from unite.prior import Fixed, Prior, Uniform
 
 if TYPE_CHECKING:
@@ -2136,11 +2136,10 @@ _K_LYA: float = (
 def _tau_dla(wave_rest_aa: ArrayLike, nhi: ArrayLike, b_kms: ArrayLike) -> Array:
     """Compute the DLA Lyman-alpha optical depth at rest-frame wavelengths.
 
-    Uses the Humlicek W4 Faddeeva approximation for the Voigt profile H(a, x).
     The cross-section is evaluated as ``sigma = K_LYA / delta_nu_D * H(a, x)``
     where ``a = A_Lya / (4*pi*delta_nu_D)`` is the dimensionless damping
-    parameter and ``H(a, x) = Re[w(x + ia)]`` is computed via the Faddeeva
-    function.
+    parameter and ``H(a, x) = Re[w(x + ia)]`` is computed via
+    ``jax.scipy.special.wofz``.
 
     Parameters
     ----------
@@ -2159,7 +2158,7 @@ def _tau_dla(wave_rest_aa: ArrayLike, nhi: ArrayLike, b_kms: ArrayLike) -> Array
     # wavelengths cancel: keep in Å; C_KMS/b_kms is also dimensionless
     x = C_KMS * (_LYA_AA - wave_rest_aa) / (wave_rest_aa * b_kms)
     a = _A_LYA * _LYA_KM / (4.0 * jnp.pi * b_kms)
-    voigt_h = jnp.real(_faddeeva_humlicek(cast(Array, x + 1j * a)))
+    voigt_h = jnp.real(wofz(cast(Array, x + 1j * a)))
     sigma = _K_LYA * _LYA_KM / b_kms * voigt_h  # cm^2
     return cast(Array, nhi * sigma)  # NHI [cm^-2] * sigma [cm^2]
 
@@ -2179,7 +2178,7 @@ class DLAPowerLaw(ContinuumForm):
 
         λ_rest = λ_obs / (1 + z_sys + redshift)
 
-    The Voigt optical depth ``τ_DLA`` uses the Humlicek W4 approximation with
+    The Voigt optical depth ``τ_DLA`` uses ``jax.scipy.special.wofz`` with
     the total Doppler parameter ``b = sqrt(b_turb^2 + 2kT/m_p)``.
 
     This form has no constructor parameters.
