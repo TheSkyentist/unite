@@ -118,6 +118,47 @@ def test_mcmc_single_grating(benchmark, single_grating_bench):
 
 
 # ----------------------------------------------------------------------
+# PseudoVoigt profile — exercises the Faddeeva / wofz path
+# ----------------------------------------------------------------------
+
+
+def test_logp_single_grating_voigt(benchmark, single_grating_voigt_bench):
+    """log_density on single-grating with PseudoVoigt profiles (analytic mode)."""
+    fn = _make_logp(
+        single_grating_voigt_bench.model_fn, single_grating_voigt_bench.args
+    )
+    fn(single_grating_voigt_bench.sample).block_until_ready()
+    benchmark(lambda: block(fn(single_grating_voigt_bench.sample)))
+
+
+def test_logp_grad_single_grating_voigt(benchmark, single_grating_voigt_bench):
+    """value+grad on single-grating with PseudoVoigt profiles (analytic mode)."""
+    fn = _make_logp_grad(
+        single_grating_voigt_bench.model_fn, single_grating_voigt_bench.args
+    )
+    block(fn(single_grating_voigt_bench.sample))
+    benchmark(lambda: block(fn(single_grating_voigt_bench.sample)))
+
+
+def test_logp_voigt_by_mode(benchmark, single_grating_voigt_by_mode):
+    """log_density on PseudoVoigt single-grating under each integration mode."""
+    fn = _make_logp(
+        single_grating_voigt_by_mode.model_fn, single_grating_voigt_by_mode.args
+    )
+    fn(single_grating_voigt_by_mode.sample).block_until_ready()
+    benchmark(lambda: block(fn(single_grating_voigt_by_mode.sample)))
+
+
+def test_logp_grad_voigt_by_mode(benchmark, single_grating_voigt_by_mode):
+    """value+grad on PseudoVoigt single-grating under each integration mode."""
+    fn = _make_logp_grad(
+        single_grating_voigt_by_mode.model_fn, single_grating_voigt_by_mode.args
+    )
+    block(fn(single_grating_voigt_by_mode.sample))
+    benchmark(lambda: block(fn(single_grating_voigt_by_mode.sample)))
+
+
+# ----------------------------------------------------------------------
 # Integration modes — parametrized over analytic / convolution
 # ----------------------------------------------------------------------
 
