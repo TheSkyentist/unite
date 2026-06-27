@@ -841,19 +841,17 @@ def freeze_from_samples(
     samples: dict[str, np.ndarray],
     args: ModelArgs,
     *,
-    cenfunc: Callable[[np.ndarray], float] | None = None,
-    mode: str = 'median',
+    cenfunc: str | Callable[[np.ndarray], float] = 'median',
 ) -> dict[str, Fixed]:
     """Convert posterior samples to :class:`~unite.prior.Fixed` priors.
 
     For each parameter in *args*, wraps its central value in a
     :class:`~unite.prior.Fixed` prior.  Free parameters are summarised by
-    the chosen *mode* (or a custom *cenfunc*) applied to their posterior
-    samples.  Parameters that were already :class:`~unite.prior.Fixed` in the
-    original fit (such as ``norm_wav_a``) are passed through with their
-    constant value, making the returned dict a complete set of frozen priors
-    -- no separate lookup of region centres or other fixed quantities is
-    needed.
+    *cenfunc* applied to their posterior samples.  Parameters that were already
+    :class:`~unite.prior.Fixed` in the original fit (such as ``norm_wav_a``)
+    are passed through with their constant value, making the returned dict a
+    complete set of frozen priors -- no separate lookup of region centres or
+    other fixed quantities is needed.
 
     Intended for re-fitting the **same** observation with a different model
     (e.g. adding or removing a line component while holding kinematics fixed).
@@ -868,13 +866,13 @@ def freeze_from_samples(
     args : ModelArgs
         Model arguments from :meth:`~unite.model.ModelBuilder.build` for
         the **original** fit.
-    cenfunc : callable, optional
-        Function mapping a 1-D ``numpy.ndarray`` to a scalar central value.
-        Cannot be combined with a non-default *mode*.  Use *mode* for the
-        common presets; supply *cenfunc* only when you need custom logic.
-    mode : str, optional
-        Preset for choosing the central value.  Default ``'median'``.
-        Options:
+    cenfunc : str or callable, optional
+        Central-value function.  Default ``'median'``.
+
+        If a **callable**, it is called with a 1-D ``numpy.ndarray`` of
+        posterior samples and must return a scalar.
+
+        If a **string**, recognised presets are:
 
         ``'median'``
             Coordinate-wise posterior median.
@@ -902,13 +900,13 @@ def freeze_from_samples(
     Raises
     ------
     ValueError
-        If both *cenfunc* and a non-default *mode* are provided.
-    ValueError
-        If ``mode='map'`` is requested but ``'log_prob'`` is not in
+        If ``cenfunc='map'`` is requested but ``'log_prob'`` is not in
         *samples*.
     ValueError
-        If ``mode='mle'`` is requested but ``'log_likelihood'`` is not in
+        If ``cenfunc='mle'`` is requested but ``'log_likelihood'`` is not in
         *samples*.
+    ValueError
+        If *cenfunc* is an unrecognised string.
 
     Examples
     --------
@@ -925,46 +923,48 @@ def freeze_from_samples(
     a ``'log_prob'`` key (produced automatically by
     :meth:`ModelBuilder.fit`):
 
-    >>> frozen_map = freeze_from_samples(samples, args, mode='map')
+    >>> frozen_map = freeze_from_samples(samples, args, cenfunc='map')
 
     Use the MLE sample (highest total log-likelihood):
 
-    >>> frozen_mle = freeze_from_samples(samples, args, mode='mle')
+    >>> frozen_mle = freeze_from_samples(samples, args, cenfunc='mle')
 
     Use the mean instead of the median:
 
-    >>> frozen = freeze_from_samples(samples, args, mode='mean')
+    >>> frozen = freeze_from_samples(samples, args, cenfunc='mean')
+
+    Pass a callable for custom logic (e.g. a high percentile):
+
+    >>> import numpy as np
+    >>> frozen = freeze_from_samples(samples, args, cenfunc=lambda x: np.percentile(x, 75))
     """
-    _valid_modes = frozenset({'median', 'mean', 'map', 'mle'})
-    if cenfunc is not None and mode != 'median':
-        raise ValueError(
-            "Specify either 'mode' or 'cenfunc', not both. "
-            f'Got mode={mode!r} and a custom cenfunc.'
-        )
-    if cenfunc is not None:
+    _valid_presets = frozenset({'median', 'mean', 'map', 'mle'})
+    if not isinstance(cenfunc, str):
         _cenfunc: Callable[[np.ndarray], float] = cenfunc
-    elif mode == 'median':
+    elif cenfunc == 'median':
         _cenfunc = np.median
-    elif mode == 'mean':
+    elif cenfunc == 'mean':
         _cenfunc = np.mean
-    elif mode == 'map':
+    elif cenfunc == 'map':
         if 'log_prob' not in samples:
             raise ValueError(
-                "mode='map' requires 'log_prob' in samples. "
+                "cenfunc='map' requires 'log_prob' in samples. "
                 'Use ModelBuilder.fit() which computes this automatically.'
             )
         _best_map = int(np.argmax(np.asarray(samples['log_prob'])))
         _cenfunc = lambda x, _b=_best_map: x[_b]  # noqa: E731
-    elif mode == 'mle':
+    elif cenfunc == 'mle':
         if 'log_likelihood' not in samples:
             raise ValueError(
-                "mode='mle' requires 'log_likelihood' in samples. "
+                "cenfunc='mle' requires 'log_likelihood' in samples. "
                 'Use ModelBuilder.fit() which computes this automatically.'
             )
         _best_mle = int(np.argmax(np.asarray(samples['log_likelihood'])))
         _cenfunc = lambda x, _b=_best_mle: x[_b]  # noqa: E731
     else:
-        raise ValueError(f'Unknown mode {mode!r}. Valid modes: {sorted(_valid_modes)}.')
+        raise ValueError(
+            f'Unknown cenfunc preset {cenfunc!r}. Valid presets: {sorted(_valid_presets)}.'
+        )
 
     result: dict[str, Fixed] = {}
     n_samples = _get_n_samples(samples)

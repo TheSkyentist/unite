@@ -198,7 +198,7 @@ print(t1)
 # to the region centre) therefore appears in ``frozen`` with its exact value,
 # so Fit 2 can pin it without any manual lookup.
 #
-# The default ``mode='median'`` summarises each free parameter's
+# The default ``cenfunc='median'`` summarises each free parameter's
 # posterior independently.  For correlated parameters (e.g. continuum
 # ``scale_a`` and ``angle_a``), the joint MAP sample is more consistent:
 
@@ -207,8 +207,8 @@ print('Frozen site names:', sorted(frozen.keys()))
 print(f'norm_wav_a = {frozen['norm_wav_a'].resolved_value({}):.1f} AA')
 
 # MAP alternative: use the sample with the highest log posterior.
-# mode='map' requires 'log_prob' in samples, which ModelBuilder.fit() always provides.
-frozen_map = results.freeze_from_samples(samples1, args1, mode='map')
+# cenfunc='map' requires 'log_prob' in samples, which ModelBuilder.fit() always provides.
+frozen_map = results.freeze_from_samples(samples1, args1, cenfunc='map')
 print(
     f'MAP scale_a = {frozen_map['scale_a'].resolved_value({}):.4f}  '
     f'(median = {frozen['scale_a'].resolved_value({}):.4f})'

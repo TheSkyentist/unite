@@ -853,20 +853,20 @@ class TestFreezeFromSamples:
             expected = float(np.median(samples[pname]))
             np.testing.assert_allclose(fp.resolved_value({}), expected, rtol=1e-6)
 
-    def test_mode_mean(self, simple_setup):
-        """mode='mean' — free params must equal the mean."""
+    def test_cenfunc_mean_string(self, simple_setup):
+        """cenfunc='mean' — free params must equal the mean."""
         from unite.prior import Fixed
 
         samples, args = simple_setup
-        frozen = freeze_from_samples(samples, args, mode='mean')
+        frozen = freeze_from_samples(samples, args, cenfunc='mean')
         for pname, fp in frozen.items():
             if isinstance(args.all_priors[pname], Fixed):
                 continue  # literal Fixed — value is the constant, not from samples
             expected = float(np.mean(samples[pname]))
             np.testing.assert_allclose(fp.resolved_value({}), expected, rtol=1e-6)
 
-    def test_cenfunc_mean(self, simple_setup):
-        """cenfunc=np.mean is still accepted as a custom callable."""
+    def test_cenfunc_callable_mean(self, simple_setup):
+        """cenfunc=np.mean (callable) produces coordinate-wise means."""
         from unite.prior import Fixed
 
         samples, args = simple_setup
@@ -877,8 +877,8 @@ class TestFreezeFromSamples:
             expected = float(np.mean(samples[pname]))
             np.testing.assert_allclose(fp.resolved_value({}), expected, rtol=1e-6)
 
-    def test_mode_map(self, simple_setup):
-        """mode='map' selects the sample with the highest log_prob."""
+    def test_cenfunc_map(self, simple_setup):
+        """cenfunc='map' selects the sample with the highest log_prob."""
         from unite.prior import Fixed
 
         samples, args = simple_setup
@@ -887,7 +887,7 @@ class TestFreezeFromSamples:
         s = dict(samples)
         s['log_prob'] = fake_log_prob
         best_idx = int(np.argmax(fake_log_prob))
-        frozen = freeze_from_samples(s, args, mode='map')
+        frozen = freeze_from_samples(s, args, cenfunc='map')
         assert all(isinstance(v, Fixed) for v in frozen.values())
         for pname, fp in frozen.items():
             if isinstance(args.all_priors[pname], Fixed):
@@ -896,8 +896,8 @@ class TestFreezeFromSamples:
                 fp.resolved_value({}), float(samples[pname][best_idx]), rtol=1e-6
             )
 
-    def test_mode_mle(self, simple_setup):
-        """mode='mle' selects the sample with the highest log_likelihood."""
+    def test_cenfunc_mle(self, simple_setup):
+        """cenfunc='mle' selects the sample with the highest log_likelihood."""
         from unite.prior import Fixed
 
         samples, args = simple_setup
@@ -906,7 +906,7 @@ class TestFreezeFromSamples:
         s = dict(samples)
         s['log_likelihood'] = fake_ll
         best_idx = int(np.argmax(fake_ll))
-        frozen = freeze_from_samples(s, args, mode='mle')
+        frozen = freeze_from_samples(s, args, cenfunc='mle')
         assert all(isinstance(v, Fixed) for v in frozen.values())
         for pname, fp in frozen.items():
             if isinstance(args.all_priors[pname], Fixed):
@@ -915,32 +915,26 @@ class TestFreezeFromSamples:
                 fp.resolved_value({}), float(samples[pname][best_idx]), rtol=1e-6
             )
 
-    def test_mode_map_missing_log_prob(self, simple_setup):
-        """mode='map' raises ValueError when log_prob is absent."""
+    def test_cenfunc_map_missing_log_prob(self, simple_setup):
+        """cenfunc='map' raises ValueError when log_prob is absent."""
         samples, args = simple_setup
         with pytest.raises(ValueError, match='log_prob'):
-            freeze_from_samples(samples, args, mode='map')
+            freeze_from_samples(samples, args, cenfunc='map')
 
-    def test_mode_mle_missing_log_likelihood(self, simple_setup):
-        """mode='mle' raises ValueError when log_likelihood is absent."""
+    def test_cenfunc_mle_missing_log_likelihood(self, simple_setup):
+        """cenfunc='mle' raises ValueError when log_likelihood is absent."""
         samples, args = simple_setup
         with pytest.raises(ValueError, match='log_likelihood'):
-            freeze_from_samples(samples, args, mode='mle')
+            freeze_from_samples(samples, args, cenfunc='mle')
 
-    def test_cenfunc_and_mode_conflict(self, simple_setup):
-        """Providing both cenfunc and non-default mode raises ValueError."""
+    def test_cenfunc_unknown_string(self, simple_setup):
+        """An unrecognised cenfunc string raises ValueError."""
         samples, args = simple_setup
-        with pytest.raises(ValueError, match='cenfunc'):
-            freeze_from_samples(samples, args, cenfunc=np.mean, mode='mean')
+        with pytest.raises(ValueError, match='Unknown cenfunc'):
+            freeze_from_samples(samples, args, cenfunc='bogus')
 
-    def test_unknown_mode(self, simple_setup):
-        """An unrecognised mode string raises ValueError."""
-        samples, args = simple_setup
-        with pytest.raises(ValueError, match='Unknown mode'):
-            freeze_from_samples(samples, args, mode='bogus')
-
-    def test_custom_cenfunc_argmax(self, simple_setup):
-        """Custom cenfunc that picks argmax index produces valid Fixed priors."""
+    def test_cenfunc_callable_argmax(self, simple_setup):
+        """cenfunc callable that picks a fixed index produces valid Fixed priors."""
         from unite.prior import Fixed
 
         samples, args = simple_setup

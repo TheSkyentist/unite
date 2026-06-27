@@ -331,27 +331,28 @@ other fixed quantities is needed.
 
 ```python
 from unite.results import freeze_from_samples
+import numpy as np
 
 # Default: coordinate-wise posterior median
 frozen = freeze_from_samples(samples, args)
 
 # Coordinate-wise posterior mean
-frozen = freeze_from_samples(samples, args, mode='mean')
+frozen = freeze_from_samples(samples, args, cenfunc='mean')
 
 # MAP sample — single draw with the highest log posterior.
 # Requires 'log_prob' in samples (added automatically by ModelBuilder.fit()).
-frozen = freeze_from_samples(samples, args, mode='map')
+frozen = freeze_from_samples(samples, args, cenfunc='map')
 
 # MLE sample — single draw with the highest total log-likelihood.
 # Requires 'log_likelihood' in samples (added automatically by ModelBuilder.fit()).
-frozen = freeze_from_samples(samples, args, mode='mle')
+frozen = freeze_from_samples(samples, args, cenfunc='mle')
 
-# Custom function: any callable (array → scalar)
-import numpy as np
+# Custom callable (e.g. a high percentile)
 frozen = freeze_from_samples(samples, args, cenfunc=lambda x: np.percentile(x, 75))
 ```
 
-The `mode` and `cenfunc` arguments are mutually exclusive — supply at most one.
+`cenfunc` accepts either a preset string (`'median'`, `'mean'`, `'map'`, `'mle'`) or
+any callable that maps a 1-D array to a scalar.
 
 ### Using the frozen dict
 
