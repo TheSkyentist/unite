@@ -827,15 +827,24 @@ class ModelBuilder:
         -------
         tuple
             ``(samples, model_args)`` where ``samples`` is a dictionary with
-            parameter names as keys and shape ``(num_chains, num_samples)`` per
-            parameter, and ``model_args`` is the :class:`ModelArgs` bundle.
+            parameter names as keys and shape ``(num_chains * num_samples,)``
+            per parameter, and ``model_args`` is the :class:`ModelArgs` bundle.
+            Two additional diagnostic keys are always present:
+
+            * ``'log_prob'`` — log joint probability (log-likelihood + log-prior)
+              for each sample; proportional to log-posterior up to a constant.
+              Use ``np.argmax(samples['log_prob'])`` to find the MAP sample.
+            * ``'log_likelihood'`` — sum of per-pixel Normal log-probabilities
+              across all spectra for each sample.
 
         Examples
         --------
         >>> samples, model_args = builder.fit(num_warmup=200, num_samples=500, num_chains=4)
         """
         import jax
+        import numpy as _np
         from numpyro import infer
+        from numpyro.infer.util import log_likelihood as _npy_ll
 
         model_fn, model_args = self.build(
             integration_mode=integration_mode, n_super=n_super
@@ -847,8 +856,20 @@ class ModelBuilder:
             num_chains=num_chains,
             progress_bar=progress_bar,
         )
-        mcmc.run(jax.random.PRNGKey(seed), model_args)
+        mcmc.run(
+            jax.random.PRNGKey(seed), model_args, extra_fields=('potential_energy',)
+        )
         samples = mcmc.get_samples()
+        # log_prob = log joint = log_likelihood + log_prior (up to a constant).
+        extra = mcmc.get_extra_fields()
+        samples['log_prob'] = -_np.asarray(extra['potential_energy'])
+        # log_likelihood: sum of per-pixel Normal log-probs across all spectra.
+        ll_dict = _npy_ll(model_fn, samples, model_args)
+        if ll_dict:
+            samples['log_likelihood'] = sum(
+                _np.asarray(v).reshape(_np.asarray(v).shape[0], -1).sum(axis=-1)
+                for v in ll_dict.values()
+            )
         return samples, model_args
 
 

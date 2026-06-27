@@ -13,12 +13,22 @@ samples = mcmc.get_samples()   # dict of str → ndarray, shape (n_samples,)
 
 :::{tip}
 {meth}`~unite.model.ModelBuilder.fit` returns `(samples, model_args)` as a tuple, which
-can be passed directly to all three output functions:
+can be passed directly to all three output functions.  It also automatically adds two
+diagnostic keys to the samples dict:
+
+- `'log_prob'` — log joint (log-likelihood + log-prior), proportional to the
+  log-posterior.  Use `np.argmax(samples['log_prob'])` to locate the MAP sample.
+- `'log_likelihood'` — total pixel log-likelihood summed across all spectra.
 
 ```python
 samples, model_args = builder.fit()
 table = make_parameter_table(samples, model_args)
+# 'log_prob' and 'log_likelihood' appear as extra columns automatically
 ```
+
+Both keys are consumed by {func}`~unite.results.freeze_from_samples` (see
+[below](#freezing-parameters-for-a-re-fit)) and by
+{meth}`~unite.model.ModelBuilder.fit`'s `mode='map'` / `mode='mle'` options.
 :::
 
 ---
@@ -62,6 +72,24 @@ Alternatively, you can return all posterior samples (default):
 table = make_parameter_table(samples, model_args)
 # One row per sample
 print(table.colnames)
+```
+
+### Diagnostic columns
+
+If `'log_prob'` or `'log_likelihood'` are present in *samples* (produced automatically
+by {meth}`~unite.model.ModelBuilder.fit`), they are appended as extra columns.  In
+percentile mode they are reduced with the same `np.percentile` call as every other
+parameter; in full-posterior mode the raw arrays are stored.
+
+```python
+# After builder.fit(), both keys are already in samples:
+table = make_parameter_table(samples, model_args)
+print(table['log_prob'])        # shape (n_samples,)
+print(table['log_likelihood'])  # shape (n_samples,)
+
+# Or as percentiles:
+table = make_parameter_table(samples, model_args, percentiles=np.array([0.16, 0.5, 0.84]))
+print(table['log_prob'])        # shape (3,)
 ```
 
 ### Column units
@@ -287,6 +315,97 @@ print(param_table['Ha_flux'])
 
 ---
 
+## Freezing Parameters for a Re-fit
+
+{func}`~unite.results.freeze_from_samples` converts a posterior sample dict into a
+mapping of `{site_name: Fixed}` priors.  Pass these directly to new token constructors
+to hold any subset of parameters at their posterior values for a constrained re-fit —
+for example, dropping or adding a line component while keeping kinematics fixed.
+
+The function covers **every** parameter in `args.dependency_order`, including those that
+were already {class}`~unite.prior.Fixed` in the original fit (such as `norm_wav_a` set
+by {class}`~unite.continuum.library.Linear`).  No manual lookup of region centres or
+other fixed quantities is needed.
+
+### Choosing the central value
+
+```python
+from unite.results import freeze_from_samples
+
+# Default: coordinate-wise posterior median
+frozen = freeze_from_samples(samples, args)
+
+# Coordinate-wise posterior mean
+frozen = freeze_from_samples(samples, args, mode='mean')
+
+# MAP sample — single draw with the highest log posterior.
+# Requires 'log_prob' in samples (added automatically by ModelBuilder.fit()).
+frozen = freeze_from_samples(samples, args, mode='map')
+
+# MLE sample — single draw with the highest total log-likelihood.
+# Requires 'log_likelihood' in samples (added automatically by ModelBuilder.fit()).
+frozen = freeze_from_samples(samples, args, mode='mle')
+
+# Custom function: any callable (array → scalar)
+import numpy as np
+frozen = freeze_from_samples(samples, args, cenfunc=lambda x: np.percentile(x, 75))
+```
+
+The `mode` and `cenfunc` arguments are mutually exclusive — supply at most one.
+
+### Using the frozen dict
+
+```python
+import numpy as np
+from unite import line, prior
+
+# Re-use the same Spectra object — do NOT call compute_scales again.
+# Doing so would change continuum_scale and make the frozen amplitude values
+# physically inconsistent.
+
+z_narrow2   = line.Redshift('narrow', prior=frozen['z_narrow'])
+fwhm_narrow2 = line.FWHM('narrow', prior=frozen['fwhm_gauss_narrow'])
+
+lc2 = line.LineConfiguration()
+lc2.add_line('Ha', 6563.0 * u.AA, profile='Gaussian',
+             redshift=z_narrow2, fwhm_gauss=fwhm_narrow2,
+             flux=line.Flux(prior=prior.Uniform(0, 3)))
+```
+
+For a full worked example — including how to pin `norm_wav` correctly when the
+continuum region changes between fits — see the
+{doc}`/auto_tutorials/tutorial_freeze` tutorial.
+
+### The norm_wav trap
+
+When a fit drops or adds lines, `ContinuumConfiguration.from_lines` will compute a
+different region centre, yielding a different `norm_wav` for {class}`~unite.continuum.library.Linear`
+and other polynomial forms.  Because `scale_a` from Fit 1 was measured relative to the
+original `norm_wav`, freezing `scale_a` at a wrong reference wavelength shifts the
+continuum level by `tan(angle_a) × continuum_scale × Δnorm_wav`.
+
+The fix is to include `norm_wav` explicitly in the frozen `ContinuumRegion`:
+
+```python
+from unite import continuum
+
+frozen_region = continuum.ContinuumRegion(
+    low * u.AA, high * u.AA,
+    form=continuum.Linear(),
+    params={
+        'scale':    continuum.Scale(prior=frozen['scale_a']),
+        'angle':    continuum.ContShape(prior=frozen['angle_a']),
+        'norm_wav': continuum.NormWavelength(prior=frozen['norm_wav_a']),
+    },
+)
+cc2 = continuum.ContinuumConfiguration([frozen_region])
+```
+
+`frozen['norm_wav_a']` is already a {class}`~unite.prior.Fixed` instance wrapping the
+exact Fit 1 value — no arithmetic required.
+
+---
+
 ## Evaluating the Model at Arbitrary Samples
 
 For more advanced use (e.g., plotting individual draws or computing derived quantities),
@@ -358,6 +477,13 @@ print(f'χ²_ν = {chi2_red:.3f}  ({n_pixels_total} pixels − {n_params} params
 ```
 
 ### Log-Likelihood and Log-Posterior
+
+:::{note}
+{meth}`~unite.model.ModelBuilder.fit` attaches `'log_prob'` (log joint) and
+`'log_likelihood'` (summed pixel log-likelihood) to the returned samples dict
+automatically.  Manual computation below is only needed when using a custom sampler
+(e.g. your own `numpyro.infer.MCMC` call, SVI, or nested sampling).
+:::
 
 {func}`~numpyro.infer.util.log_likelihood` returns a dict of per-pixel log-likelihoods
 (one entry per spectrum); {func}`~numpyro.infer.util.log_density` evaluates the full

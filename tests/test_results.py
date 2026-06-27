@@ -15,6 +15,7 @@ from unite.instrument.generic import SimpleDisperser
 from unite.results import (
     _get_n_samples,
     count_parameters,
+    freeze_from_samples,
     make_hdul,
     make_parameter_table,
     make_spectra_tables,
@@ -799,3 +800,212 @@ class TestFixedRefParam:
         np.testing.assert_allclose(
             child_vals, parent_vals * _FIXED_REF_RATIO, rtol=1e-6
         )
+
+
+# ---------------------------------------------------------------------------
+# freeze_from_samples tests
+# ---------------------------------------------------------------------------
+
+
+class TestFreezeFromSamples:
+    """Tests for freeze_from_samples."""
+
+    def test_returns_fixed_priors(self, simple_setup):
+        """All returned values must be Fixed instances."""
+        from unite.prior import Fixed
+
+        samples, args = simple_setup
+        frozen = freeze_from_samples(samples, args)
+        assert all(isinstance(v, Fixed) for v in frozen.values())
+
+    def test_includes_already_fixed(self, continuum_setup):
+        """norm_wav_a is Fixed in default Linear config; must appear in frozen."""
+        samples, args = continuum_setup
+        frozen = freeze_from_samples(samples, args)
+        assert 'norm_wav_a' in frozen
+        # Value must equal the original fixed constant, not a sample statistic.
+        from unite.prior import Fixed
+
+        orig = args.all_priors['norm_wav_a']
+        assert isinstance(orig, Fixed)
+        np.testing.assert_allclose(
+            frozen['norm_wav_a'].resolved_value({}),
+            float(orig.resolved_value({})),
+            rtol=1e-9,
+        )
+
+    def test_contains_all_params(self, simple_setup):
+        """Frozen dict must contain every parameter in dependency_order."""
+        samples, args = simple_setup
+        frozen = freeze_from_samples(samples, args)
+        for pname in args.dependency_order:
+            assert pname in frozen
+
+    def test_central_value_is_median(self, simple_setup):
+        """Default cenfunc=np.median — free params must equal the median."""
+        from unite.prior import Fixed
+
+        samples, args = simple_setup
+        frozen = freeze_from_samples(samples, args)
+        for pname, fp in frozen.items():
+            if isinstance(args.all_priors[pname], Fixed):
+                continue  # literal Fixed — value is the constant, not from samples
+            expected = float(np.median(samples[pname]))
+            np.testing.assert_allclose(fp.resolved_value({}), expected, rtol=1e-6)
+
+    def test_mode_mean(self, simple_setup):
+        """mode='mean' — free params must equal the mean."""
+        from unite.prior import Fixed
+
+        samples, args = simple_setup
+        frozen = freeze_from_samples(samples, args, mode='mean')
+        for pname, fp in frozen.items():
+            if isinstance(args.all_priors[pname], Fixed):
+                continue  # literal Fixed — value is the constant, not from samples
+            expected = float(np.mean(samples[pname]))
+            np.testing.assert_allclose(fp.resolved_value({}), expected, rtol=1e-6)
+
+    def test_cenfunc_mean(self, simple_setup):
+        """cenfunc=np.mean is still accepted as a custom callable."""
+        from unite.prior import Fixed
+
+        samples, args = simple_setup
+        frozen = freeze_from_samples(samples, args, cenfunc=np.mean)
+        for pname, fp in frozen.items():
+            if isinstance(args.all_priors[pname], Fixed):
+                continue
+            expected = float(np.mean(samples[pname]))
+            np.testing.assert_allclose(fp.resolved_value({}), expected, rtol=1e-6)
+
+    def test_mode_map(self, simple_setup):
+        """mode='map' selects the sample with the highest log_prob."""
+        from unite.prior import Fixed
+
+        samples, args = simple_setup
+        n = len(next(iter(samples.values())))
+        fake_log_prob = np.random.default_rng(1).standard_normal(n)
+        s = dict(samples)
+        s['log_prob'] = fake_log_prob
+        best_idx = int(np.argmax(fake_log_prob))
+        frozen = freeze_from_samples(s, args, mode='map')
+        assert all(isinstance(v, Fixed) for v in frozen.values())
+        for pname, fp in frozen.items():
+            if isinstance(args.all_priors[pname], Fixed):
+                continue
+            np.testing.assert_allclose(
+                fp.resolved_value({}), float(samples[pname][best_idx]), rtol=1e-6
+            )
+
+    def test_mode_mle(self, simple_setup):
+        """mode='mle' selects the sample with the highest log_likelihood."""
+        from unite.prior import Fixed
+
+        samples, args = simple_setup
+        n = len(next(iter(samples.values())))
+        fake_ll = np.random.default_rng(2).standard_normal(n)
+        s = dict(samples)
+        s['log_likelihood'] = fake_ll
+        best_idx = int(np.argmax(fake_ll))
+        frozen = freeze_from_samples(s, args, mode='mle')
+        assert all(isinstance(v, Fixed) for v in frozen.values())
+        for pname, fp in frozen.items():
+            if isinstance(args.all_priors[pname], Fixed):
+                continue
+            np.testing.assert_allclose(
+                fp.resolved_value({}), float(samples[pname][best_idx]), rtol=1e-6
+            )
+
+    def test_mode_map_missing_log_prob(self, simple_setup):
+        """mode='map' raises ValueError when log_prob is absent."""
+        samples, args = simple_setup
+        with pytest.raises(ValueError, match='log_prob'):
+            freeze_from_samples(samples, args, mode='map')
+
+    def test_mode_mle_missing_log_likelihood(self, simple_setup):
+        """mode='mle' raises ValueError when log_likelihood is absent."""
+        samples, args = simple_setup
+        with pytest.raises(ValueError, match='log_likelihood'):
+            freeze_from_samples(samples, args, mode='mle')
+
+    def test_cenfunc_and_mode_conflict(self, simple_setup):
+        """Providing both cenfunc and non-default mode raises ValueError."""
+        samples, args = simple_setup
+        with pytest.raises(ValueError, match='cenfunc'):
+            freeze_from_samples(samples, args, cenfunc=np.mean, mode='mean')
+
+    def test_unknown_mode(self, simple_setup):
+        """An unrecognised mode string raises ValueError."""
+        samples, args = simple_setup
+        with pytest.raises(ValueError, match='Unknown mode'):
+            freeze_from_samples(samples, args, mode='bogus')
+
+    def test_custom_cenfunc_argmax(self, simple_setup):
+        """Custom cenfunc that picks argmax index produces valid Fixed priors."""
+        from unite.prior import Fixed
+
+        samples, args = simple_setup
+        n = len(next(iter(samples.values())))
+        fake_log_prob = np.random.default_rng(0).standard_normal(n)
+        best_idx = int(np.argmax(fake_log_prob))
+        frozen = freeze_from_samples(samples, args, cenfunc=lambda x: x[best_idx])
+        assert all(isinstance(v, Fixed) for v in frozen.values())
+        for pname, fp in frozen.items():
+            if isinstance(args.all_priors[pname], Fixed):
+                continue
+            np.testing.assert_allclose(
+                fp.resolved_value({}), float(samples[pname][best_idx]), rtol=1e-6
+            )
+
+
+class TestLogProbColumns:
+    """log_prob and log_likelihood columns in make_parameter_table."""
+
+    def test_log_prob_all_samples(self, simple_setup):
+        """log_prob column is added when present in samples."""
+        samples, args = simple_setup
+        n = len(next(iter(samples.values())))
+        s = dict(samples)
+        s['log_prob'] = np.linspace(-10, -1, n)
+        table = make_parameter_table(s, args)
+        assert 'log_prob' in table.colnames
+        np.testing.assert_array_equal(table['log_prob'], s['log_prob'])
+
+    def test_log_prob_absent_when_not_in_samples(self, simple_setup):
+        """log_prob column is not added when key absent from samples."""
+        samples, args = simple_setup
+        table = make_parameter_table(dict(samples), args)
+        assert 'log_prob' not in table.colnames
+
+    def test_log_likelihood_all_samples(self, simple_setup):
+        """log_likelihood column is added when present in samples."""
+        samples, args = simple_setup
+        n = len(next(iter(samples.values())))
+        s = dict(samples)
+        s['log_likelihood'] = np.linspace(-50, -5, n)
+        table = make_parameter_table(s, args)
+        assert 'log_likelihood' in table.colnames
+        np.testing.assert_array_equal(table['log_likelihood'], s['log_likelihood'])
+
+    def test_log_prob_percentiles(self, simple_setup):
+        """Percentiles of log_prob are added in percentile mode."""
+        samples, args = simple_setup
+        n = len(next(iter(samples.values())))
+        s = dict(samples)
+        lp = np.linspace(-10, -1, n)
+        s['log_prob'] = lp
+        pct = np.array([0.16, 0.5, 0.84])
+        table = make_parameter_table(s, args, percentiles=pct)
+        assert 'log_prob' in table.colnames
+        expected = np.percentile(lp, pct * 100)
+        np.testing.assert_allclose(table['log_prob'], expected, rtol=1e-6)
+
+    def test_both_log_columns_present(self, simple_setup):
+        """Both log_prob and log_likelihood appear when both are in samples."""
+        samples, args = simple_setup
+        n = len(next(iter(samples.values())))
+        s = dict(samples)
+        s['log_prob'] = np.zeros(n)
+        s['log_likelihood'] = np.zeros(n)
+        table = make_parameter_table(s, args)
+        assert 'log_prob' in table.colnames
+        assert 'log_likelihood' in table.colnames

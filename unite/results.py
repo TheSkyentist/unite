@@ -6,6 +6,7 @@ into user-friendly :class:`~astropy.table.Table` objects and FITS files.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Literal, overload
 
 import numpy as np
@@ -211,6 +212,9 @@ def make_parameter_table(
             if category == 'tau' and absorption_rew:
                 for col_name, rew_arr in absorption_rew.items():
                     _add_rew(rew_arr, col_name, pct_arr=pct_arr)
+        for _key in ('log_prob', 'log_likelihood'):
+            if _key in samples:
+                table[_key] = np.percentile(np.asarray(samples[_key]), pct_arr * 100)
     else:
         for category, pnames in ordered.items():
             for pname in pnames:
@@ -221,6 +225,9 @@ def make_parameter_table(
             if category == 'tau' and absorption_rew:
                 for col_name, rew_arr in absorption_rew.items():
                     _add_rew(rew_arr, col_name)
+        for _key in ('log_prob', 'log_likelihood'):
+            if _key in samples:
+                table[_key] = np.asarray(samples[_key])
 
     # Add metadata (short keys for FITS compatibility).
     lsq = args.line_scale_quantity
@@ -828,3 +835,149 @@ def _insert_nan_between_regions(
     segments.append(table[prev_idx:])
 
     return vstack(segments)
+
+
+def freeze_from_samples(
+    samples: dict[str, np.ndarray],
+    args: ModelArgs,
+    *,
+    cenfunc: Callable[[np.ndarray], float] | None = None,
+    mode: str = 'median',
+) -> dict[str, Fixed]:
+    """Convert posterior samples to :class:`~unite.prior.Fixed` priors.
+
+    For each parameter in *args*, wraps its central value in a
+    :class:`~unite.prior.Fixed` prior.  Free parameters are summarised by
+    the chosen *mode* (or a custom *cenfunc*) applied to their posterior
+    samples.  Parameters that were already :class:`~unite.prior.Fixed` in the
+    original fit (such as ``norm_wav_a``) are passed through with their
+    constant value, making the returned dict a complete set of frozen priors
+    -- no separate lookup of region centres or other fixed quantities is
+    needed.
+
+    Intended for re-fitting the **same** observation with a different model
+    (e.g. adding or removing a line component while holding kinematics fixed).
+    Always reuse the same :class:`~unite.spectrum.Spectra` object between fits
+    so that ``line_scale`` and ``continuum_scale`` are identical and the frozen
+    amplitude values remain physically consistent.
+
+    Parameters
+    ----------
+    samples : dict
+        Posterior samples, e.g. from ``mcmc.get_samples()``.
+    args : ModelArgs
+        Model arguments from :meth:`~unite.model.ModelBuilder.build` for
+        the **original** fit.
+    cenfunc : callable, optional
+        Function mapping a 1-D ``numpy.ndarray`` to a scalar central value.
+        Cannot be combined with a non-default *mode*.  Use *mode* for the
+        common presets; supply *cenfunc* only when you need custom logic.
+    mode : str, optional
+        Preset for choosing the central value.  Default ``'median'``.
+        Options:
+
+        ``'median'``
+            Coordinate-wise posterior median.
+        ``'mean'``
+            Coordinate-wise posterior mean.
+        ``'map'``
+            Maximum-a-posteriori sample -- the single sample with the
+            highest log-joint ``samples['log_prob']``.  Requires
+            ``'log_prob'`` in *samples* (produced automatically by
+            :meth:`ModelBuilder.fit`).
+        ``'mle'``
+            Maximum-likelihood sample -- the single sample with the
+            highest total log-likelihood ``samples['log_likelihood']``.
+            Requires ``'log_likelihood'`` in *samples* (produced
+            automatically by :meth:`ModelBuilder.fit`).
+
+    Returns
+    -------
+    dict[str, Fixed]
+        Mapping from numpyro site name to :class:`~unite.prior.Fixed` prior.
+        Keys cover **all** parameters in ``args.dependency_order``: free
+        parameters frozen at the chosen central value, already-Fixed
+        parameters passed through at their constant value.
+
+    Raises
+    ------
+    ValueError
+        If both *cenfunc* and a non-default *mode* are provided.
+    ValueError
+        If ``mode='map'`` is requested but ``'log_prob'`` is not in
+        *samples*.
+    ValueError
+        If ``mode='mle'`` is requested but ``'log_likelihood'`` is not in
+        *samples*.
+
+    Examples
+    --------
+    Freeze all parameters at their posterior median for a re-fit on the
+    same spectra (e.g. to add a component while holding kinematics fixed).
+    ``norm_wav_a`` is automatically included -- no manual lookup needed:
+
+    >>> frozen = freeze_from_samples(samples, args)
+    >>> fwhm_narrow.prior = frozen['fwhm_gauss_narrow']
+    >>> norm_wav_token.prior = frozen['norm_wav_a']  # was already Fixed
+
+    Use the MAP sample (highest log posterior) -- more robust when scale
+    and slope parameters are correlated.  Requires ``samples`` to contain
+    a ``'log_prob'`` key (produced automatically by
+    :meth:`ModelBuilder.fit`):
+
+    >>> frozen_map = freeze_from_samples(samples, args, mode='map')
+
+    Use the MLE sample (highest total log-likelihood):
+
+    >>> frozen_mle = freeze_from_samples(samples, args, mode='mle')
+
+    Use the mean instead of the median:
+
+    >>> frozen = freeze_from_samples(samples, args, mode='mean')
+    """
+    _valid_modes = frozenset({'median', 'mean', 'map', 'mle'})
+    if cenfunc is not None and mode != 'median':
+        raise ValueError(
+            "Specify either 'mode' or 'cenfunc', not both. "
+            f'Got mode={mode!r} and a custom cenfunc.'
+        )
+    if cenfunc is not None:
+        _cenfunc: Callable[[np.ndarray], float] = cenfunc
+    elif mode == 'median':
+        _cenfunc = np.median
+    elif mode == 'mean':
+        _cenfunc = np.mean
+    elif mode == 'map':
+        if 'log_prob' not in samples:
+            raise ValueError(
+                "mode='map' requires 'log_prob' in samples. "
+                'Use ModelBuilder.fit() which computes this automatically.'
+            )
+        _best_map = int(np.argmax(np.asarray(samples['log_prob'])))
+        _cenfunc = lambda x, _b=_best_map: x[_b]  # noqa: E731
+    elif mode == 'mle':
+        if 'log_likelihood' not in samples:
+            raise ValueError(
+                "mode='mle' requires 'log_likelihood' in samples. "
+                'Use ModelBuilder.fit() which computes this automatically.'
+            )
+        _best_mle = int(np.argmax(np.asarray(samples['log_likelihood'])))
+        _cenfunc = lambda x, _b=_best_mle: x[_b]  # noqa: E731
+    else:
+        raise ValueError(f'Unknown mode {mode!r}. Valid modes: {sorted(_valid_modes)}.')
+
+    result: dict[str, Fixed] = {}
+    n_samples = _get_n_samples(samples)
+    for pname in args.dependency_order:
+        prior_obj = args.all_priors[pname]
+        if isinstance(prior_obj, Fixed):
+            # Evaluate to a concrete scalar.  For literal Fixed priors this is
+            # just the constant; for expression-based Fixed priors (referencing
+            # a sampled parameter) _cenfunc is applied to the per-sample values
+            # so the result is consistent with the chosen central-value strategy.
+            arr = _resolve_fixed(prior_obj, samples, args.name_to_token, n_samples)
+        else:
+            arr = np.asarray(samples[pname])
+        result[pname] = Fixed(float(_cenfunc(arr)))
+
+    return result

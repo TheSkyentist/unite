@@ -38,6 +38,7 @@ citing
 
 auto_tutorials/tutorial_nirspec
 auto_tutorials/tutorial_generic
+auto_tutorials/tutorial_freeze
 auto_tutorials/tutorial_config
 sg_execution_times
 ```
