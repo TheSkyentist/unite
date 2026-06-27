@@ -38,7 +38,7 @@ pixi run -e test-py312 test -- tests/test_instrument_nirspec.py::test_function_n
 2. **Continuum configuration** — auto-generate from line config (pad + merge) or specify regions manually; attach functional form per region
 3. **Serialization** — save/load config to human-readable YAML; user can edit offline
 4. **Spectrum loading** — create spectrum objects, wrap in `Spectra` collection; automatic coverage filtering drops unconstrained lines/regions
-5. **Model building** — `ModelBuilder.build()` returns `(model_fn, model_args)` for the user to run with their own numpyro sampler (NUTS, NS, SVI, etc.); or call `ModelBuilder.fit()` as a NUTS convenience wrapper that returns `(samples, model_args)`
+5. **Model building** — `ModelBuilder.build()` returns `(model_fn, model_args)` for the user to run with their own numpyro sampler (NUTS, NS, SVI, etc.); or call `ModelBuilder.fit()` as a NUTS convenience wrapper that returns `(samples, model_args)`. Coverage filtering happens **only** during the first `Spectra.prepare()`: if the spectra are unprepared, `ModelBuilder` requires a `line_config` and prepares (filters) with it. If the spectra are already prepared, `line_config`/`continuum_config` are handled independently — each is used **verbatim** when passed (no re-filtering; caller owns coverage correctness) and falls back to the stored prepared config when `None`. To re-filter (e.g. with a different `drop_empty_regions`), call `Spectra.prepare()` again before building.
 6. **Result extraction** — `evaluate_model`, `make_parameter_table`, `make_spectra_tables`, `make_hdul`; pass `percentiles=[0.16, 0.5, 0.84]` to get summary statistics instead of all samples
 
 ### Module Map

@@ -210,6 +210,15 @@ all pre-computed matrices, scales, and data arrays. You can now proceed to infer
 Filtering the configurations and computing scales can be skipped; building the model will automatically call `prepare()` and `compute_scales()` with sensible defaults if they have not been called yet. However, we recommend calling them explicitly to inspect the filtered configurations and diagnostics before committing to the full model build.
 :::
 
+:::{important}
+Coverage filtering happens **only** during the first `prepare()`. How `ModelBuilder` treats the `line_config` and `continuum_config` you pass depends on whether the spectra are already prepared, and the two are handled independently:
+
+- **Spectra not yet prepared** — a `line_config` is required (passing `None` raises `ValueError`); it is filtered for coverage via `prepare()`. A `continuum_config` of `None` simply means a lines-only model.
+- **Spectra already prepared** — a non-`None` config is used **verbatim** (no re-filtering — you are responsible for its coverage correctness), and a `None` config falls back to the corresponding stored `prepared_line_config` / `prepared_cont_config` (which may itself be `None`).
+
+So if you prepared with a particular `drop_empty_regions` (or `linedet_width`) and then hand the configs back to `ModelBuilder`, your choices are preserved — the builder does not silently re-filter. To re-filter with different options, call `spectra.prepare(...)` again before building. To change a continuum after preparing (including removing it), re-run `prepare()` rather than passing `None`, which falls back to the prepared continuum.
+:::
+
 ### Integration Mode
 
 `build()` accepts an `integration_mode` parameter that controls how line profiles
