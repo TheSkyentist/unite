@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **unite** — Unified liNe Integration Turbo Engine. A Python package for fast, efficient Bayesian inference of emission lines from multiple spectra simultaneously, built on JAX, NumPyro, and Astropy. Originally designed for JWST/NIRSpec spectra but extensible to other instruments.
 
+## Git Conventions
+
+- Never include `Co-authored-by: Claude` or any similar AI co-authorship line in commit messages.
+
 ## Commands
 
 This project uses [Pixi](https://pixi.sh/) for environment and task management.
