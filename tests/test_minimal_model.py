@@ -75,6 +75,25 @@ def create_minimal_config():
     return line_config
 
 
+def create_two_region_spectrum():
+    """Spectrum spanning 6400-6700 Å with a single Gaussian line at H-alpha.
+
+    Wide enough to host two continuum regions (one containing the line, one
+    empty), used by the preparation-handling tests.
+    """
+    wl = np.linspace(6400, 6700, 200) * u.AA
+    disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='d')
+    low = wl - 0.5 * np.gradient(wl)
+    high = wl + 0.5 * np.gradient(wl)
+    sigma = 5.0 / (2 * np.sqrt(2 * np.log(2)))
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    flux = (1.0 + 100 * np.exp(-0.5 * ((wl.value - 6563.0) / sigma) ** 2)) * flux_unit
+    error = np.ones(200) * flux_unit
+    return Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='s'
+    )
+
+
 def _prepare_and_build(line_config, cont_config, spectra):
     """Helper: prepare spectra and build model (no warnings)."""
     spectra.prepare(line_config, cont_config)
@@ -231,7 +250,11 @@ class TestMinimalModel:
             model.ModelBuilder(None, None, spectra)
 
     def test_passed_config_takes_priority(self):
-        """ModelBuilder uses passed configs even when spectra is already prepared."""
+        """A passed config is used verbatim even when spectra is already prepared.
+
+        Once prepared, ModelBuilder does not re-filter; an explicitly passed
+        config wins over the stored prepared one.
+        """
         spectrum = create_simple_spectrum()
         line_config = create_minimal_config()
         spectra = Spectra([spectrum], redshift=0.0)
@@ -241,6 +264,106 @@ class TestMinimalModel:
         # Pass the same config — should not raise and should work normally.
         builder = model.ModelBuilder(line_config, None, spectra)
         assert builder is not None
+
+    def test_builder_respects_drop_empty_regions_false(self):
+        """ModelBuilder must not silently re-drop regions the user kept.
+
+        When the user explicitly prepares with ``drop_empty_regions=False``,
+        an empty continuum region is intentionally retained.  Constructing a
+        ModelBuilder afterwards must not re-filter and discard that region.
+        """
+        from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
+        from unite.continuum.library import Linear
+
+        spectra = Spectra([create_two_region_spectrum()], redshift=0.0)
+        line_config = create_minimal_config()  # single Ha line at 6563
+        cont = ContinuumConfiguration(
+            [
+                ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear()),  # has Ha
+                ContinuumRegion(6610.0 * u.AA, 6690.0 * u.AA, Linear()),  # empty
+            ]
+        )
+
+        # User explicitly keeps the empty region.
+        _fl, fc = spectra.prepare(line_config, cont, drop_empty_regions=False)
+        assert len(fc) == 2
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            builder = model.ModelBuilder(line_config, cont, spectra)
+
+        # The empty region must survive into the built model.
+        assert builder._cont_config is not None
+        assert len(builder._cont_config) == 2
+        assert len(spectra.prepared_cont_config) == 2
+
+    def test_prepared_none_line_honors_passed_continuum(self):
+        """``(None, cont)`` on prepared spectra must use the passed continuum.
+
+        ``continuum_config`` is handled independently of ``line_config``: a
+        ``None`` line falls back to the prepared line config, but a passed
+        continuum must not be silently dropped.
+        """
+        from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
+        from unite.continuum.library import Linear
+
+        spectra = Spectra([create_two_region_spectrum()], redshift=0.0)
+        line_config = create_minimal_config()
+
+        # Prepare lines-only: no continuum is stored.
+        spectra.prepare(line_config)
+        spectra.compute_scales(line_config)
+        assert spectra.prepared_cont_config is None
+
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear())]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            builder = model.ModelBuilder(None, cont, spectra)
+
+        # The passed continuum is honored; the line falls back to prepared.
+        assert builder._cont_config is not None
+        assert len(builder._cont_config) == 1
+        assert len(builder._matrices.wavelengths) == 1
+
+    def test_prepared_passthrough_is_verbatim(self):
+        """A config passed to prepared spectra is used as-is, not re-filtered."""
+        spectra = Spectra([create_two_region_spectrum()], redshift=0.0)
+
+        # Prepare and scale with a single covered line.
+        base = create_minimal_config()
+        spectra.prepare(base)
+        spectra.compute_scales(base)
+
+        # A new config with an extra out-of-coverage line that prepare() would
+        # normally drop.  Passed verbatim, both lines must survive.
+        passed = create_minimal_config()
+        passed.add_line(
+            'H_beta',
+            center=4861.0 * u.AA,  # outside the 6400-6700 Å coverage
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            flux=line.Flux(prior=prior.Fixed(1.0)),
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            builder = model.ModelBuilder(passed, None, spectra)
+
+        assert len(builder._matrices.wavelengths) == 2
+
+    def test_unprepared_requires_line_config(self):
+        """Unprepared spectra with no line_config raises, regardless of continuum."""
+        from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
+        from unite.continuum.library import Linear
+
+        spectra = Spectra([create_two_region_spectrum()], redshift=0.0)
+        cont = ContinuumConfiguration(
+            [ContinuumRegion(6500.0 * u.AA, 6600.0 * u.AA, Linear())]
+        )
+        # Passing a continuum but no line_config does not satisfy the requirement.
+        with pytest.raises(ValueError, match='No line_config supplied'):
+            model.ModelBuilder(None, cont, spectra)
 
 
 class TestModelOutputValidation:

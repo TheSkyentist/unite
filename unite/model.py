@@ -424,14 +424,37 @@ class ModelBuilder:
     Parameters
     ----------
     line_config : LineConfiguration or None
-        Emission/absorption line configuration.  If ``None``, the configs
-        stored on ``spectra`` from a prior :py:meth:`~unite.spectrum.Spectra.prepare`
-        call are used; raises ``ValueError`` if ``spectra`` has not been prepared.
+        Emission/absorption line configuration.  Handling depends on whether
+        ``spectra`` has already been prepared (see Notes):
+
+        - If ``spectra`` is **not** prepared, ``line_config`` is required and is
+          passed to :py:meth:`~unite.spectrum.Spectra.prepare` for coverage
+          filtering.  ``None`` raises ``ValueError``.
+        - If ``spectra`` is already prepared, a non-``None`` ``line_config`` is
+          used **verbatim** (no re-filtering); ``None`` falls back to the stored
+          :py:attr:`~unite.spectrum.Spectra.prepared_line_config`.
     continuum_config : ContinuumConfiguration or None
-        Continuum configuration.  ``None`` for a lines-only model.  Ignored
-        when ``line_config`` is ``None`` (the stored continuum config is used).
+        Continuum configuration, handled independently of ``line_config``:
+
+        - If ``spectra`` is **not** prepared, it is passed to
+          :py:meth:`~unite.spectrum.Spectra.prepare`; ``None`` means a
+          lines-only model.
+        - If ``spectra`` is already prepared, a non-``None`` value is used
+          **verbatim**; ``None`` falls back to the stored
+          :py:attr:`~unite.spectrum.Spectra.prepared_cont_config` (which may
+          itself be ``None`` for a lines-only model).
     spectra : Spectra
         Spectrum collection with systemic redshift.
+
+    Notes
+    -----
+    Coverage filtering (dropping lines/regions outside the spectral coverage,
+    and optionally empty continuum regions) happens **only** during the first
+    :py:meth:`~unite.spectrum.Spectra.prepare`.  Once ``spectra`` is prepared,
+    configs passed to ``ModelBuilder`` are taken at face value and are **not**
+    re-filtered — the caller is responsible for their coverage correctness.
+    To re-filter (e.g. with different ``drop_empty_regions``), call
+    ``spectra.prepare(...)`` again before constructing the builder.
 
     Examples
     --------
@@ -449,25 +472,32 @@ class ModelBuilder:
     ) -> None:
         self._spectra = spectra
 
-        if line_config is not None:
-            # Caller supplied configs — prepare (or re-prepare) with them.
-            line_config, continuum_config = spectra.prepare(
-                line_config, continuum_config
-            )
-        else:
-            # No configs supplied — require that spectra was already prepared.
-            if not spectra.is_prepared:
+        if not spectra.is_prepared:
+            # First preparation: a line_config is required so we can coverage-
+            # filter.  continuum_config (possibly None for a lines-only model)
+            # rides along into prepare().
+            if line_config is None:
                 raise ValueError(
                     'No line_config supplied and spectra has not been prepared. '
                     'Either pass line_config to ModelBuilder or call '
                     'spectra.prepare(line_config, continuum_config) first.'
                 )
-            prepared_lc = spectra.prepared_line_config
-            assert prepared_lc is not None, (
-                'prepared_line_config is None despite is_prepared=True'
+            line_config, continuum_config = spectra.prepare(
+                line_config, continuum_config
             )
-            line_config = prepared_lc
-            continuum_config = spectra.prepared_cont_config
+        else:
+            # Already prepared: explicitly passed configs win and are used
+            # verbatim (no re-filtering — the caller owns coverage correctness).
+            # Each config omitted (None) falls back independently to the
+            # prepared one.
+            if line_config is None:
+                prepared_lc = spectra.prepared_line_config
+                assert prepared_lc is not None, (
+                    'prepared_line_config is None despite is_prepared=True'
+                )
+                line_config = prepared_lc
+            if continuum_config is None:
+                continuum_config = spectra.prepared_cont_config
 
         # --- Auto-compute scales if needed ---
         if spectra.line_scale is None:
