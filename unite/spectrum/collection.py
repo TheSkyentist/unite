@@ -446,7 +446,8 @@ class Spectra:
                 )
                 box_width_lam = box_width_kms * lam_obs / C_KMS
                 flux_est = peak_above * flux_conv * box_width_lam * wl_conv
-                max_line_scale = max(max_line_scale, flux_est)
+                if jnp.isfinite(flux_est):
+                    max_line_scale = max(max_line_scale, flux_est)
 
             diag = SpectrumScaleDiagnostic(
                 name=spectrum.name,
