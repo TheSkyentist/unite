@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -448,6 +449,13 @@ class Spectra:
                 flux_est = peak_above * flux_conv * box_width_lam * wl_conv
                 if jnp.isfinite(flux_est):
                     max_line_scale = max(max_line_scale, flux_est)
+                else:
+                    warnings.warn(
+                        f'Non-finite line scale estimate for {lam_rest} skipped; '
+                        'check the continuum region near this line for divergence.',
+                        UserWarning,
+                        stacklevel=2,
+                    )
 
             diag = SpectrumScaleDiagnostic(
                 name=spectrum.name,
