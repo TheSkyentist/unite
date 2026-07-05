@@ -523,6 +523,55 @@ class TestWavelengthUnitConsistency:
         _, args = _prepare_and_build(lc, None, spectra)
         assert all(s > 0 for s in args.line_flux_scales)
 
+    @pytest.mark.filterwarnings('always::UserWarning')
+    def test_compute_scales_nonfinite_estimate_warns_and_skips(self):
+        """Non-finite flux_est for one line should warn but still yield a finite line_scale.
+
+        Injects +inf into the flux array near one line's window to simulate
+        flux - (-inf) = +inf when the continuum model diverges (e.g. a power-law
+        near a chip gap).  The guard should skip that estimate with a UserWarning
+        and derive the scale from the other line instead.
+        """
+        wl = np.linspace(6500, 6700, 201) * u.AA
+        disperser = SimpleDisperser(wavelength=wl, R=3000.0, name='test')
+        low = wl[:-1]
+        high = wl[1:]
+        flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+
+        flux_vals = np.ones(200) * 10.0
+        flux_vals[150] = np.inf  # near 6650 Å — simulates divergent continuum
+
+        spectrum = Spectrum(
+            low=low,
+            high=high,
+            flux=flux_vals * flux_unit,
+            error=np.ones(200) * flux_unit,
+            disperser=disperser,
+        )
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'H_alpha',
+            center=6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100.0, 1000.0)),
+            flux=line.Flux(prior=prior.Uniform(0.0, 200.0)),
+        )
+        lc.add_line(
+            'bad_line',
+            center=6650.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100.0, 1000.0)),
+            flux=line.Flux(prior=prior.Uniform(0.0, 200.0)),
+        )
+
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        with pytest.warns(UserWarning, match='Non-finite'):
+            spectra.compute_scales(lc)
+
+        assert jnp.isfinite(spectra.line_scale.value)
+
     def test_continuum_bounds_converted(self, continuum_model):
         """Continuum region bounds (specified in microns) should be converted to canonical unit."""
         _, args = continuum_model
