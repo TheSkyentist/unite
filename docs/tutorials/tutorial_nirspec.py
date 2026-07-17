@@ -58,6 +58,9 @@ resolution_scale = instrument.RScale(
 )
 
 # See Fig 8 in de Graaff+ 2025 for typical observed offsets and scatter between PRISM and G395M.
+# PRISM is left with no ``flux_scale`` (fixed at 1.0) so it serves as the flux-calibration
+# reference — giving every grating a free FluxScale would be degenerate with the overall
+# flux normalization of the model.
 prism_disperser = nirspec.PRISM(
     r_source='point',
     r_scale=resolution_scale,

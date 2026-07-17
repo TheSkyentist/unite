@@ -35,9 +35,16 @@ from unite.instrument import RScale, FluxScale, PixOffset
 
 In practice `FluxScale` and `PixOffset` are most useful for **relative** calibration between
 spectra — one spectrum is treated as the reference with fixed calibration, and the other spectra
-have free parameters to account for differences in flux calibration and wavelength solution. If a
-`FluxScale` is applied to all spectra it is completely degenerate with the overall flux
-normalization of the model.
+have free parameters to account for differences in flux calibration and wavelength solution.
+
+:::{warning}
+At least one spectrum should normally keep a **fixed** `FluxScale` (the default). If every
+spectrum in a fit is given a free `FluxScale`, the parameter is completely degenerate with the
+overall flux normalization of the model (line fluxes, continuum amplitude) and the fit becomes
+non-identifiable. Only give every spectrum a free `FluxScale` if you have an informative prior on
+it (e.g. from an independent photometric calibration) — never leave every spectrum's `FluxScale`
+free with an uninformative prior.
+:::
 
 #### RScale — Resolution Calibration
 
