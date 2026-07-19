@@ -181,32 +181,41 @@ class TestNIRSpecCalibration:
     """Tests for calibration tokens on NIRSpec dispersers."""
 
     def test_no_calibration_by_default(self):
+        from unite.instrument.base import FluxScale, PixOffset, RScale
+        from unite.prior import Fixed
+
         d = G235H()
         assert not d.has_calibration_params
-        assert d.r_scale is None
-        assert d.flux_scale is None
-        assert d.pix_offset is None
+        assert isinstance(d.r_scale, RScale)
+        assert isinstance(d.flux_scale, FluxScale)
+        assert isinstance(d.pix_offset, PixOffset)
+        assert isinstance(d.r_scale.prior, Fixed)
+        assert isinstance(d.flux_scale.prior, Fixed)
+        assert isinstance(d.pix_offset.prior, Fixed)
 
     def test_r_scale_token(self):
         from unite.instrument.base import RScale
+        from unite.prior import Uniform
 
-        r = RScale()
+        r = RScale(prior=Uniform(0.8, 1.2))
         d = G235H(r_scale=r)
         assert d.has_calibration_params
         assert d.r_scale is r
 
     def test_flux_scale_token(self):
         from unite.instrument.base import FluxScale
+        from unite.prior import Uniform
 
-        f = FluxScale()
+        f = FluxScale(prior=Uniform(0.5, 1.5))
         d = G235H(flux_scale=f)
         assert d.has_calibration_params
         assert d.flux_scale is f
 
     def test_pix_offset_token(self):
         from unite.instrument.base import PixOffset
+        from unite.prior import Uniform
 
-        p = PixOffset()
+        p = PixOffset(prior=Uniform(-2.0, 2.0))
         d = G235H(pix_offset=p)
         assert d.has_calibration_params
         assert d.pix_offset is p

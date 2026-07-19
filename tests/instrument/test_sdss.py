@@ -63,9 +63,10 @@ class TestSDSSDisperser:
 
     def test_calibration_tokens(self):
         from unite.instrument.base import FluxScale, RScale
+        from unite.prior import Uniform
 
-        r = RScale()
-        f = FluxScale()
+        r = RScale(prior=Uniform(0.8, 1.2))
+        f = FluxScale(prior=Uniform(0.5, 1.5))
         d = SDSSDisperser(r_scale=r, flux_scale=f)
         assert d.r_scale is r
         assert d.flux_scale is f

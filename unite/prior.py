@@ -664,6 +664,16 @@ class Parameter:
     def name(self, value: str) -> None:
         self._name = value
 
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for display; never raises before registration.
+
+        Prefers the registered numpyro site name (identical to :attr:`name`)
+        when set; falls back to the user-supplied *label*, then to
+        ``'<unregistered>'`` if the token has neither yet.
+        """
+        return self._name or self.label or '<unregistered>'
+
     def __repr__(self) -> str:
         """Return a readable string representation."""
         parts = []

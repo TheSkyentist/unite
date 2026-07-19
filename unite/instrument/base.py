@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from astropy import units as u
 from jax.typing import ArrayLike
@@ -106,10 +107,15 @@ class Disperser(ABC):
     * ``flux_scale`` — multiplicative flux normalisation.
     * ``pix_offset`` — pixel displacement of the spectrum on the detector (positive = redward; wavelength grid is corrected blueward).
 
-    ``None`` on any slot means that parameter is absent from the model
-    entirely (equivalent to a fixed nominal value but without a token).
-    To create a token that is fixed at its nominal value, pass
-    e.g. ``r_scale=RScale()`` — the default prior is ``Fixed(1.0)``.
+    Every slot always carries a token — leaving one ``None`` at construction
+    time creates a private, unshared token with the default ``Fixed`` prior
+    (nominal 1.0 for ``r_scale``/``flux_scale``, 0.0 for ``pix_offset``)
+    rather than omitting the parameter. This keeps the calibration state
+    fully transparent: it always shows up in ``str(disperser)``, in
+    parameter tables, and in serialized YAML, even when it is fixed at its
+    nominal value. Pass an explicit token (e.g. with a sampled prior, or the
+    same instance shared across dispersers) to make the parameter free or
+    shared.
 
     Sharing: two dispersers that reference the **same token instance** share
     a single parameter in the model (identity-based, like ``FWHM``/
@@ -125,11 +131,14 @@ class Disperser(ABC):
         Human-readable label (e.g. ``'G235H'``).  Used in repr and as the
         default ``Spectrum.name`` when this disperser is attached.
     r_scale : RScale, optional
-        Token for the resolving-power scale.  ``None`` → not in model.
+        Token for the resolving-power scale.  ``None`` (default) creates a
+        private token fixed at nominal (1.0).
     flux_scale : FluxScale, optional
-        Token for the flux normalisation.  ``None`` → not in model.
+        Token for the flux normalisation.  ``None`` (default) creates a
+        private token fixed at nominal (1.0).
     pix_offset : PixOffset, optional
-        Token for the detector pixel displacement.  ``None`` → not in model.
+        Token for the detector pixel displacement.  ``None`` (default)
+        creates a private token fixed at nominal (0.0).
     """
 
     def __init__(
@@ -156,19 +165,21 @@ class Disperser(ABC):
             raise TypeError(msg)
         self.unit = unit
         self.name = name
-        self.r_scale = r_scale
-        self.flux_scale = flux_scale
-        self.pix_offset = pix_offset
+        # Every slot always carries a token; an omitted slot gets a private,
+        # unshared token with the default `Fixed` prior (see class docstring).
+        self.r_scale = r_scale if r_scale is not None else RScale()
+        self.flux_scale = flux_scale if flux_scale is not None else FluxScale()
+        self.pix_offset = pix_offset if pix_offset is not None else PixOffset()
 
         # Apply the type prefix to any token that has a user-supplied label but
         # no site name yet.  Fully anonymous tokens (label=None, name=None) are
         # named later by InstrumentConfig, which has visibility over sharing.
         for slot, tok in [
-            ('r_scale', r_scale),
-            ('flux_scale', flux_scale),
-            ('pix_offset', pix_offset),
+            ('r_scale', self.r_scale),
+            ('flux_scale', self.flux_scale),
+            ('pix_offset', self.pix_offset),
         ]:
-            if tok is not None and tok._name is None and tok.label is not None:
+            if tok._name is None and tok.label is not None:
                 tok.name = f'{slot}_{tok.label}'
 
     @abstractmethod
@@ -203,7 +214,77 @@ class Disperser(ABC):
 
     @property
     def has_calibration_params(self) -> bool:
-        """``True`` if any calibration token is attached."""
+        """``True`` if any calibration token has a non-``Fixed`` (sampled) prior."""
         return any(
-            x is not None for x in (self.r_scale, self.flux_scale, self.pix_offset)
+            not isinstance(tok.prior, Fixed)
+            for tok in (self.r_scale, self.flux_scale, self.pix_offset)
         )
+
+    def __str__(self) -> str:
+        """Return :func:`repr` plus attached calibration tokens and their priors.
+
+        ``__repr__`` stays a compact one-liner (used as a table cell by
+        :class:`~unite.instrument.config.InstrumentConfig` and
+        :class:`~unite.spectrum.Spectra`); ``print()``/``str()`` on a
+        standalone disperser additionally shows what ``r_scale``,
+        ``flux_scale``, and ``pix_offset`` are set to.
+        """
+        lines = [repr(self)]
+        lines.extend(format_calibration_sections([self]))
+        return '\n'.join(lines)
+
+
+def format_calibration_sections(dispersers: Sequence[Disperser]) -> list[str]:
+    """Format shared calibration-token sections for a multi-line ``__repr__``.
+
+    Deduplicates ``r_scale``/``flux_scale``/``pix_offset`` tokens by identity
+    across *dispersers* — a token shared by several dispersers (or several
+    spectra pointing at the same disperser) is listed once — and renders each
+    attribute as an indented ``name  prior`` block.
+
+    Parameters
+    ----------
+    dispersers : Sequence[Disperser]
+        Dispersers to scan for calibration tokens. Duplicate disperser
+        instances are ignored.
+
+    Returns
+    -------
+    list[str]
+        Lines to append to a ``__repr__``, each section preceded by a blank
+        line. Empty if no disperser carries a calibration token.
+    """
+    calib_params: dict[str, list[tuple[str, Parameter]]] = {
+        'r_scale': [],
+        'flux_scale': [],
+        'pix_offset': [],
+    }
+    seen_ids: dict[str, set[int]] = {
+        'r_scale': set(),
+        'flux_scale': set(),
+        'pix_offset': set(),
+    }
+    seen_dispersers: set[int] = set()
+    for d in dispersers:
+        if id(d) in seen_dispersers:
+            continue
+        seen_dispersers.add(id(d))
+        for attr in ('r_scale', 'flux_scale', 'pix_offset'):
+            token = getattr(d, attr)
+            if token is not None:
+                token_id = id(token)
+                if token_id not in seen_ids[attr]:
+                    seen_ids[attr].add(token_id)
+                    calib_params[attr].append((token.display_name, token))
+
+    lines: list[str] = []
+    for attr, params in calib_params.items():
+        if params:
+            lines.append('')
+            section_title = attr.replace('_', ' ').title()
+            lines.append(f'  {section_title}:')
+            name_width = max(len(name) for name, _ in params)
+            for name, token in params:
+                lines.append(f'    {name:<{name_width}}  {token.prior!r}')
+
+    return lines

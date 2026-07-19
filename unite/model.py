@@ -277,20 +277,15 @@ def unite_model(args: ModelArgs) -> None:
         lfs = args.line_flux_scales[i]
         cs = args.continuum_scales[i]
 
-        # Calibration values (fall back to identity when no token is attached).
-        r_scale = context[disp.r_scale.name] if disp.r_scale is not None else 1.0
-        flux_scale = (
-            context[disp.flux_scale.name] if disp.flux_scale is not None else 1.0
-        )
-        pix_offset = (
-            context[disp.pix_offset.name] if disp.pix_offset is not None else 0.0
-        )
+        # Calibration values (every disperser always carries these tokens).
+        r_scale = context[disp.r_scale.name]
+        flux_scale = context[disp.flux_scale.name]
+        pix_offset = context[disp.pix_offset.name]
 
         # Edge topology (canonical wavelength unit) — shared by all lines.
         edges = spectrum.edges * wl_scale  # (E,)
         keep_mask = spectrum.keep_mask  # (E-1,)
-        if disp.pix_offset is not None:
-            edges = edges - (pix_offset * disp.dlam_dpix(spectrum.edges) * wl_scale)
+        edges = edges - (pix_offset * disp.dlam_dpix(spectrum.edges) * wl_scale)
         widths = jnp.diff(edges)  # (E-1,)
 
         # Scaled line fluxes and continuum for this spectrum.
@@ -548,7 +543,7 @@ class ModelBuilder:
             if id(disp) not in seen_dispersers:
                 seen_dispersers.add(id(disp))
                 for tok in (disp.r_scale, disp.flux_scale, disp.pix_offset):
-                    if tok is not None and id(tok) not in seen_tok_ids:
+                    if id(tok) not in seen_tok_ids:
                         tok_name = tok.name
                         seen_tok_ids.add(id(tok))
                         all_priors[tok_name] = tok.prior

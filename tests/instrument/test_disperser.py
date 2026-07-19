@@ -62,7 +62,9 @@ class TestGenericDisperser:
         assert d.name == 'my_disperser'
 
     def test_with_calibration_tokens(self):
-        r = RScale()
+        from unite.prior import Uniform
+
+        r = RScale(prior=Uniform(0.8, 1.2))
         d = GenericDisperser(
             R_func=lambda w: w, dlam_dpix_func=lambda w: w, unit=u.AA, r_scale=r
         )

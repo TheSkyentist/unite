@@ -17,7 +17,7 @@ from unite._utils import (
     _ensure_velocity,
     _get_conversion_factor,
 )
-from unite.instrument.base import Disperser
+from unite.instrument.base import Disperser, format_calibration_sections
 from unite.spectrum.spectrum import Spectrum
 
 if TYPE_CHECKING:
@@ -704,13 +704,42 @@ class Spectra:
         return self._spectra[idx]
 
     def __repr__(self) -> str:
-        lines = [f'Spectra: {len(self._spectra)} spectrum/a, z={self._redshift:.4f}']
+        """Return a compact one-line summary."""
+        return f'Spectra: {len(self._spectra)} spectrum/a, z={self._redshift:.4f}'
+
+    def __str__(self) -> str:
+        """Return :func:`repr` plus the per-spectrum table and calibration sections."""
+        if not self._spectra:
+            return repr(self)
+
+        # --- Spectrum table ---
+        rows = []
         for i, s in enumerate(self._spectra):
             lo, hi = s.wavelength_range
             unit_str = s.unit.to_string()
             label = s.name or f'#{i}'
-            cal = ' [calibrated]' if s.has_calibration_priors else ''
-            lines.append(
-                f'  [{i}] {label}: {s.npix} px, λ ∈ [{lo:.4g}, {hi:.4g}] {unit_str}{cal}'
+            rows.append(
+                (
+                    label,
+                    str(s.npix),
+                    f'[{lo:.4g}, {hi:.4g}] {unit_str}',
+                    repr(s.disperser),
+                )
             )
+
+        col_headers = ('Name', 'Npix', 'Wavelength range', 'Disperser')
+        widths = [len(h) for h in col_headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(cell))
+
+        fmt = '  '.join(f'{{:<{w}}}' for w in widths)
+        sep = '  '.join('-' * w for w in widths)
+        lines = [repr(self), '', '  ' + fmt.format(*col_headers), '  ' + sep]
+        for row in rows:
+            lines.append('  ' + fmt.format(*row))
+
+        # --- Calibration parameter sections (shared tokens across dispersers) ---
+        lines.extend(format_calibration_sections([s.disperser for s in self._spectra]))
+
         return '\n'.join(lines)

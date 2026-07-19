@@ -18,6 +18,38 @@ from unite.prior import (
 )
 
 # ---------------------------------------------------------------------------
+# Parameter.display_name
+# ---------------------------------------------------------------------------
+
+
+class TestParameterDisplayName:
+    """Tests for the never-raising Parameter.display_name accessor."""
+
+    def test_unregistered_no_label_returns_placeholder(self):
+        from unite.line.config import FWHM
+
+        tok = FWHM()
+        assert tok._name is None
+        assert tok.label is None
+        assert tok.display_name == '<unregistered>'
+
+    def test_unregistered_with_label_returns_label(self):
+        from unite.line.config import FWHM
+
+        tok = FWHM(name='broad')
+        assert tok._name is None
+        assert tok.display_name == 'broad'
+
+    def test_registered_returns_site_name_not_label(self):
+        from unite.line.config import FWHM
+
+        tok = FWHM(name='broad')
+        tok.name = 'fwhm_broad'
+        assert tok.display_name == 'fwhm_broad'
+        assert tok.display_name == tok.name
+
+
+# ---------------------------------------------------------------------------
 # Expression tree — single-parameter arithmetic
 # ---------------------------------------------------------------------------
 

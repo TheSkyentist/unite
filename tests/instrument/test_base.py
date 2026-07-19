@@ -142,10 +142,92 @@ class TestDisperserTypeValidation:
             R_func=lambda w: w * 0 + 1000,
             dlam_dpix_func=lambda w: w / 1000,
             unit=u.AA,
-            r_scale=RScale(),
+            r_scale=RScale(prior=Uniform(0.8, 1.2)),
         )
         assert d.has_calibration_params
+
+    def test_has_calibration_params_false_with_default_token(self):
+        """Attaching a token with the default Fixed prior is still 'uncalibrated'."""
+        from unite.instrument.generic import GenericDisperser
+
+        d = GenericDisperser(
+            R_func=lambda w: w * 0 + 1000,
+            dlam_dpix_func=lambda w: w / 1000,
+            unit=u.AA,
+            r_scale=RScale(),
+        )
+        assert not d.has_calibration_params
 
     def test_cannot_instantiate_abc(self):
         with pytest.raises(TypeError):
             Disperser(u.AA)
+
+
+# ---------------------------------------------------------------------------
+# Disperser.__str__ / format_calibration_sections
+# ---------------------------------------------------------------------------
+
+
+class TestDisperserStr:
+    """Tests for Disperser.__str__ and the shared format_calibration_sections helper."""
+
+    def test_str_shows_default_fixed_tokens(self):
+        """Every slot always carries a token, so str() always shows all three,
+        fixed at nominal, even when none were passed explicitly."""
+        from unite.instrument.generic import GenericDisperser
+
+        d = GenericDisperser(
+            R_func=lambda w: w * 0 + 1000, dlam_dpix_func=lambda w: w / 1000, unit=u.AA
+        )
+        s = str(d)
+        assert s != repr(d)
+        assert 'R Scale:' in s
+        assert 'Flux Scale:' in s
+        assert 'Pix Offset:' in s
+        assert 'Fixed(1.0)' in s
+        assert 'Fixed(0.0)' in s
+
+    def test_str_with_unregistered_token_does_not_raise(self):
+        """A bare, never-registered token shows a placeholder instead of raising."""
+        from unite.instrument.generic import GenericDisperser
+
+        d = GenericDisperser(
+            R_func=lambda w: w * 0 + 1000,
+            dlam_dpix_func=lambda w: w / 1000,
+            unit=u.AA,
+            r_scale=RScale(prior=Uniform(0.8, 1.2)),
+        )
+        s = str(d)
+        assert '<unregistered>' in s
+        assert 'Uniform' in s
+
+    def test_str_with_labeled_token_shows_prefixed_site_name(self):
+        """A user-labeled token is named eagerly in Disperser.__init__."""
+        from unite.instrument.generic import GenericDisperser
+
+        d = GenericDisperser(
+            R_func=lambda w: w * 0 + 1000,
+            dlam_dpix_func=lambda w: w / 1000,
+            unit=u.AA,
+            flux_scale=FluxScale(name='my_flux', prior=Uniform(0.5, 1.5)),
+        )
+        s = str(d)
+        assert 'flux_scale_my_flux' in s
+        assert 'Flux Scale:' in s
+
+    def test_str_registered_token_matches_config_repr(self):
+        """After registration via InstrumentConfig, str(disperser) uses the same name."""
+        from unite.instrument.config import InstrumentConfig
+        from unite.instrument.generic import GenericDisperser
+
+        d = GenericDisperser(
+            R_func=lambda w: w * 0 + 1000,
+            dlam_dpix_func=lambda w: w / 1000,
+            unit=u.AA,
+            name='disp1',
+            r_scale=RScale(),
+        )
+        InstrumentConfig([d])
+        assert d.r_scale._name is not None
+        assert d.r_scale.name in str(d)
+        assert d.r_scale.name in repr(InstrumentConfig([d]))

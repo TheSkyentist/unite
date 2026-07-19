@@ -140,10 +140,7 @@ def evaluate_model(
         edges_base = jnp.asarray(spectrum.edges * wl_scale)
         edges_disp_base = jnp.asarray(spectrum.edges)
         keep_mask = jnp.asarray(spectrum.keep_mask)
-        if disp.pix_offset is not None:
-            dlam_edges = disp.dlam_dpix(edges_disp_base) * wl_scale  # (E,)
-        else:
-            dlam_edges = None
+        dlam_edges = disp.dlam_dpix(edges_disp_base) * wl_scale  # (E,)
 
         line_scale = float(args.line_flux_scales[i])
         cont_scale = float(args.continuum_scales[i])
@@ -185,18 +182,12 @@ def evaluate_model(
                 )
 
             # --- Calibration ---
-            r_scale = params[_disp.r_scale.name] if _disp.r_scale is not None else 1.0
-            flux_scale_val = (
-                params[_disp.flux_scale.name] if _disp.flux_scale is not None else 1.0
-            )
-            pix_offset = (
-                params[_disp.pix_offset.name] if _disp.pix_offset is not None else 0.0
-            )
+            r_scale = params[_disp.r_scale.name]
+            flux_scale_val = params[_disp.flux_scale.name]
+            pix_offset = params[_disp.pix_offset.name]
 
-            # --- Edge topology (apply sub-pixel offset if present) ---
-            edges = _edges
-            if _dlam_edges is not None:
-                edges = edges + pix_offset * _dlam_edges
+            # --- Edge topology (apply sub-pixel offset) ---
+            edges = _edges + pix_offset * _dlam_edges
             widths = jnp.diff(edges)
             # Per-pixel low/high for diagnostics and convolution mode.
             low = edges[:-1][_keep]

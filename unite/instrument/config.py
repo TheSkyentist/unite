@@ -23,10 +23,11 @@ parameter in the fitted model::
 
 Degeneracy warning
 ------------------
-A multi-disperser fit is only identified if at least one disperser has
-``flux_scale=None`` (flux anchor) and at least one has ``pix_offset=None``
-(pixel-offset anchor).  :meth:`validate` issues :class:`UserWarning` when
-these conditions are not met.  Validation is called automatically when this
+A multi-disperser fit is only identified if at least one disperser's
+``flux_scale`` is anchored (a ``Fixed`` prior — the default when the token
+is left unset) and at least one disperser's ``pix_offset`` is likewise
+anchored.  :meth:`validate` issues :class:`UserWarning` when these
+conditions are not met.  Validation is called automatically when this
 object is passed to :class:`~unite.config.Configuration`.
 
 Serialization
@@ -60,7 +61,13 @@ from pathlib import Path
 import yaml
 
 from unite._utils import _alpha_name
-from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.base import (
+    Disperser,
+    FluxScale,
+    PixOffset,
+    RScale,
+    format_calibration_sections,
+)
 from unite.instrument.nirspec.disperser import (
     G140H,
     G140M,
@@ -72,7 +79,7 @@ from unite.instrument.nirspec.disperser import (
     NIRSpec,
 )
 from unite.instrument.sdss.disperser import SDSSDisperser
-from unite.prior import Parameter, prior_from_dict
+from unite.prior import Fixed, Parameter, prior_from_dict
 
 # ---------------------------------------------------------------------------
 # Disperser serialization registry
@@ -146,10 +153,9 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
         d['grating'] = disperser.grating
         d['r_source'] = disperser.r_source
 
-    # CalibParam references by token name (or null for fixed).
+    # CalibParam references by token name.
     for attr in ('r_scale', 'flux_scale', 'pix_offset'):
-        token = getattr(disperser, attr)
-        d[attr] = token.name if token is not None else None
+        d[attr] = getattr(disperser, attr).name
 
     return d
 
@@ -182,8 +188,7 @@ def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disp
         kwargs['r_source'] = d['r_source']
 
     for attr in ('r_scale', 'flux_scale', 'pix_offset'):
-        ref = d.get(attr)
-        kwargs[attr] = token_registry[ref] if ref is not None else None
+        kwargs[attr] = token_registry[d[attr]]
 
     return cls(**kwargs)
 
@@ -193,15 +198,15 @@ def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disp
 # ---------------------------------------------------------------------------
 
 _FLUX_DEGENERACY_WARNING = (
-    'InstrumentConfig: no disperser has flux_scale=None (fixed). '
-    'Relative flux scales are degenerate — set flux_scale=None on one '
-    'disperser to anchor the flux calibration.'
+    'InstrumentConfig: no disperser has an anchored (Fixed-prior) flux_scale. '
+    'Relative flux scales are degenerate — leave flux_scale unset (or give it '
+    'a Fixed prior) on one disperser to anchor the flux calibration.'
 )
 
 _PIX_DEGENERACY_WARNING = (
-    'InstrumentConfig: no disperser has pix_offset=None (fixed). '
-    'Pixel-offset (dispersion) scales are degenerate — set pix_offset=None '
-    'on one disperser to anchor the wavelength solution.'
+    'InstrumentConfig: no disperser has an anchored (Fixed-prior) pix_offset. '
+    'Pixel-offset (dispersion) scales are degenerate — leave pix_offset unset '
+    '(or give it a Fixed prior) on one disperser to anchor the wavelength solution.'
 )
 
 
@@ -269,7 +274,7 @@ class InstrumentConfig:
         for d in self._dispersers:
             for slot in _slots:
                 tok = getattr(d, slot)
-                if tok is not None and tok._name is None:
+                if tok._name is None:
                     tok_dispersers.setdefault(id(tok), []).append(d)
 
         counters: dict[str, int] = {}  # slot → next alpha index
@@ -278,7 +283,7 @@ class InstrumentConfig:
         for d in self._dispersers:
             for slot in _slots:
                 tok = getattr(d, slot)
-                if tok is None or tok._name is not None or id(tok) in seen:
+                if tok._name is not None or id(tok) in seen:
                     continue
                 seen.add(id(tok))
                 dispersers_with_tok = tok_dispersers.get(id(tok), [])
@@ -303,12 +308,12 @@ class InstrumentConfig:
         """Check for flux and pixel-offset degeneracies.
 
         Issues a :class:`UserWarning` for each calibration axis (flux,
-        dispersion) where no disperser is anchored (token ``None``).
+        dispersion) where no disperser is anchored (``Fixed`` prior).
         """
         if len(self._dispersers) > 1:
-            if all(d.flux_scale is not None for d in self._dispersers):
+            if all(not isinstance(d.flux_scale.prior, Fixed) for d in self._dispersers):
                 warnings.warn(_FLUX_DEGENERACY_WARNING, UserWarning, stacklevel=2)
-            if all(d.pix_offset is not None for d in self._dispersers):
+            if all(not isinstance(d.pix_offset.prior, Fixed) for d in self._dispersers):
                 warnings.warn(_PIX_DEGENERACY_WARNING, UserWarning, stacklevel=2)
 
     # -- names ---------------------------------------------------------------
@@ -357,7 +362,7 @@ class InstrumentConfig:
         for d in self._dispersers:
             for attr in ('r_scale', 'flux_scale', 'pix_offset'):
                 token = getattr(d, attr)
-                if token is not None and id(token) not in seen_ids:
+                if id(token) not in seen_ids:
                     seen_ids[id(token)] = token
 
         calib_params = {t.name: _calib_param_to_dict(t) for t in seen_ids.values()}
@@ -483,10 +488,9 @@ class InstrumentConfig:
 
         header = f'InstrumentConfig: {len(self._dispersers)} disperser(s)'
 
-        def _tok_name(token: Parameter | None) -> str:
-            if token is None:
-                return '— (fixed)'
-            return token.name or '—'
+        def _tok_name(token: Parameter) -> str:
+            suffix = ' (fixed)' if isinstance(token.prior, Fixed) else ''
+            return f'{token.name}{suffix}'
 
         rows = [
             (
@@ -511,36 +515,6 @@ class InstrumentConfig:
         for row in rows:
             lines.append('  ' + fmt.format(*row))
 
-        # Add calibration parameter details section (like Line config)
-        calib_params: dict[str, list[tuple[str, Parameter]]] = {
-            'r_scale': [],
-            'flux_scale': [],
-            'pix_offset': [],
-        }
-
-        seen_ids: dict[str, set[int]] = {
-            'r_scale': set(),
-            'flux_scale': set(),
-            'pix_offset': set(),
-        }
-
-        for d in self._dispersers:
-            for attr in ('r_scale', 'flux_scale', 'pix_offset'):
-                token = getattr(d, attr)
-                if token is not None:
-                    token_id = id(token)
-                    if token_id not in seen_ids[attr]:
-                        seen_ids[attr].add(token_id)
-                        calib_params[attr].append((token.name, token))
-
-        # Format calibration parameter sections
-        for attr, params in calib_params.items():
-            if params:
-                lines.append('')
-                section_title = attr.replace('_', ' ').title()
-                lines.append(f'  {section_title}:')
-                name_width = max(len(name) for name, _ in params)
-                for name, token in params:
-                    lines.append(f'    {name:<{name_width}}  {token.prior!r}')
+        lines.extend(format_calibration_sections(self._dispersers))
 
         return '\n'.join(lines)

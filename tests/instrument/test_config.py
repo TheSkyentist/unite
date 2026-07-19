@@ -8,7 +8,7 @@ from unite.instrument.base import FluxScale, PixOffset, RScale
 from unite.instrument.config import InstrumentConfig
 from unite.instrument.nirspec import G235H, G395H
 from unite.instrument.sdss import SDSSDisperser
-from unite.prior import TruncatedNormal, Uniform
+from unite.prior import Fixed, TruncatedNormal, Uniform
 
 # ---------------------------------------------------------------------------
 # Construction and validation
@@ -72,36 +72,36 @@ class TestDegeneracyWarnings:
     """Tests for validate() degeneracy warnings."""
 
     def test_no_warning_with_anchor(self):
-        """No warning when one disperser has flux_scale=None (anchor)."""
-        f = FluxScale()
+        """No warning when one disperser's flux_scale is anchored (Fixed prior)."""
+        f = FluxScale()  # default Fixed(1.0) — anchored
         cfg = InstrumentConfig([G235H(), G395H(flux_scale=f)])
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter('always')
             cfg.validate()
-            flux_warnings = [x for x in w if 'flux_scale=None' in str(x.message)]
+            flux_warnings = [x for x in w if 'flux_scale' in str(x.message)]
             assert len(flux_warnings) == 0
 
-    def test_warning_all_flux_scale_set(self):
-        """Warning when all dispersers have flux_scale set."""
-        f1 = FluxScale()
-        f2 = FluxScale()
+    def test_warning_all_flux_scale_sampled(self):
+        """Warning when every disperser's flux_scale is a free (sampled) parameter."""
+        f1 = FluxScale(prior=Uniform(0.5, 1.5))
+        f2 = FluxScale(prior=Uniform(0.5, 1.5))
         cfg = InstrumentConfig([G235H(flux_scale=f1), G395H(flux_scale=f2)])
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter('always')
             cfg.validate()
             msgs = [str(x.message) for x in w]
-            assert any('flux_scale=None' in m for m in msgs)
+            assert any('flux_scale' in m for m in msgs)
 
-    def test_warning_all_pix_offset_set(self):
-        """Warning when all dispersers have pix_offset set."""
-        p1 = PixOffset()
-        p2 = PixOffset()
+    def test_warning_all_pix_offset_sampled(self):
+        """Warning when every disperser's pix_offset is a free (sampled) parameter."""
+        p1 = PixOffset(prior=Uniform(-2.0, 2.0))
+        p2 = PixOffset(prior=Uniform(-2.0, 2.0))
         cfg = InstrumentConfig([G235H(pix_offset=p1), G395H(pix_offset=p2)])
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter('always')
             cfg.validate()
             msgs = [str(x.message) for x in w]
-            assert any('pix_offset=None' in m for m in msgs)
+            assert any('pix_offset' in m for m in msgs)
 
     def test_no_warning_single_disperser(self):
         """No degeneracy warning for single disperser."""
@@ -145,8 +145,8 @@ class TestInstrumentConfigSerialization:
         yaml_str = cfg.to_yaml()
         cfg2 = InstrumentConfig.from_yaml(yaml_str)
         assert cfg2.names == ['G235H', 'G395H']
-        assert cfg2[0].flux_scale is not None
-        assert cfg2[1].flux_scale is None
+        assert isinstance(cfg2[0].flux_scale.prior, Uniform)
+        assert isinstance(cfg2[1].flux_scale.prior, Fixed)  # private default, anchored
 
     def test_file_roundtrip(self, tmp_path):
         r = RScale(prior=Uniform(0.9, 1.1), name='r1')
@@ -156,9 +156,9 @@ class TestInstrumentConfigSerialization:
         cfg.save(path)
         cfg2 = InstrumentConfig.load(path)
         assert cfg2.names == ['G235H', 'G395H']
-        assert cfg2[0].r_scale is not None
-        assert cfg2[0].pix_offset is not None
-        assert cfg2[1].r_scale is None
+        assert isinstance(cfg2[0].r_scale.prior, Uniform)
+        assert isinstance(cfg2[0].pix_offset.prior, Uniform)
+        assert isinstance(cfg2[1].r_scale.prior, Fixed)  # private default, anchored
 
     def test_calib_params_section_in_dict(self):
         r = RScale(name='r1')
@@ -170,10 +170,18 @@ class TestInstrumentConfigSerialization:
         assert 'r_scale_r1' in d['calib_params']
         assert 'flux_scale_f1' in d['calib_params']
 
-    def test_no_calib_params_when_none(self):
+    def test_calib_params_present_even_when_all_defaults(self):
+        """Every disperser always carries private, Fixed-prior tokens, so
+        calib_params is never empty once registered in an InstrumentConfig."""
         cfg = InstrumentConfig([G235H()])
         d = cfg.to_dict()
-        assert d['calib_params'] == {}
+        assert set(d['calib_params']) == {
+            'r_scale_G235H',
+            'flux_scale_G235H',
+            'pix_offset_G235H',
+        }
+        for entry in d['calib_params'].values():
+            assert entry['prior']['type'] == 'Fixed'
 
     def test_r_source_preserved(self):
         cfg = InstrumentConfig([G235H(r_source='uniform')])

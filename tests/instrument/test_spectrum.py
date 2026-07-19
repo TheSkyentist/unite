@@ -386,12 +386,20 @@ class TestSpectraConstruction:
         assert spectra[0] is spectrum
 
     def test_repr(self):
-        """Spectra.__repr__ returns a string (lines 660-670)."""
+        """Spectra.__repr__ returns a compact one-line summary."""
         spectrum = _make_spectrum(name='test')
         spectra = Spectra([spectrum], redshift=0.0)
         r = repr(spectra)
         assert 'Spectra' in r
-        assert 'test' in r
+        assert '\n' not in r
+
+    def test_str(self):
+        """Spectra.__str__ adds the per-spectrum table."""
+        spectrum = _make_spectrum(name='test')
+        spectra = Spectra([spectrum], redshift=0.0)
+        s = str(spectra)
+        assert repr(spectra) in s
+        assert 'test' in s
 
 
 # ---------------------------------------------------------------------------
@@ -678,12 +686,13 @@ class TestSpectrumRepr:
     """Tests for Spectrum __repr__ method."""
 
     def test_repr_with_calibration_params(self):
-        """repr shows [calibrated] when disperser has calibration params (generic.py line 488-493)."""
+        """repr shows [calibrated] when disperser has a sampled calibration prior (generic.py line 488-493)."""
         from unite.instrument.base import RScale
+        from unite.prior import Uniform
 
         wl = np.linspace(6500, 6600, 100) * u.AA
-        # Disperser with calibration token
-        r_scale = RScale()
+        # Disperser with a free (sampled) calibration token
+        r_scale = RScale(prior=Uniform(0.8, 1.2))
         disperser = SimpleDisperser(
             wavelength=wl, R=3000.0, name='test_disp', r_scale=r_scale
         )
@@ -713,6 +722,34 @@ class TestSpectrumRepr:
         spectrum.name = ''
         repr_str = repr(spectrum)
         assert 'Spectrum' in repr_str
+
+
+class TestSpectrumStr:
+    """Tests for Spectrum.__str__, which shows the disperser's calibration priors."""
+
+    def test_str_without_calibration_params(self):
+        spectrum = _make_spectrum()
+        s = str(spectrum)
+        assert repr(spectrum) in s
+        assert 'Disperser:' in s
+
+    def test_str_with_calibration_params_shows_prior(self):
+        from unite.instrument.base import RScale
+        from unite.prior import Uniform
+
+        wl = np.linspace(6500, 6600, 100) * u.AA
+        disperser = SimpleDisperser(
+            wavelength=wl,
+            R=3000.0,
+            name='test_disp',
+            r_scale=RScale(prior=Uniform(0.8, 1.2)),
+        )
+        spectrum = _make_spectrum()
+        spectrum.disperser = disperser
+
+        s = str(spectrum)
+        assert 'R Scale:' in s
+        assert 'Uniform' in s
 
 
 # ---------------------------------------------------------------------------

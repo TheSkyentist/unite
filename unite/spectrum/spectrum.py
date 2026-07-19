@@ -7,7 +7,7 @@ import numpy as np
 from astropy import units as u
 
 from unite._utils import _ensure_flux_density, _ensure_wavelength
-from unite.instrument.base import Disperser
+from unite.instrument.base import Disperser, format_calibration_sections
 
 
 def _compute_edge_topology(
@@ -333,7 +333,7 @@ class Spectrum:
 
     @property
     def has_calibration_priors(self) -> bool:
-        """``True`` if any calibration token is set on the disperser."""
+        """``True`` if any calibration token on the disperser has a sampled prior."""
         return self.disperser.has_calibration_params
 
     # -- coverage -------------------------------------------------------------
@@ -408,6 +408,12 @@ class Spectrum:
         label = f'{cls_name} {self.name!r}' if self.name else cls_name
         cal = ' [calibrated]' if self.has_calibration_priors else ''
         return f'{label}: {self.npix} px, λ ∈ [{lo:.4g}, {hi:.4g}] {unit_str}{cal}'
+
+    def __str__(self) -> str:
+        """Return :func:`repr` plus the disperser's calibration tokens and priors."""
+        lines = [repr(self), f'  Disperser: {self.disperser!r}']
+        lines.extend(format_calibration_sections([self.disperser]))
+        return '\n'.join(lines)
 
 
 # Re-export ArrayLike for type hints in downstream code (keeps it importable).

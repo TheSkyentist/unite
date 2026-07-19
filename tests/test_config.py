@@ -66,15 +66,17 @@ class TestConfigurationConstruction:
 
     def test_dispersers_validate_called(self):
         """Configuration should call validate() on dispersers."""
-        f1 = FluxScale()
-        f2 = FluxScale()
+        from unite.prior import Uniform
+
+        f1 = FluxScale(prior=Uniform(0.5, 1.5))
+        f2 = FluxScale(prior=Uniform(0.5, 1.5))
         dc = InstrumentConfig([G235H(flux_scale=f1), G395H(flux_scale=f2)])
         lc = _make_line_config()
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter('always')
             Configuration(lc, dispersers=dc)
             msgs = [str(x.message) for x in w]
-            assert any('flux_scale=None' in m for m in msgs)
+            assert any('flux_scale' in m for m in msgs)
 
     def test_repr(self):
         lc = _make_line_config()
