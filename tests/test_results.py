@@ -9,7 +9,14 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import line, model, prior
-from unite.continuum import ContinuumConfiguration, Linear
+from unite.continuum import (
+    Bernstein,
+    Chebyshev,
+    ContinuumConfiguration,
+    Legendre,
+    Linear,
+    Polynomial,
+)
 from unite.continuum.config import ContinuumRegion, ContShape, Scale
 from unite.instrument.generic import SimpleDisperser
 from unite.results import (
@@ -351,6 +358,49 @@ class TestRestEquivalentWidths:
         assert not any(col.startswith('rew_') for col in table.colnames)
 
 
+@pytest.mark.parametrize(
+    'form',
+    [Polynomial(degree=2), Chebyshev(order=2), Legendre(order=2), Bernstein(degree=3)],
+    ids=['Polynomial', 'Chebyshev', 'Legendre', 'Bernstein'],
+)
+class TestPolynomialFamilyContinuumREW:
+    """Regression test for GH #21.
+
+    Polynomial-family continuum forms (``Polynomial``, ``Chebyshev``,
+    ``Legendre``, ``Bernstein``) route through ``_gaussian_convolve_poly``,
+    which hard-assumes a 1-D coefficient vector. ``_compute_rew_columns``
+    evaluates ``form.evaluate`` with parameters vectorized as
+    ``(n_samples,)`` arrays (not scalars), which used to stack into a 2-D
+    coefficient array and crash the einsum inside ``_gaussian_convolve_poly``.
+    """
+
+    @pytest.fixture
+    def setup(self, form):
+        lc = _simple_lc()
+        cont = ContinuumConfiguration.from_lines(
+            lc.centers, width=30_000 * u.km / u.s, form=form
+        )
+        model_fn, args = _build_model(_make_spectrum(), lc, cont)
+        samples = Predictive(model_fn, num_samples=4)(random.PRNGKey(0), args)
+        return samples, args
+
+    def test_rew_basic(self, setup):
+        """REW column present, correct length, all finite (no crash)."""
+        samples, args = setup
+        table = make_parameter_table(samples, args)
+        assert 'rew_Ha' in table.colnames
+        assert len(table['rew_Ha']) == 4
+        assert np.all(np.isfinite(np.asarray(table['rew_Ha'])))
+
+    def test_rew_percentiles_mode(self, setup):
+        """REW present in percentile mode with correct shape (no crash)."""
+        samples, args = setup
+        table = make_parameter_table(samples, args, percentiles=_PERCENTILES)
+        assert 'rew_Ha' in table.colnames
+        assert len(table['rew_Ha']) == 3
+        assert np.all(np.isfinite(np.asarray(table['rew_Ha'])))
+
+
 class TestMakeHDULWithContinuum:
     """Tests for make_hdul with continuum."""
 
@@ -505,6 +555,41 @@ def emission_rew_setup():
 
 
 @pytest.fixture(scope='module')
+def polynomial_emission_rew_setup():
+    """Deterministic emission model with a flat *Polynomial* continuum, z=0.
+
+    Same as ``emission_rew_setup`` but uses ``Polynomial(degree=2)`` with
+    ``c1=c2=0`` (still flat at ``scale=1``) instead of ``Linear``, so it
+    exercises the ``_gaussian_convolve_poly`` codepath that GH #21 reported
+    as broken.
+    """
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha',
+        6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        flux=line.Flux(prior=prior.Fixed(1.0)),
+    )
+    cont = ContinuumConfiguration.from_lines(
+        lc.centers, width=30_000 * u.km / u.s, form=Polynomial(degree=2)
+    )
+    # Override continuum priors: flat at scale=1, c1=c2=0.
+    for region in cont:
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        region.params['c1'] = ContShape(prior=prior.Fixed(0.0))
+        region.params['c2'] = ContShape(prior=prior.Fixed(0.0))
+    spec = _make_rew_spectrum()
+    spectra = Spectra([spec], redshift=0.0)
+    spectra.prepare(lc, cont)
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+    _model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+    return args
+
+
+@pytest.fixture(scope='module')
 def absorption_rew_setup():
     """Deterministic absorption model: known tau on flat continuum, z=0."""
     from unite.line.config import Tau
@@ -560,6 +645,24 @@ class TestREWAccuracy:
         assert 'rew_Ha' in rew_cols
         rew = rew_cols['rew_Ha']
         # Expected: flux_physical / cont_physical = line_flux_scale / cont_scale
+        expected = args.line_flux_scales[0] / args.continuum_scales[0]
+        np.testing.assert_allclose(rew, expected, rtol=1e-4)
+
+    def test_polynomial_emission_rew_value(self, polynomial_emission_rew_setup):
+        """Same as test_emission_rew_value, but with a Polynomial continuum.
+
+        Regression test for GH #21: with a single Fixed-prior sample
+        (n_samples=1), ``_compute_rew_columns`` used to crash inside
+        ``_gaussian_convolve_poly`` because the per-sample parameter arrays
+        it builds are never true scalars. The expected REW is identical to
+        the Linear case since the polynomial continuum is flat.
+        """
+        args = polynomial_emission_rew_setup
+        from unite.results import _compute_rew_columns
+
+        rew_cols = _compute_rew_columns({}, args)
+        assert 'rew_Ha' in rew_cols
+        rew = rew_cols['rew_Ha']
         expected = args.line_flux_scales[0] / args.continuum_scales[0]
         np.testing.assert_allclose(rew, expected, rtol=1e-4)
 

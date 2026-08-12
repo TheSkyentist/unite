@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, overload
 
+import jax
 import numpy as np
 from astropy import units as u
 from astropy.io import fits
@@ -685,8 +686,10 @@ def _compute_rew_columns(
                     val = val * _cont_nw_conv[k] * (1.0 + z_sys)
                 cont_p[pn] = val
             form = _cont_forms[k]
+            # form.evaluate() expects scalar params; vmap over the sample axis.
+            evaluate_vmapped = jax.vmap(form.evaluate, in_axes=(0, None, 0, None, None))
             total = total + np.asarray(
-                form.evaluate(obs_wl, obs_center, cont_p, obs_low, obs_high)
+                evaluate_vmapped(obs_wl, obs_center, cont_p, obs_low, obs_high)
             )
         return total
 
