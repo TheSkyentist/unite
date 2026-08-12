@@ -5,6 +5,7 @@
 [![GPLv3 license](https://img.shields.io/badge/License-GPLv3-blue.svg)](http://perso.crans.org/besson/LICENSE.html)
 [![Tests](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml/badge.svg)](https://github.com/TheSkyentist/unite/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/TheSkyentist/unite/branch/main/graph/badge.svg)](https://codecov.io/gh/TheSkyentist/unite)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/TheSkyentist/unite)
 [![Documentation](https://img.shields.io/badge/docs-readthedocs-blue)](https://unite.readthedocs.io/)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.15585034-blue)](https://doi.org/10.5281/zenodo.15585034)
 
