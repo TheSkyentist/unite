@@ -55,7 +55,9 @@ _THOMPSON_C2: Final[float] = ((1 - _THOMPSON_DELTA) / 2) ** 2
 
 def _thompson_fwhm(fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> Array:
     """Voigt FWHM via Thompson et al. (1987); exact at both Gaussian and Lorentzian limits."""
-    return jnp.asarray(_THOMPSON_C1 * fwhm_l + jnp.sqrt(_THOMPSON_C2 * fwhm_l**2 + fwhm_g**2))
+    return jnp.asarray(
+        _THOMPSON_C1 * fwhm_l + jnp.sqrt(_THOMPSON_C2 * fwhm_l**2 + fwhm_g**2)
+    )
 
 
 def _gaussian_pdf(dx: ArrayLike, sigma: ArrayLike) -> Array:
