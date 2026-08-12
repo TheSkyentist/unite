@@ -20,6 +20,20 @@ from unite.continuum.library import ContinuumForm
 from unite.model import ModelArgs
 from unite.prior import Fixed
 
+# form.evaluate() expects scalar params; _compute_rew_columns needs it evaluated per
+# posterior sample, so we vmap+jit it and cache the result per form (keyed by id,
+# since ContinuumForm's __eq__/__hash__ are type-only) instead of re-tracing per line.
+_vmapped_evaluate_cache: dict[int, Callable] = {}
+
+
+def _vmapped_evaluate(form: ContinuumForm) -> Callable:
+    """Return a jitted, sample-vmapped version of ``form.evaluate``."""
+    cached = _vmapped_evaluate_cache.get(id(form))
+    if cached is None:
+        cached = jax.jit(jax.vmap(form.evaluate, in_axes=(0, None, 0, None, None)))
+        _vmapped_evaluate_cache[id(form)] = cached
+    return cached
+
 
 def count_parameters(model_fn, model_args) -> int:
     """Count the number of free scalar parameters (degrees of freedom) in the model.
@@ -686,10 +700,8 @@ def _compute_rew_columns(
                     val = val * _cont_nw_conv[k] * (1.0 + z_sys)
                 cont_p[pn] = val
             form = _cont_forms[k]
-            # form.evaluate() expects scalar params; vmap over the sample axis.
-            evaluate_vmapped = jax.vmap(form.evaluate, in_axes=(0, None, 0, None, None))
             total = total + np.asarray(
-                evaluate_vmapped(obs_wl, obs_center, cont_p, obs_low, obs_high)
+                _vmapped_evaluate(form)(obs_wl, obs_center, cont_p, obs_low, obs_high)
             )
         return total
 
