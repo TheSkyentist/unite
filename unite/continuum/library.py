@@ -77,15 +77,15 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
     # Even Gaussian moments M[j] = (2j-1)!! * sigma^{2j}.
     # M[0] = 1; M[j] = M[j-1] * (2j-1) * sigma^2 for j >= 1.
     if max_half > 1:
-
+        init = jnp.ones_like(sigma2)  # match sigma2's shape/dtype, not bare 1.0
         def _moment_step(carry, j):
             cur = carry * (2 * j - 1) * sigma2
             return cur, cur
 
-        _, rest = jax.lax.scan(_moment_step, 1.0, jnp.arange(1, max_half))
-        moments = jnp.concatenate([jnp.array([1.0]), rest])
+        _, rest = jax.lax.scan(_moment_step, init, jnp.arange(1, max_half))
+        moments = jnp.concatenate([init[None, ...], rest], axis=0)
     else:
-        moments = jnp.ones(1)
+        moments = jnp.ones((1, *jnp.shape(sigma2)), dtype=jnp.result_type(1.0, sigma2))
 
     # Binomial coefficients C(k, 2j): pure NumPy — depends only on n (static).
     binom_np = np.zeros((n + 1, max_half))
@@ -106,7 +106,9 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
         for j in range(min(k // 2, max_half - 1) + 1):
             a_np[i + 2 * j, i, j] = binom_np[k, j]
 
-    return jnp.einsum('oij,j,i->o', jnp.asarray(a_np), moments, coeffs)
+    a = jnp.asarray(a_np)
+    temp = jnp.tensordot(a, moments, axes=([2], [0]))     # (o, i, *lsf_batch)
+    return jnp.tensordot(temp, coeffs, axes=([1], [0]))   # (o, *lsf_batch, *coeff_batch)
 
 
 def _polyint_at(coeffs: Array, x: ArrayLike) -> Array:
