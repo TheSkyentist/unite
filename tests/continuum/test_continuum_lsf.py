@@ -9,6 +9,7 @@ from unite.continuum.library import (
     Bernstein,
     Blackbody,
     Chebyshev,
+    Legendre,
     Linear,
     Polynomial,
     PowerLaw,
@@ -124,6 +125,16 @@ class TestGaussianConvolvePoly:
         np.testing.assert_allclose(
             analytic[mask], numerical[mask], rtol=1e-4, atol=1e-4
         )
+
+    def test_pointwise_fwhm_degree2(self):
+        """GH #21: a vector lsf_fwhm used to crash the lax.scan moment recursion."""
+        coeffs = jnp.array([2.0, -1.0, 3.0])  # 2x^2 - x + 3
+        fwhm = jnp.array([0.0, 1.0, 2.5])
+        result = _gaussian_convolve_poly(coeffs, fwhm)
+        assert result.shape == (3, 3)
+        for i in range(3):
+            expected = _gaussian_convolve_poly(coeffs, fwhm[i])
+            np.testing.assert_allclose(result[:, i], expected, atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +260,23 @@ class TestPolynomialLSF:
             result_lsf[mask], numerical[mask], rtol=1e-4, atol=1e-6
         )
 
+    def test_degree2_pointwise_lsf(self):
+        """GH #21: evaluate() with a per-point (pointwise) lsf_fwhm array."""
+        form = Polynomial(degree=2)
+        wavelength = jnp.linspace(1.0, 2.0, 50)
+        params = {'scale': 1.0, 'c1': 0.5, 'c2': 0.3, 'norm_wav': 1.5}
+        fwhm_pointwise = jnp.linspace(0.0, 0.05, 50)
+
+        result = form.evaluate(wavelength, 1.5, params, 1.0, 2.0, fwhm_pointwise)
+
+        expected = jnp.array(
+            [
+                form.evaluate(wavelength[i], 1.5, params, 1.0, 2.0, fwhm_pointwise[i])
+                for i in range(wavelength.shape[0])
+            ]
+        )
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
 
 # ---------------------------------------------------------------------------
 # Chebyshev LSF convolution
@@ -276,6 +304,77 @@ class TestChebyshevLSF:
         np.testing.assert_allclose(
             result_lsf[mask], numerical[mask], rtol=1e-3, atol=1e-5
         )
+
+    def test_order2_pointwise_lsf(self):
+        """GH #21: evaluate() with a per-point (pointwise) lsf_fwhm array."""
+        form = Chebyshev(order=2)
+        wavelength = jnp.linspace(1.0, 2.0, 50)
+        center = 1.5
+        params = {'scale': 1.0, 'c1': 0.1, 'c2': 0.05, 'norm_wav': center}
+        fwhm_pointwise = jnp.linspace(0.0, 0.05, 50)
+
+        result = form.evaluate(wavelength, center, params, 1.0, 2.0, fwhm_pointwise)
+
+        # form.evaluate divides by shape_nw (astype via atleast_1d), so a
+        # single-point call returns shape (1,) even for scalar input; squeeze
+        # each before stacking.
+        expected = jnp.array(
+            [
+                form.evaluate(
+                    wavelength[i], center, params, 1.0, 2.0, fwhm_pointwise[i]
+                ).squeeze()
+                for i in range(wavelength.shape[0])
+            ]
+        )
+        np.testing.assert_allclose(result, expected, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Legendre LSF convolution
+# ---------------------------------------------------------------------------
+
+
+class TestLegendreLSF:
+    """Test that Legendre.evaluate with LSF matches numerical convolution."""
+
+    def test_order2_lsf(self):
+        form = Legendre(order=2)
+        wavelength = jnp.linspace(1.0, 2.0, 10000)
+        center = 1.5
+        params = {'scale': 1.0, 'p1': 0.1, 'p2': 0.05}
+        fwhm = 0.02
+
+        result_lsf = form.evaluate(wavelength, center, params, 1.0, 2.0, fwhm)
+        result_no_lsf = form.evaluate(wavelength, center, params, 1.0, 2.0, 0.0)
+
+        numerical = _numerical_convolve(
+            wavelength, np.array(result_no_lsf), fwhm * np.ones_like(wavelength)
+        )
+
+        mask = (wavelength > 1.2) & (wavelength < 1.8)
+        np.testing.assert_allclose(
+            result_lsf[mask], numerical[mask], rtol=1e-3, atol=1e-5
+        )
+
+    def test_order2_pointwise_lsf(self):
+        """GH #21: evaluate() with a per-point (pointwise) lsf_fwhm array."""
+        form = Legendre(order=2)
+        wavelength = jnp.linspace(1.0, 2.0, 50)
+        center = 1.5
+        params = {'scale': 1.0, 'p1': 0.1, 'p2': 0.05}
+        fwhm_pointwise = jnp.linspace(0.0, 0.05, 50)
+
+        result = form.evaluate(wavelength, center, params, 1.0, 2.0, fwhm_pointwise)
+
+        expected = jnp.array(
+            [
+                form.evaluate(
+                    wavelength[i], center, params, 1.0, 2.0, fwhm_pointwise[i]
+                )
+                for i in range(wavelength.shape[0])
+            ]
+        )
+        np.testing.assert_allclose(result, expected, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +409,35 @@ class TestBernsteinLSF:
         np.testing.assert_allclose(
             result_lsf[mask], numerical[mask], rtol=1e-3, atol=1e-5
         )
+
+    def test_degree3_pointwise_lsf(self):
+        """GH #21: evaluate() with a per-point (pointwise) lsf_fwhm array."""
+        form = Bernstein(degree=3)
+        wavelength = jnp.linspace(1.0, 2.0, 50)
+        center = 1.5
+        params = {
+            'scale': 1.0,
+            'coeff_1': 1.1,
+            'coeff_2': 0.9,
+            'coeff_3': 1.2,
+            'norm_wav': center,
+        }
+        fwhm_pointwise = jnp.linspace(0.0, 0.05, 50)
+
+        result = form.evaluate(wavelength, center, params, 1.0, 2.0, fwhm_pointwise)
+
+        # form.evaluate divides by shape_nw (astype via atleast_1d), so a
+        # single-point call returns shape (1,) even for scalar input; squeeze
+        # each before stacking.
+        expected = jnp.array(
+            [
+                form.evaluate(
+                    wavelength[i], center, params, 1.0, 2.0, fwhm_pointwise[i]
+                ).squeeze()
+                for i in range(wavelength.shape[0])
+            ]
+        )
+        np.testing.assert_allclose(result, expected, atol=1e-10)
 
 
 # ---------------------------------------------------------------------------
