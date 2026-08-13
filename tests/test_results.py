@@ -364,14 +364,21 @@ class TestRestEquivalentWidths:
     ids=['Polynomial', 'Chebyshev', 'Legendre', 'Bernstein'],
 )
 class TestPolynomialFamilyContinuumREW:
-    """Regression test for GH #21.
+    """Regression tests for GH #21.
 
     Polynomial-family continuum forms (``Polynomial``, ``Chebyshev``,
-    ``Legendre``, ``Bernstein``) route through ``_gaussian_convolve_poly``,
-    which hard-assumes a 1-D coefficient vector. ``_compute_rew_columns``
-    evaluates ``form.evaluate`` with parameters vectorized as
-    ``(n_samples,)`` arrays (not scalars), which used to stack into a 2-D
-    coefficient array and crash the einsum inside ``_gaussian_convolve_poly``.
+    ``Legendre``, ``Bernstein``) route through ``_gaussian_convolve_poly``.
+    Two independent bugs were found there:
+
+    1. ``_compute_rew_columns`` evaluates ``form.evaluate`` with parameters
+       vectorized as ``(n_samples,)`` arrays (not scalars), which used to
+       stack into a 2-D coefficient array and crash the einsum inside
+       ``_gaussian_convolve_poly`` (fixed by vmapping in ``_cont_at_point``).
+    2. ``evaluate_model`` (used by ``make_spectra_tables``/``make_hdul``)
+       calls ``form.evaluate`` with a *pointwise* per-pixel ``lsf_fwhm``
+       array. ``_gaussian_convolve_poly``'s ``lax.scan`` initialized its
+       carry as a Python scalar, which crashed for any polynomial degree
+       high enough to trigger the scan (degree/order >= 2).
     """
 
     @pytest.fixture
@@ -399,6 +406,13 @@ class TestPolynomialFamilyContinuumREW:
         assert 'rew_Ha' in table.colnames
         assert len(table['rew_Ha']) == 3
         assert np.all(np.isfinite(np.asarray(table['rew_Ha'])))
+
+    def test_spectra_tables_basic(self, setup):
+        """make_spectra_tables (pointwise per-pixel lsf_fwhm) does not crash."""
+        samples, args = setup
+        tables = make_spectra_tables(samples, args)
+        table = tables['test']
+        assert np.all(np.isfinite(np.asarray(table['model_total'])))
 
 
 class TestMakeHDULWithContinuum:

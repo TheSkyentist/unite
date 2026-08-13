@@ -63,29 +63,36 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
         Polynomial coefficients in **descending** order
         (i.e. ``coeffs[0]`` is the leading coefficient for ``x^n``).
     lsf_fwhm : ArrayLike
-        Scalar (or broadcastable) LSF FWHM in the same unit as *x*.
+        LSF FWHM in the same unit as *x*. Either scalar (shared by the whole
+        polynomial) or pointwise (one value per evaluation point, e.g. from
+        :meth:`ContinuumForm.evaluate`'s ``lsf_fwhm_pointwise`` contract), in
+        which case the returned coefficients gain a matching trailing axis.
 
     Returns
     -------
-    Array, shape ``(n+1,)``
+    Array, shape ``(n+1,)`` or ``(n+1, *lsf_fwhm.shape)``
         Convolved polynomial coefficients, same descending-order convention.
     """
-    sigma2 = (jnp.asarray(lsf_fwhm) / (2.0 * np.sqrt(2.0 * np.log(2.0)))) ** 2
+    lsf_fwhm = jnp.asarray(lsf_fwhm)
+    sigma2 = (lsf_fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))) ** 2
     n = coeffs.shape[0] - 1  # polynomial degree; static at trace time
     max_half = n // 2 + 1
 
     # Even Gaussian moments M[j] = (2j-1)!! * sigma^{2j}.
     # M[0] = 1; M[j] = M[j-1] * (2j-1) * sigma^2 for j >= 1.
+    # Carry shape tracks sigma2's shape so this works for both scalar and
+    # pointwise (per-evaluation-point) lsf_fwhm.
     if max_half > 1:
 
         def _moment_step(carry, j):
             cur = carry * (2 * j - 1) * sigma2
             return cur, cur
 
-        _, rest = jax.lax.scan(_moment_step, 1.0, jnp.arange(1, max_half))
-        moments = jnp.concatenate([jnp.array([1.0]), rest])
+        init = jnp.ones_like(sigma2)
+        _, rest = jax.lax.scan(_moment_step, init, jnp.arange(1, max_half))
+        moments = jnp.concatenate([init[None], rest], axis=0)
     else:
-        moments = jnp.ones(1)
+        moments = jnp.ones((1, *sigma2.shape), dtype=sigma2.dtype)
 
     # Binomial coefficients C(k, 2j): pure NumPy — depends only on n (static).
     binom_np = np.zeros((n + 1, max_half))
@@ -106,7 +113,7 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
         for j in range(min(k // 2, max_half - 1) + 1):
             a_np[i + 2 * j, i, j] = binom_np[k, j]
 
-    return jnp.einsum('oij,j,i->o', jnp.asarray(a_np), moments, coeffs)
+    return jnp.einsum('oij,j...,i->o...', jnp.asarray(a_np), moments, coeffs)
 
 
 def _polyint_at(coeffs: Array, x: ArrayLike) -> Array:
