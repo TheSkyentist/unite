@@ -12,6 +12,7 @@ from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
 from unite.continuum.library import Linear
 from unite.instrument.base import PixOffset
 from unite.instrument.generic import GenericDisperser, SimpleDisperser
+from unite.results import make_spectra_tables
 from unite.spectrum import Spectra, Spectrum
 
 
@@ -469,3 +470,91 @@ class TestEvaluateAbsorption:
 
         pred = evaluate_model({}, args)[0]
         np.testing.assert_allclose(pred.total[0], npyro_loc, rtol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Fixed prior wrapping a multi-parameter expression (#24)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope='module')
+def fixed_expr_setup():
+    """Four-line model: a, b, c sampled; d = Fixed(a * b / c).
+
+    Mirrors ``TestFixedRefParam`` in ``test_results.py``, which covers the
+    same ``Fixed(expr)`` construct through ``make_parameter_table`` — but
+    that goes through ``results._resolve_fixed``, a separate code path from
+    ``compute.evaluate_model`` (used by ``make_spectra_tables``/``make_hdul``).
+    """
+    wavelength = np.linspace(6300, 6800, 250) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='fexpr')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    rng = np.random.default_rng(11)
+    flux = (5.0 + rng.normal(0, 1, len(wavelength))) * flux_unit
+    error = np.full(len(wavelength), 1.0) * flux_unit
+    spec = Spectrum(
+        low=low, high=high, flux=flux, error=error, disperser=disperser, name='fexpr'
+    )
+
+    z_tok = line.Redshift('z', prior=prior.Uniform(-0.001, 0.001))
+    fwhm_tok = line.FWHM('fwhm', prior=prior.Uniform(200, 400))
+    flux_a = line.Flux('a', prior=prior.Uniform(1.0, 3.0))
+    flux_b = line.Flux('b', prior=prior.Uniform(1.0, 3.0))
+    flux_c = line.Flux('c', prior=prior.Uniform(1.0, 3.0))
+    flux_d = line.Flux('d', prior=prior.Fixed(flux_a * flux_b / flux_c))
+
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'line_a', 6380.0 * u.AA, redshift=z_tok, fwhm_gauss=fwhm_tok, flux=flux_a
+    )
+    lc.add_line(
+        'line_b', 6500.0 * u.AA, redshift=z_tok, fwhm_gauss=fwhm_tok, flux=flux_b
+    )
+    lc.add_line(
+        'line_c', 6620.0 * u.AA, redshift=z_tok, fwhm_gauss=fwhm_tok, flux=flux_c
+    )
+    lc.add_line(
+        'line_d', 6740.0 * u.AA, redshift=z_tok, fwhm_gauss=fwhm_tok, flux=flux_d
+    )
+
+    model_fn, args = _build_model(spec, lc)
+    samples = Predictive(model_fn, num_samples=6)(random.PRNGKey(3), args)
+    return samples, args
+
+
+class TestEvaluateFixedExpression:
+    """Regression test for #24: Fixed(a * b / c) through evaluate_model.
+
+    ``compute.evaluate_model`` must resolve expression-valued ``Fixed``
+    priors against the sampled context (as ``model.py`` and
+    ``results._resolve_fixed`` already do), rather than passing the raw
+    internal expression object straight to ``jnp.asarray``.
+    """
+
+    def test_evaluate_model_does_not_raise(self, fixed_expr_setup):
+        samples, args = fixed_expr_setup
+        results = evaluate_model(samples, args)
+        assert len(results) == 1
+        assert np.all(np.isfinite(results[0].total))
+
+    def test_dependent_flux_matches_expression(self, fixed_expr_setup):
+        """line_d's integrated flux must track a * b / c on a per-sample basis."""
+        samples, args = fixed_expr_setup
+        pred = evaluate_model(samples, args)[0]
+
+        integrated = {
+            label: np.trapezoid(pred.lines[label], pred.wavelength, axis=1)
+            for label in ('line_a', 'line_b', 'line_c', 'line_d')
+        }
+        # flux_d = flux_a * flux_b / flux_c  =>  flux_d / flux_a = flux_b / flux_c
+        actual_ratio = integrated['line_d'] / integrated['line_a']
+        expected_ratio = np.asarray(samples['flux_b']) / np.asarray(samples['flux_c'])
+        np.testing.assert_allclose(actual_ratio, expected_ratio, rtol=1e-3)
+
+    def test_make_spectra_tables_does_not_raise(self, fixed_expr_setup):
+        """Reproduces the exact call chain from #24: make_spectra_tables()."""
+        samples, args = fixed_expr_setup
+        tables = make_spectra_tables(samples, args)
+        assert len(tables) == 1

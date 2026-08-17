@@ -100,16 +100,20 @@ def evaluate_model(
 
     # --- Build parameter dict with a uniform (n_samples,) leading axis ---
     context: dict[str, jnp.ndarray] = {}
+    obj_ctx: dict[object, jnp.ndarray] = {}  # token -> value, for Fixed expr resolution
     n_samples = None
     for pname in args.dependency_order:
         prior = args.all_priors[pname]
         if isinstance(prior, Fixed):
-            context[pname] = jnp.asarray(prior.value)
+            arr = jnp.asarray(prior.resolved_value(obj_ctx))
         else:
             arr = jnp.asarray(samples[pname])
-            context[pname] = arr
             if n_samples is None and arr.ndim >= 1:
                 n_samples = arr.shape[0]
+        context[pname] = arr
+        tok = args.name_to_token.get(pname)
+        if tok is not None:
+            obj_ctx[tok] = arr
 
     if n_samples is None:
         n_samples = 1
