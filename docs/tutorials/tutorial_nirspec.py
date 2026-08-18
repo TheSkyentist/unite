@@ -21,6 +21,7 @@ a little red dot (LRD) from the RUBIES survey with broad Balmer lines.
 import astropy.units as u
 import jax
 import jax.numpy as jnp
+import numpyro
 from matplotlib import pyplot
 from numpyro import infer
 
@@ -28,6 +29,11 @@ from unite import continuum, instrument, line, model, prior, results, spectrum
 from unite.instrument import nirspec
 
 pyplot.style.use('unite.mplstyle')
+
+# We run 2 NUTS chains in parallel in Step 6 below; this tells numpyro/XLA to
+# expose 2 CPU host devices so the chains run truly in parallel rather than
+# sequentially with a warning. Must be set before any JAX computation.
+numpyro.set_host_device_count(2)
 
 # %%
 # Step 1 — Configure the Dispersers
