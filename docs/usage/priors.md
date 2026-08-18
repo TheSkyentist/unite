@@ -123,6 +123,13 @@ flux_4363_broad = line.Flux(
 )
 ```
 
+:::{warning}
+Dependent priors like this tie parameters' posteriors together. For NUTS,
+pass `dense_mass=True` so warmup learns a full mass matrix instead of a
+diagonal one; for SVI, use a full-rank guide (`AutoMultivariateNormal`)
+instead of a mean-field one (see [Sampling & Optimization](inference.md))
+:::
+
 ### Deep Dependency Chains
 
 Dependencies can be **arbitrarily deep**:
@@ -184,7 +191,7 @@ references serialize as `{ref: name}`; compound expressions serialize as nested
 fwhm_broad:
   prior:
     type: Uniform
-    low: {op: '+', left: {ref: fwhm_gauss_narrow}, right: 150.0}
+    low: { op: "+", left: { ref: fwhm_gauss_narrow }, right: 150.0 }
     high: 5000.0
 
 # flux_4363_narrow * flux_5007_broad / flux_5007_narrow
@@ -194,10 +201,10 @@ flux_4363_broad:
     value:
       op: /
       left:
-        op: '*'
-        left: {ref: flux_4363_narrow}
-        right: {ref: flux_5007_broad}
-      right: {ref: flux_5007_narrow}
+        op: "*"
+        left: { ref: flux_4363_narrow }
+        right: { ref: flux_5007_broad }
+      right: { ref: flux_5007_narrow }
 ```
 
 The full configuration round-trip preserves all dependency chains. See

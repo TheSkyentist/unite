@@ -77,11 +77,19 @@ samples = builder.fit(
 recommended sampler for most problems. It uses gradient information to efficiently
 explore the posterior.
 
+:::{tip}
+`unite` models often correlate parameters (shared calibration tokens,
+[dependent priors](priors.md#dependent-priors)). `dense_mass=True` only
+affects what NUTS learns during warmup, a full mass matrix instead of a
+diagonal one, so it's cheap to leave on, which is why
+{meth}`~unite.model.ModelBuilder.fit` always uses it.
+:::
+
 ```python
 import jax
 from numpyro import infer
 
-kernel = infer.NUTS(model_fn, dense_mass = True) # dense_mass=True helps with correlated parameters
+kernel = infer.NUTS(model_fn, dense_mass=True)  # full mass matrix — see tip above
 mcmc = infer.MCMC(
     kernel,
     num_warmup=500,
@@ -116,7 +124,7 @@ kernel = infer.NUTS(
     model_fn,
     target_accept_prob=0.9,   # default 0.8; increase for difficult posteriors
     max_tree_depth=12,        # default 10; increase if chains get stuck, or decrease to speed up if you get "divergent transition after max tree depth" warnings
-    dense_mass=True,          # full mass matrix; helps with correlated parameters
+    dense_mass=True,          # full mass matrix — see tip above
 )
 ```
 
@@ -127,6 +135,7 @@ kernel = infer.NUTS(
 [SVI](https://num.pyro.ai/en/stable/svi.html) approximates the posterior with a simpler
 family of distributions (e.g., multivariate normal). It is much faster than NUTS and
 useful for:
+
 - rapid iteration on priors and configuration
 - large surveys where full MCMC is too slow
 - initializing NUTS with a good starting point
@@ -136,9 +145,9 @@ from numpyro import infer, optim
 
 guide = autoguide.AutoMultivariateNormal(model_fn)
 svi = infer.SVI(
-    fit_func, 
-    guide, 
-    optim.Adam(step_size=0.01), 
+    fit_func,
+    guide,
+    optim.Adam(step_size=0.01),
     loss=infer.Trace_ELBO()
 )
 svi_result = svi.run(jax.random.PRNGKey(0), 10000, model_args)
@@ -147,9 +156,25 @@ samples = guide.sample_posterior(jax.random.PRNGKey(1), params, sample_shape=(50
 ```
 
 :::{note}
-`AutoMultivariateNormal` fits a full-rank Gaussian. For simpler problems,
-`AutoDiagonalNormal` is faster. For posteriors with strong non-Gaussianity, SVI results
-should be treated as approximate and validated against NUTS on a representative object.
+The guide family determines what correlations SVI can represent, and it matters
+for the same reason `dense_mass` matters for NUTS (see the tip above):
+
+- `AutoNormal` / `AutoDiagonalNormal`: an independent Gaussian per
+  parameter in unconstrained space. Fastest, but **structurally** cannot capture
+  correlation between parameters including the correlations induced by shared
+  calibration tokens or [dependent priors](priors.md#dependent-priors). This
+  biases the posterior.
+- `AutoMultivariateNormal`: fits the linear correlations a
+  diagonal guide misses, at `O(d²)` guide parameters. The right default whenever
+  the model has shared tokens or dependent priors, which is most `unite` models.
+- `AutoBNAFNormal` / `AutoIAFNormal`: normalizing-flow guides that can also
+  capture _nonlinear_ dependencies (e.g. funnel-shaped posteriors from
+  multiplicative dependent priors, where one parameter's conditional spread
+  scales with another's value). More expensive to train; reach for these only
+  if `AutoMultivariateNormal` still converges poorly.
+
+For posteriors with strong non-Gaussianity, treat SVI results as approximate and
+validate against NUTS on a representative object.
 :::
 
 ---

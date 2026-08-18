@@ -326,9 +326,9 @@ for row, s in enumerate(spectra):
 builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
 model_fn, model_args = builder.build()
 
-kernel = infer.NUTS(
-    model_fn, dense_mass=True
-)  # dense_mass=True helps with correlated parameters
+# ``dense_mass=True`` changes what warmup learns (a full mass matrix
+# instead of a diagonal one), worth it since this model has real correlations
+kernel = infer.NUTS(model_fn, dense_mass=True)
 mcmc = infer.MCMC(
     kernel, num_warmup=500, num_samples=1000, num_chains=2, progress_bar=False
 )

@@ -22,7 +22,7 @@ import astropy.units as u
 import jax
 import jax.numpy as jnp
 from matplotlib import pyplot
-from numpyro import infer, optim
+from numpyro import infer
 
 from unite import continuum, instrument, line, model, prior, results, spectrum
 from unite.instrument import nirspec
@@ -318,13 +318,12 @@ pyplot.show()
 # are scaled down in each region for each spectrum by the appropriate factor.
 
 # %%
-# Step 6 — Fit with SVI
+# Step 6 — Fit with NUTS
 # ----------------------
 #
-# For this example we will run the model with SVI as it is fast with
-# relatively good accuracy.
+# NUTS is `unite`'s recommended default sampler.
 #
-# See :doc:`../usage/inference` for NUTS, nested sampling, GPU acceleration,
+# See :doc:`../usage/inference` for SVI, nested sampling, GPU acceleration,
 # and using SVI to initialize NUTS. See :doc:`../usage/build_model` for the
 # ``ModelBuilder`` API.
 
@@ -332,20 +331,20 @@ builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
 model_fn, model_args = builder.build()
 
 # %%
-guide = infer.autoguide.AutoMultivariateNormal(model_fn)
-optimizer = optim.Adam(0.01)
-svi = infer.SVI(model_fn, guide, optimizer, loss=infer.Trace_ELBO())
-svi_result = svi.run(jax.random.PRNGKey(0), 10000, model_args, progress_bar=False)
+# ``dense_mass=True`` only changes what warmup learns (a full mass matrix
+# instead of a diagonal one). Worth it here: ``fwhm_broad``'s prior is tied
+# to ``fwhm_narrow`` (Step 3). Arguably allways worth it since ``resolution_scale``
+# is always correlated with width.
 
-samples = guide.sample_posterior(
-    jax.random.PRNGKey(1), svi_result.params, sample_shape=(500,)
+kernel = infer.NUTS(model_fn, dense_mass=True)
+mcmc = infer.MCMC(
+    kernel, num_warmup=500, num_samples=1000, num_chains=2, progress_bar=False
 )
+mcmc.run(jax.random.PRNGKey(0), model_args, extra_fields=('diverging',))
+samples = mcmc.get_samples()
 
-# Plot ELBO convergence
-fig, ax = pyplot.subplots(figsize=(10, 5))
-ax.plot(svi_result.losses)
-ax.set(xlabel='SVI step', ylabel='ELBO Loss', title='SVI convergence', yscale='log')
-pyplot.show()
+n_divergences = int(mcmc.get_extra_fields()['diverging'].sum())
+print(f'Divergent transitions: {n_divergences}')
 
 # %%
 # Step 7 — Extract Results and Plot

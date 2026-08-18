@@ -84,10 +84,10 @@ def make_parameter_table(
     Parameters
     ----------
     samples : dict of str to ndarray
-        Posterior samples in physical space.  When using :meth:`ModelBuilder.fit`,
-        samples are already transformed.  When calling ``mcmc.get_samples()``
-        directly, first pass through :func:`~unite.model.transform_reparam_samples`
-        to convert any reparameterized (unit-space) parameters back to physical values.
+        Raw posterior samples as returned by :meth:`ModelBuilder.fit`,
+        ``mcmc.get_samples()`` on :meth:`ModelBuilder.build`'s ``model_fn``, or
+        ``guide.sample_posterior()`` under SVI.  No pre-conversion is needed,
+        this function performs the raw-to-physical-unit conversion internally.
     args : ModelArgs
         Model arguments from :meth:`ModelBuilder.build`.
     percentiles : ndarray of float or None

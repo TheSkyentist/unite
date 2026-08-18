@@ -829,6 +829,12 @@ class ModelBuilder:
         (e.g., custom kernel, SVI, nested sampling), call :meth:`build`
         directly and use numpyro's inference APIs.
 
+        The NUTS kernel is always built with ``dense_mass=True``. This only
+        affects what warmup learns (a full mass matrix instead of a
+        diagonal one), which helps because unite models often correlate
+        parameters, e.g. shared calibration tokens or dependent priors
+        (see :doc:`/usage/priors`).
+
         Parameters
         ----------
         num_warmup : int, optional
