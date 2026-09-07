@@ -4,12 +4,12 @@ description = "Unified liNe Integration Turbo Engine"
 readme = "README.md"
 authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
 requires-python = ">= 3.12"
-version = "3.4.4"
+version = "3.4.5"
 dependencies = [
   "jax>=0.10.2",
   "numpy>=2.0",
   "numpyro>=0.21.0,<0.22",
-  "astropy>=7.2.0,<8",
+  "astropy>=7.2.0,<9",
   "pyyaml>=6.0.1,<7",
   ]
 classifiers = [
