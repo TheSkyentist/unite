@@ -191,7 +191,7 @@ def evaluate_model(
             pix_offset = params[_disp.pix_offset.name]
 
             # --- Edge topology (apply sub-pixel offset) ---
-            edges = _edges + pix_offset * _dlam_edges
+            edges = _edges - pix_offset * _dlam_edges
             widths = jnp.diff(edges)
             # Per-pixel low/high for diagnostics and convolution mode.
             low = edges[:-1][_keep]
