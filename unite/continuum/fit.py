@@ -139,7 +139,8 @@ def _fit_linear(
     coeffs, _, _, _ = jnp.linalg.lstsq(design_w, bw)
 
     params_dict: dict[str, float] = {
-        name: float(coeffs[i]) for i, name in enumerate(fitted_names)
+        name: form.linear_coeff_to_param(name, float(coeffs[i]))
+        for i, name in enumerate(fitted_names)
     }
     params_dict['norm_wav'] = nw
 

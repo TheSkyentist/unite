@@ -398,6 +398,27 @@ class ContinuumForm(ABC):
         """
         return False
 
+    def linear_coeff_to_param(self, name: str, coeff: float) -> float:
+        """Map a solved design-matrix coefficient to the reported parameter value.
+
+        Identity by default. Override when a parameter enters through a
+        nonlinear reparametrization of the true linear quantity (e.g.
+        :class:`Linear`'s ``angle``, linear in ``tan(angle)`` not ``angle``).
+
+        Parameters
+        ----------
+        name : str
+            Parameter name (one of :meth:`param_names`).
+        coeff : float
+            Solved coefficient for that parameter's design column.
+
+        Returns
+        -------
+        float
+            The value to report as ``params[name]``.
+        """
+        return coeff
+
     @abstractmethod
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
@@ -552,6 +573,13 @@ class Linear(ContinuumForm):
     @override
     def is_linear(self) -> bool:
         return True
+
+    @override
+    def linear_coeff_to_param(self, name: str, coeff: float) -> float:
+        if name == 'angle':
+            # design column is tan(1) * dwav, so coeff * tan(1) = tan(angle)
+            return float(jnp.arctan(coeff * jnp.tan(1.0)))
+        return coeff
 
     @override
     def param_names(self) -> tuple[str, ...]:
