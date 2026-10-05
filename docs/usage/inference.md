@@ -58,7 +58,7 @@ Install JAX with GPU support following the
 ```python
 from unite import model
 builder = model.ModelBuilder(line_config, cont_config, spectra)
-samples = builder.fit(
+samples, model_args = builder.fit(
     num_warmup = 250,       # Warmup samples
     num_samples = 1000,     # Number of Samples
     num_chains = 1,         # Number of Chains
