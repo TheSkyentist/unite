@@ -821,6 +821,7 @@ class ModelBuilder:
         progress_bar: bool = True,
         integration_mode: str = 'analytic',
         n_super: int = 10,
+        conv_half_width: int | None = None,
     ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -838,7 +839,7 @@ class ModelBuilder:
         Parameters
         ----------
         num_warmup : int, optional
-            Number of warmup iterations per chain (default: 1000).
+            Number of warmup iterations per chain (default: 250).
         num_samples : int, optional
             Number of posterior samples per chain (default: 1000).
         num_chains : int, optional
@@ -853,6 +854,10 @@ class ModelBuilder:
         n_super : int, optional
             Sub-pixel evaluation points per pixel for convolution mode
             (default: 10).  See :meth:`build` for details.
+        conv_half_width : int or None, optional
+            Half-width of the banded LSF convolution kernel for convolution
+            mode (default: ``None``, auto-computed).  See :meth:`build` for
+            details.
 
         Returns
         -------
@@ -878,7 +883,9 @@ class ModelBuilder:
         from numpyro.infer.util import log_likelihood as _npy_ll
 
         model_fn, model_args = self.build(
-            integration_mode=integration_mode, n_super=n_super
+            integration_mode=integration_mode,
+            n_super=n_super,
+            conv_half_width=conv_half_width,
         )
         mcmc = infer.MCMC(
             infer.NUTS(model_fn, dense_mass=True),

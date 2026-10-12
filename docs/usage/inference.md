@@ -64,6 +64,10 @@ samples, model_args = builder.fit(
     num_chains = 1,         # Number of Chains
     seed = 0,               # Random Seed
     progress_bar = True,    # Display a progress bar
+    # Forwarded to ModelBuilder.build (see its documentation):
+    integration_mode = 'analytic',  # or 'convolution'
+    n_super = 10,                   # sub-pixel points (convolution mode only)
+    conv_half_width = None,         # LSF kernel half-width (convolution mode only)
 )
 ```
 
@@ -89,6 +93,7 @@ diagonal one, so it's cheap to leave on, which is why
 import jax
 from numpyro import infer
 
+model_fn, model_args = builder.build()
 kernel = infer.NUTS(model_fn, dense_mass=True)  # full mass matrix — see tip above
 mcmc = infer.MCMC(
     kernel,
@@ -141,11 +146,14 @@ useful for:
 - initializing NUTS with a good starting point
 
 ```python
+import jax
 from numpyro import infer, optim
+from numpyro.infer import autoguide
 
+model_fn, model_args = builder.build()
 guide = autoguide.AutoMultivariateNormal(model_fn)
 svi = infer.SVI(
-    fit_func,
+    model_fn,
     guide,
     optim.Adam(step_size=0.01),
     loss=infer.Trace_ELBO()
@@ -190,7 +198,11 @@ from numpyro.infer import init_to_value
 # 1. Run SVI to convergence (see above)
 params = svi_result.params
 
-# 2. Pass to NUTS via init_to_value
+# 2. Convert the variational posterior to a {site name: value} dict of
+#    constrained values (the guide's median for every sampled parameter)
+init_values = guide.median(params)
+
+# 3. Pass to NUTS via init_to_value
 kernel = infer.NUTS(model_fn, init_strategy=init_to_value(values=init_values))
 mcmc = infer.MCMC(kernel, num_warmup=50, num_samples=1000)
 mcmc.run(jax.random.PRNGKey(1), model_args)

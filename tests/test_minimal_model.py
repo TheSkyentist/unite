@@ -1,5 +1,6 @@
 """Minimal tests for unite_model function without full MCMC sampling."""
 
+import inspect
 import warnings
 
 import astropy.units as u
@@ -583,6 +584,12 @@ class TestWavelengthUnitConsistency:
 
 class TestModelBuilderFit:
     """Test suite for ModelBuilder.fit() convenience method."""
+
+    def test_fit_exposes_all_build_kwargs(self):
+        """fit() must accept every keyword argument that build() does."""
+        build_kwargs = set(inspect.signature(model.ModelBuilder.build).parameters)
+        fit_kwargs = set(inspect.signature(model.ModelBuilder.fit).parameters)
+        assert build_kwargs - {'self'} <= fit_kwargs
 
     @pytest.mark.slow
     def test_fit_basic(self):
