@@ -32,6 +32,7 @@ Ratio constraint tying a flux diagnostic across two kinematic components:
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 
 import numpyro.distributions as dist
@@ -251,7 +252,17 @@ class Prior(ABC):
 
     Subclasses must implement :meth:`to_dist`, :meth:`dependencies`,
     :meth:`to_dict`, and the classmethod :meth:`from_dict`.
+
+    Attributes
+    ----------
+    init : float or None
+        Optional user-specified starting value for the sampler, in the
+        parameter's own (constrained) units.  ``None`` (the default) leaves
+        the starting value to NumPyro's default initialization strategy.
+        See :attr:`unite.model.ModelArgs.init_values`.
     """
+
+    init: float | None = None
 
     @abstractmethod
     def to_dist(self, context: dict) -> dist.Distribution | None:
@@ -366,6 +377,55 @@ def _normalize_bound(value: Bound | Parameter) -> Bound:
         return float(value)
 
 
+def _normalize_init(init: float | None, *bounds: Bound) -> float | None:
+    """Validate a user-specified starting value.
+
+    Parameters
+    ----------
+    init : float or None
+        The starting value, or ``None`` for no explicit start.
+    *bounds : float or _Expr
+        The prior's bounds, in ``(low, high)`` order.  Only plain-float bounds
+        are checked here; bounds that depend on other parameters can only be
+        checked once those parameters are known (at
+        :meth:`~unite.model.ModelBuilder.build` time).
+
+    Returns
+    -------
+    float or None
+
+    Raises
+    ------
+    ValueError
+        If ``init`` is not finite, or lies outside a plain-float bound.
+        Bounds are exclusive: a start on the boundary has no finite
+        unconstrained representation.
+    """
+    if init is None:
+        return None
+    init = float(init)
+    if not math.isfinite(init):
+        raise ValueError(f'init must be finite, got {init!r}')
+    low, high = bounds
+    if not isinstance(low, _Expr) and init <= low:
+        raise ValueError(f'init={init!r} must be greater than the lower bound {low!r}')
+    if not isinstance(high, _Expr) and init >= high:
+        raise ValueError(f'init={init!r} must be less than the upper bound {high!r}')
+    return init
+
+
+def _serialize_init(d: dict, init: float | None) -> dict:
+    """Add ``init`` to a serialized prior dict, only when it was set."""
+    if init is not None:
+        d['init'] = init
+    return d
+
+
+def _init_repr(init: float | None) -> str:
+    """Return a ``', init=...'`` suffix for ``__repr__``, or an empty string."""
+    return '' if init is None else f', init={init!r}'
+
+
 # -------------------------------------------------------------------
 # Concrete priors
 # -------------------------------------------------------------------
@@ -380,6 +440,13 @@ class Uniform(Prior):
         Lower bound.
     high : float, or arithmetic expression on Parameter tokens
         Upper bound.
+    init : float, optional
+        Starting value for the sampler.  Opt-in: by default (``None``) the
+        start is chosen by NumPyro's default strategy.  Must lie strictly
+        inside the bounds.  By setting it you take responsibility for it being
+        valid (including for dependent bounds), and chains started from the
+        same value are less sensitive to non-convergence diagnostics such as
+        R-hat.
 
     Examples
     --------
@@ -396,9 +463,16 @@ class Uniform(Prior):
     >>> Uniform(low=base_redshift, high=base_redshift + 0.1)
     """
 
-    def __init__(self, low: Bound | Parameter = 0, high: Bound | Parameter = 1) -> None:
+    def __init__(
+        self,
+        low: Bound | Parameter = 0,
+        high: Bound | Parameter = 1,
+        *,
+        init: float | None = None,
+    ) -> None:
         self.low = _normalize_bound(low)
         self.high = _normalize_bound(high)
+        self.init = _normalize_init(init, self.low, self.high)
 
     def to_dist(self, context: dict) -> dist.Distribution:
         return dist.Uniform(
@@ -409,21 +483,25 @@ class Uniform(Prior):
         return _bound_deps(self.low) | _bound_deps(self.high)
 
     def to_dict(self, param_namer: dict | None = None) -> dict:
-        return {
-            'type': 'Uniform',
-            'low': _serialize_bound(self.low, param_namer),
-            'high': _serialize_bound(self.high, param_namer),
-        }
+        return _serialize_init(
+            {
+                'type': 'Uniform',
+                'low': _serialize_bound(self.low, param_namer),
+                'high': _serialize_bound(self.high, param_namer),
+            },
+            self.init,
+        )
 
     @classmethod
     def from_dict(cls, d: dict, token_registry: dict | None = None) -> Uniform:
         return cls(
             low=_deserialize_bound(d['low'], token_registry),
             high=_deserialize_bound(d['high'], token_registry),
+            init=d.get('init'),
         )
 
     def __repr__(self) -> str:
-        return f'Uniform(low={self.low!r}, high={self.high!r})'
+        return f'Uniform(low={self.low!r}, high={self.high!r}{_init_repr(self.init)})'
 
 
 class TruncatedNormal(Prior):
@@ -439,6 +517,13 @@ class TruncatedNormal(Prior):
         Lower truncation bound.
     high : float, or arithmetic expression on Parameter tokens
         Upper truncation bound.
+    init : float, optional
+        Starting value for the sampler.  Opt-in: by default (``None``) the
+        start is chosen by NumPyro's default strategy.  Must lie strictly
+        inside ``(low, high)``.  By setting it you take responsibility for it
+        being valid (including for dependent bounds), and chains started from
+        the same value are less sensitive to non-convergence diagnostics such
+        as R-hat.
     """
 
     def __init__(
@@ -447,11 +532,14 @@ class TruncatedNormal(Prior):
         scale: float,
         low: Bound | Parameter,
         high: Bound | Parameter,
+        *,
+        init: float | None = None,
     ) -> None:
         self.loc = _normalize_bound(loc)
         self.scale = float(scale)
         self.low = _normalize_bound(low)
         self.high = _normalize_bound(high)
+        self.init = _normalize_init(init, self.low, self.high)
 
     def to_dist(self, context: dict) -> dist.Distribution:
         return dist.TruncatedNormal(
@@ -465,13 +553,16 @@ class TruncatedNormal(Prior):
         return _bound_deps(self.loc) | _bound_deps(self.low) | _bound_deps(self.high)
 
     def to_dict(self, param_namer: dict | None = None) -> dict:
-        return {
-            'type': 'TruncatedNormal',
-            'loc': _serialize_bound(self.loc, param_namer),
-            'scale': self.scale,
-            'low': _serialize_bound(self.low, param_namer),
-            'high': _serialize_bound(self.high, param_namer),
-        }
+        return _serialize_init(
+            {
+                'type': 'TruncatedNormal',
+                'loc': _serialize_bound(self.loc, param_namer),
+                'scale': self.scale,
+                'low': _serialize_bound(self.low, param_namer),
+                'high': _serialize_bound(self.high, param_namer),
+            },
+            self.init,
+        )
 
     @classmethod
     def from_dict(cls, d: dict, token_registry: dict | None = None) -> TruncatedNormal:
@@ -480,10 +571,14 @@ class TruncatedNormal(Prior):
             scale=d['scale'],
             low=_deserialize_bound(d['low'], token_registry),
             high=_deserialize_bound(d['high'], token_registry),
+            init=d.get('init'),
         )
 
     def __repr__(self) -> str:
-        return f'TruncatedNormal(loc={self.loc!r}, scale={self.scale}, low={self.low!r}, high={self.high!r})'
+        return (
+            f'TruncatedNormal(loc={self.loc!r}, scale={self.scale}, '
+            f'low={self.low!r}, high={self.high!r}{_init_repr(self.init)})'
+        )
 
 
 class Fixed(Prior):
@@ -563,6 +658,9 @@ class Fixed(Prior):
 
     @classmethod
     def from_dict(cls, d: dict, token_registry: dict | None = None) -> Fixed:
+        if 'init' in d:
+            msg = 'Fixed priors are not sampled and cannot have an init value'
+            raise ValueError(msg)
         return cls(_deserialize_bound(d['value'], token_registry))
 
     def __repr__(self) -> str:

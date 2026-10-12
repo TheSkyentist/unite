@@ -160,6 +160,84 @@ fwhm_broad = line.FWHM('b', prior=prior.TruncatedNormal(
 
 ---
 
+## Starting Values
+
+By default, the sampler chooses where each chain starts. `unite` does not set
+starting values for you: the starting point of every parameter is drawn by NumPyro's
+default [initialization strategy](https://num.pyro.ai/en/stable/utilities.html#initialization-strategies)
+(`init_to_uniform`), which draws each chain's start at random from the central part of each
+prior's range. Each chain gets its own random key, so chains start in different places.
+To use a different strategy, build the kernel yourself and pass `init_strategy=` to it
+(see {doc}`inference`), or pass `init_strategy=` to
+{meth}`~unite.model.ModelBuilder.fit`.
+
+If you know a good starting point, you can opt in by setting `init` on a
+{class}`~unite.prior.Uniform` or {class}`~unite.prior.TruncatedNormal` prior:
+
+```python
+from unite import line, prior
+
+z = line.Redshift('z', prior=prior.Uniform(-0.0025, 0.0025, init=0.0))
+narrow = line.FWHM('narrow', prior=prior.Uniform(100.0, 600.0, init=250.0))
+# Dependent bounds work too: broad's lower bound resolves to 250 * 2 + 150 = 650
+broad = line.FWHM(
+    'broad', prior=prior.Uniform(low=narrow * 2 + 150, high=3000.0, init=1500.0)
+)
+```
+
+Parameters without an `init` keep NumPyro's default behavior, so you can set as few or
+as many as you like. {class}`~unite.prior.Fixed` priors are never sampled and cannot
+have an `init`.
+
+:::{warning}
+Setting `init` comes with two caveats:
+
+1. **You are responsible for the value being valid.** It must lie strictly inside the
+   prior's bounds, after resolving any [dependent bounds](#dependent-priors). A plain-float
+   bound is checked when the prior is created and an out-of-range `init` raises a
+   `ValueError`. For dependent bounds, the check happens in
+   {meth}`~unite.model.ModelBuilder.build`, but only when every parameter the bound
+   depends on is itself fixed or has an `init`. Otherwise the bound varies with that
+   parameter's random start and can't be checked, so an invalid value can instead fail
+   at sampling time with NumPyro's `Cannot find valid initial parameters`.
+2. **All chains start from the same point.** The chains still diverge once sampling begins,
+   but they no longer start dispersed, which makes multi-chain convergence diagnostics
+   such as R-hat less sensitive to chains that are stuck or have found different modes.
+   Treat a good R-hat from chains that share a start with more caution.
+:::
+
+### Using starting values with your own kernel
+
+{meth}`~unite.model.ModelBuilder.fit` applies any `init` values automatically. If you
+build the kernel yourself, it does **not**: starting values belong to the sampler
+kernel, not the model, so {meth}`~unite.model.ModelBuilder.build` returns a `model_fn`
+that knows nothing about them. A prior's `init` is silently ignored unless you pass it to
+the kernel yourself (NumPyro's default random start is used instead). The values are
+available as
+{attr}`ModelArgs.init_values <unite.model.ModelArgs.init_values>`: a dictionary keyed by
+NumPyro site name (with the type prefix, e.g. `z_...`, `fwhm_gauss_...`) holding only the
+parameters that have an `init`. It is in constrained (physical) units, so it plugs
+straight into NumPyro's `init_to_value`:
+
+```python
+from numpyro import infer
+
+model_fn, model_args = builder.build()
+print(model_args.init_values)
+# e.g. {'z_z': 0.0, 'fwhm_gauss_narrow': 250.0, 'fwhm_gauss_broad': 1500.0}
+
+kernel = infer.NUTS(
+    model_fn,
+    init_strategy=infer.init_to_value(values=model_args.init_values),
+)
+```
+
+The dictionary is a copy, so you can edit it before passing it on. Any parameter missing
+from it falls back to NumPyro's default, which is also what `init_to_value` does.
+If no prior sets `init`, `init_values` is empty.
+
+---
+
 ## Topological Sorting
 
 When parameters have dependent priors, {class}`~unite.model.ModelBuilder` uses
@@ -205,6 +283,18 @@ flux_4363_broad:
         left: { ref: flux_4363_narrow }
         right: { ref: flux_5007_broad }
       right: { ref: flux_5007_narrow }
+```
+
+A starting value is stored as an `init` key and is written only when set, so YAML saved
+before `init` existed still loads unchanged:
+
+```yaml
+fwhm_narrow:
+  prior:
+    type: Uniform
+    low: 100.0
+    high: 600.0
+    init: 250.0
 ```
 
 The full configuration round-trip preserves all dependency chains. See

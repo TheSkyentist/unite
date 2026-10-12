@@ -129,6 +129,35 @@ class ModelArgs:
         """Return the number of spectra in the model."""
         return len(self.spectra)
 
+    @property
+    def init_values(self) -> dict[str, float]:
+        """User-specified starting values, keyed by numpyro site name.
+
+        Contains one entry per sampled parameter whose prior has an explicit
+        ``init``; parameters without one are absent and fall back to NumPyro's
+        default initialization.  The values are in constrained (physical)
+        units, so the dict can be passed directly to
+        :func:`numpyro.infer.init_to_value`.  Empty when no prior sets
+        ``init``.  A new dict is returned on every access, so it may be edited
+        freely.
+
+        :meth:`ModelBuilder.fit` applies these automatically.  When you build
+        the kernel yourself they are **not** applied: the model function knows
+        nothing about starting values, so ``init`` is ignored unless you pass
+        these to the kernel (as in the example below).
+
+        Examples
+        --------
+        >>> model_fn, model_args = builder.build()
+        >>> strategy = numpyro.infer.init_to_value(values=model_args.init_values)
+        >>> kernel = numpyro.infer.NUTS(model_fn, init_strategy=strategy)
+        """
+        return {
+            name: prior.init
+            for name, prior in self.all_priors.items()
+            if prior.init is not None
+        }
+
     def __bool__(self) -> bool:
         """Return True if the model has at least one spectrum."""
         return len(self.spectra) > 0
@@ -404,6 +433,66 @@ def unite_model(args: ModelArgs) -> None:
 
 
 # ------------------------------------------------------------------
+# Starting-value validation
+# ------------------------------------------------------------------
+
+
+def _validate_init_values(
+    all_priors: dict[str, Prior],
+    dependency_order: list[str],
+    name_to_token: dict[str, object],
+) -> None:
+    """Check that every explicit ``init`` lies inside its (resolved) bounds.
+
+    Bounds that depend on other parameters can only be resolved when those
+    parameters have known values, i.e. they are ``Fixed`` or have their own
+    ``init``.  Priors whose dependencies include a parameter without a known
+    value are skipped: their bounds vary with that parameter's random start,
+    so validity cannot be decided here.
+
+    Parameters
+    ----------
+    all_priors : dict
+        Site name → prior for every parameter.
+    dependency_order : list of str
+        Site names in topological order.
+    name_to_token : dict
+        Site name → parameter token object.
+
+    Raises
+    ------
+    ValueError
+        If an ``init`` lies outside the bounds its prior resolves to.
+    """
+    known: dict[object, float] = {}
+    for pname in dependency_order:
+        prior = all_priors[pname]
+        tok = name_to_token.get(pname)
+        if not all(dep in known for dep in prior.dependencies()):
+            continue
+        if isinstance(prior, Fixed):
+            if tok is not None:
+                known[tok] = float(prior.resolved_value(known))
+            continue
+        if prior.init is None:
+            continue
+        distribution = prior.to_dist(known)
+        assert distribution is not None  # Fixed priors handled above
+        support = distribution.support
+        low, high = float(support.lower_bound), float(support.upper_bound)  # ty: ignore[unresolved-attribute]
+        if not low < prior.init < high:
+            msg = (
+                f'init={prior.init!r} for parameter {pname!r} lies outside its '
+                f'prior bounds ({low!r}, {high!r}); starting values must be '
+                'strictly inside the bounds (after resolving any dependent '
+                'bounds).'
+            )
+            raise ValueError(msg)
+        if tok is not None:
+            known[tok] = prior.init
+
+
+# ------------------------------------------------------------------
 # ModelBuilder
 # ------------------------------------------------------------------
 
@@ -628,6 +717,15 @@ class ModelBuilder:
         ------
         ValueError
             If *integration_mode* is not one of the valid values.
+
+        Notes
+        -----
+        Starting values set with ``init`` on priors are not part of the model
+        function.  :meth:`fit` applies them automatically, but if you build the
+        kernel yourself you must pass them to it, e.g.
+        ``NUTS(model_fn, init_strategy=init_to_value(values=model_args.init_values))``;
+        otherwise NumPyro's default random initialization is used.  See
+        :attr:`ModelArgs.init_values`.
         """
         valid_modes = ('analytic', 'convolution')
         if integration_mode not in valid_modes:
@@ -636,6 +734,8 @@ class ModelBuilder:
                 f'got {integration_mode!r}.'
             )
             raise ValueError(msg)
+
+        _validate_init_values(self._all_priors, self._dep_order, self._name_to_token)
 
         # Trim spectra to union of continuum regions (observed frame).
         # Pixels outside all regions have model = 0 and would corrupt the
@@ -822,6 +922,7 @@ class ModelBuilder:
         integration_mode: str = 'analytic',
         n_super: int = 10,
         conv_half_width: int | None = None,
+        init_strategy: Callable | None = None,
     ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -858,6 +959,14 @@ class ModelBuilder:
             Half-width of the banded LSF convolution kernel for convolution
             mode (default: ``None``, auto-computed).  See :meth:`build` for
             details.
+        init_strategy : callable, optional
+            A NumPyro initialization strategy passed to the NUTS kernel (see
+            :mod:`numpyro.infer.initialization`).  When ``None`` (default),
+            any starting values set on priors via ``init`` are applied
+            (:attr:`ModelArgs.init_values`); parameters without one, or all
+            parameters if no prior sets ``init``, use NumPyro's default
+            strategy.  An explicit ``init_strategy`` takes precedence over
+            ``init`` values on the priors.
 
         Returns
         -------
@@ -887,8 +996,15 @@ class ModelBuilder:
             n_super=n_super,
             conv_half_width=conv_half_width,
         )
+        if init_strategy is None:
+            init_values = model_args.init_values
+            init_strategy = (
+                infer.init_to_value(values=init_values)
+                if init_values
+                else infer.init_to_uniform
+            )
         mcmc = infer.MCMC(
-            infer.NUTS(model_fn, dense_mass=True),
+            infer.NUTS(model_fn, dense_mass=True, init_strategy=init_strategy),
             num_warmup=num_warmup,
             num_samples=num_samples,
             num_chains=num_chains,

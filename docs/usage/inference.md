@@ -71,6 +71,11 @@ samples, model_args = builder.fit(
 )
 ```
 
+By default each chain starts from NumPyro's default random initialization. Any starting
+values set with `init` on your priors are used automatically (see
+[Starting Values](priors.md#starting-values)), and an explicit `init_strategy=` (any
+NumPyro initialization strategy) overrides both.
+
 ---
 
 ## Inference Methods
@@ -104,6 +109,15 @@ mcmc = infer.MCMC(
 mcmc.run(jax.random.PRNGKey(0), model_args)
 samples = mcmc.get_samples()
 ```
+
+:::{note}
+This kernel starts each chain from NumPyro's default random initialization.
+{meth}`~unite.model.ModelBuilder.fit` applies any starting values you set with `init`
+on your priors for you, but a kernel you build yourself does not: `init` is silently
+ignored unless you pass it in, e.g.
+`infer.NUTS(model_fn, init_strategy=infer.init_to_value(values=model_args.init_values))`.
+See [Starting Values](priors.md#starting-values).
+:::
 
 Running multiple chains in parallel is the best way to assess convergence (R-hat):
 
@@ -209,7 +223,9 @@ mcmc.run(jax.random.PRNGKey(1), model_args)
 samples = mcmc.get_samples()
 ```
 
-This can cut warmup steps.
+This can cut warmup steps. Note that every chain then starts from the same point; see
+[Starting Values](priors.md#starting-values) for what that means for convergence
+diagnostics.
 
 ---
 
