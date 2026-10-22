@@ -34,7 +34,9 @@ JAX_ENABLE_X64=1 python my_script.py
 ### GPU Acceleration
 
 JAX runs on GPU transparently — no code changes are needed. If a GPU is available and
-JAX is installed with CUDA support, it will be used automatically.
+JAX is installed with CUDA support, it will be used automatically. Note that a single chain
+usually leaves a GPU mostly idle; to benefit, run several chains with
+`chain_method='vectorized'` (see the NUTS section below).
 
 ```python
 import jax
@@ -62,6 +64,7 @@ samples, model_args = builder.fit(
     num_warmup = 250,       # Warmup samples
     num_samples = 1000,     # Number of Samples
     num_chains = 1,         # Number of Chains
+    chain_method = 'parallel',  # or 'vectorized' to batch chains on one device
     seed = 0,               # Random Seed
     progress_bar = True,    # Display a progress bar
     # Forwarded to ModelBuilder.build (see its documentation):
@@ -119,7 +122,7 @@ ignored unless you pass it in, e.g.
 See [Starting Values](priors.md#starting-values).
 :::
 
-Running multiple chains in parallel is the best way to assess convergence (R-hat):
+Running multiple chains is the best way to assess convergence (R-hat):
 
 ```python
 mcmc = infer.MCMC(
@@ -132,8 +135,27 @@ mcmc = infer.MCMC(
 mcmc.run(jax.random.PRNGKey(0), model_args)
 ```
 
-With a GPU, all chains run concurrently at essentially no extra cost. On CPU, chains
-run sequentially by default, but can be configured otherwise.
+How the chains are executed is set by `chain_method` (also accepted by `ModelBuilder.fit`):
+
+- `'parallel'` (NumPyro's default) puts one chain on each device. With fewer devices than
+  chains, which is the usual case on a single GPU or a plain CPU, NumPyro warns and runs the
+  chains one after another. On CPU you can expose several host devices with
+  `numpyro.set_host_device_count(4)` before importing JAX.
+- `'vectorized'` batches all chains into one `vmap`-ed computation on a single device. This
+  is how to run several chains concurrently on one GPU, where a single chain leaves most of
+  the device idle, so extra chains cost little until the GPU saturates. The chains advance in
+  lockstep, so each step takes as long as the chain with the deepest NUTS tree.
+- `'sequential'` always runs one chain at a time.
+
+```python
+mcmc = infer.MCMC(
+    infer.NUTS(model_fn),
+    num_warmup=500,
+    num_samples=1000,
+    num_chains=8,
+    chain_method='vectorized',
+)
+```
 
 For complex posteriors (many components, tight constraints) you may need more warmup or
 a larger target acceptance probability:

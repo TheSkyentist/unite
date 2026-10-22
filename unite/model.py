@@ -12,7 +12,7 @@ import math
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import jax.numpy as jnp
 import numpyro
@@ -864,6 +864,7 @@ class ModelBuilder:
         n_super: int = 10,
         conv_half_width: int | None = None,
         init_strategy: Callable | None = None,
+        chain_method: Literal['parallel', 'sequential', 'vectorized'] = 'parallel',
     ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -885,7 +886,8 @@ class ModelBuilder:
         num_samples : int, optional
             Number of posterior samples per chain (default: 1000).
         num_chains : int, optional
-            Number of MCMC chains to run in parallel (default: 1).
+            Number of MCMC chains (default: 1).  How they are executed is set
+            by ``chain_method``.
         seed : int, optional
             Random seed for JAX's PRNG (default: 0).
         progress_bar : bool, optional
@@ -908,6 +910,16 @@ class ModelBuilder:
             parameters if no prior sets ``init``, use NumPyro's default
             strategy.  An explicit ``init_strategy`` takes precedence over
             ``init`` values on the priors.
+        chain_method : {'parallel', 'sequential', 'vectorized'}, optional
+            How NumPyro runs multiple chains (default: ``'parallel'``).
+            ``'parallel'`` uses one device per chain and, if there are fewer
+            devices than chains (e.g. a single GPU, or a CPU without
+            ``numpyro.set_host_device_count``), warns and runs the chains
+            one after another.  ``'vectorized'`` batches all chains into one
+            ``vmap``-ed computation on a single device, which is how to keep
+            one GPU busy; the chains advance in lockstep, so each step takes
+            as long as the slowest chain.  ``'sequential'`` always runs one
+            chain at a time.  Ignored when ``num_chains=1``.
 
         Returns
         -------
@@ -950,6 +962,7 @@ class ModelBuilder:
             num_samples=num_samples,
             num_chains=num_chains,
             progress_bar=progress_bar,
+            chain_method=chain_method,
         )
         mcmc.run(
             jax.random.PRNGKey(seed), model_args, extra_fields=('potential_energy',)

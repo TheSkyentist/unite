@@ -688,6 +688,36 @@ class TestModelBuilderFit:
         assert samples[flux_key].size == 20
 
     @pytest.mark.slow
+    def test_fit_vectorized_chains(self):
+        """chain_method='vectorized' batches chains on one device without a warning."""
+        spectrum = create_simple_spectrum()
+        line_config = create_minimal_config()
+        spectra = Spectra([spectrum], redshift=0.0)
+
+        spectra.prepare(line_config, None)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+        builder = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        )
+
+        # 'parallel' would warn about too few devices; 'vectorized' must not.
+        with warnings.catch_warnings():
+            warnings.filterwarnings('error', message='.*not enough devices.*')
+            samples, _args = builder.fit(
+                num_warmup=5,
+                num_samples=10,
+                num_chains=2,
+                seed=44,
+                progress_bar=False,
+                chain_method='vectorized',
+            )
+
+        flux_key = next(k for k in samples if 'flux' in k and 'scale' not in k)
+        assert samples[flux_key].size == 20
+
+    @pytest.mark.slow
     def test_fit_reproducible_seed(self):
         """Test that fit() with same seed produces same results."""
         spectrum = create_simple_spectrum()
