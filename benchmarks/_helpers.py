@@ -286,6 +286,54 @@ def cfg_single_grating_voigt():
     return lc, cc
 
 
+def cfg_single_grating_mixed():
+    """Mixed profiles: 4 narrow Gaussians + broad SkewVoigt + SEMG wing.
+
+    Exercises per-profile dispatch.  With a ``lax.switch`` every line pays for
+    the expensive ``SkewVoigt`` kernel; with grouped dispatch only the broad
+    line does.  Linear continuum.
+    """
+    lc = line.LineConfiguration()
+    z_narrow = line.Redshift(prior=prior.Uniform(-0.005, 0.005))
+    fwhm_narrow = line.FWHM(prior=prior.Uniform(100.0, 500.0))
+    for name, centre in [
+        ('H_alpha_narrow', 6563.0),
+        ('NII_6548', 6548.0),
+        ('NII_6584', 6584.0),
+        ('SII_6717', 6717.0),
+    ]:
+        lc.add_line(
+            name,
+            center=centre * u.AA,
+            redshift=z_narrow,
+            fwhm_gauss=fwhm_narrow,
+            flux=line.Flux(prior=prior.Uniform(0.0, 200.0)),
+        )
+    lc.add_line(
+        'H_alpha_broad',
+        center=6563.0 * u.AA,
+        profile='skewvoigt',
+        redshift=line.Redshift(prior=prior.Uniform(-0.01, 0.01)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(1000.0, 5000.0)),
+        fwhm_lorentz=line.FWHM(prior=prior.Uniform(200.0, 1000.0)),
+        alpha=line.LineShape(prior=prior.Uniform(-2.0, 2.0)),
+        flux=line.Flux(prior=prior.Uniform(0.0, 300.0)),
+    )
+    lc.add_line(
+        'wing',
+        center=6600.0 * u.AA,
+        profile='semg',
+        redshift=line.Redshift(prior=prior.Uniform(-0.005, 0.005)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100.0, 500.0)),
+        fwhm_exp=line.FWHM(prior=prior.Uniform(100.0, 800.0)),
+        flux=line.Flux(prior=prior.Uniform(0.0, 100.0)),
+    )
+    cc = ContinuumConfiguration(
+        [ContinuumRegion(6400.0 * u.AA, 6800.0 * u.AA, Linear())]
+    )
+    return lc, cc
+
+
 def cfg_multi_grating():
     """4 narrow + 1 absorption, intended for use with two spectra."""
     lc = line.LineConfiguration()

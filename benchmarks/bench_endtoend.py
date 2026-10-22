@@ -11,12 +11,19 @@ performance.  Kernel-level benchmarks live in ``bench_kernels.py``.
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax
 import pytest
 from numpyro.infer import MCMC, NUTS
 from numpyro.infer.util import log_density
 
 from benchmarks._helpers import block
+from unite.line.compute import (
+    evaluate_lines,
+    evaluate_lines_at_own_centers,
+    integrate_lines,
+)
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -198,3 +205,41 @@ def test_logp_grad_single_grating_absorber(benchmark, single_grating_absorber_be
     )
     block(fn(single_grating_absorber_bench.sample))
     benchmark(lambda: block(fn(single_grating_absorber_bench.sample)))
+
+
+# ----------------------------------------------------------------------
+# Mixed-profile config: lax.switch vs grouped dispatch
+# ----------------------------------------------------------------------
+
+
+def _with_dispatch(args, dispatch):
+    """Return ``args`` using the reference ``lax.switch`` dispatch if asked.
+
+    ``'grouped'`` is what :meth:`ModelBuilder.build` produces; ``'switch'``
+    swaps in the module-level vmapped-switch functions as an A/B baseline.
+    """
+    if dispatch == 'grouped':
+        return args
+    return dataclasses.replace(
+        args,
+        _profile_codes_local=args.matrices.profile_codes,
+        _integrate_fn=integrate_lines,
+        _evaluate_fn=evaluate_lines,
+        _evaluate_at_centers_fn=evaluate_lines_at_own_centers,
+    )
+
+
+@pytest.mark.parametrize('dispatch', ['switch', 'grouped'])
+def test_logp_mixed_by_mode(benchmark, single_grating_mixed_by_mode, dispatch):
+    b = single_grating_mixed_by_mode
+    fn = _make_logp(b.model_fn, _with_dispatch(b.args, dispatch))
+    fn(b.sample).block_until_ready()
+    benchmark(lambda: block(fn(b.sample)))
+
+
+@pytest.mark.parametrize('dispatch', ['switch', 'grouped'])
+def test_logp_grad_mixed_by_mode(benchmark, single_grating_mixed_by_mode, dispatch):
+    b = single_grating_mixed_by_mode
+    fn = _make_logp_grad(b.model_fn, _with_dispatch(b.args, dispatch))
+    block(fn(b.sample))
+    benchmark(lambda: block(fn(b.sample)))

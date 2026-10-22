@@ -26,6 +26,7 @@ from benchmarks._helpers import (
     cfg_minimal,
     cfg_multi_grating,
     cfg_single_grating,
+    cfg_single_grating_mixed,
     cfg_single_grating_voigt,
     cfg_single_grating_with_absorber,
     make_spectrum,
@@ -117,6 +118,17 @@ def single_grating_by_mode(request) -> Bench:
     """
     lc, cc = cfg_single_grating()
     spec = make_spectrum(6400, 6800, 400, f'sg_{request.param}')
+    spectra = Spectra([spec], redshift=0.0)
+    model_fn, args = build_model(lc, cc, spectra, integration_mode=request.param)
+    sample = one_prior_draw(model_fn, args)
+    return Bench(model_fn=model_fn, args=args, sample=sample)
+
+
+@pytest.fixture(scope='session', params=INTEGRATION_MODES)
+def single_grating_mixed_by_mode(request) -> Bench:
+    """Mixed-profile config (Gaussian + SkewVoigt + SEMG) under each mode."""
+    lc, cc = cfg_single_grating_mixed()
+    spec = make_spectrum(6400, 6800, 400, f'sg_mixed_{request.param}')
     spectra = Spectra([spec], redshift=0.0)
     model_fn, args = build_model(lc, cc, spectra, integration_mode=request.param)
     sample = one_prior_draw(model_fn, args)
