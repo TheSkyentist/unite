@@ -8,13 +8,17 @@ Provides two vmapped dispatch functions:
   line profiles over pixel bins (used by the analytic integration path).
 
 Both dispatch to per-profile JAX kernels via ``lax.switch`` keyed on
-:attr:`~unite.line.library.Profile.code`.
+:attr:`~unite.line.library.Profile.code`.  Under ``vmap`` that switch computes
+every branch for every line, so :func:`make_grouped_dispatch` builds
+per-config replacements that run each profile kernel only on its own lines;
+the model uses those.
 """
 
 from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from unite._utils import C_KMS
 from unite.line.library import _EVALUATE_BRANCHES, _INTEGRATE_BRANCHES
@@ -245,3 +249,93 @@ Input shapes: ``edges (E,)`` and ``lsf_fwhm (E,)`` (both shared across lines);
 ``(n_lines, E)``.  Applying ``jnp.diff`` along axis 1 (then masking
 inter-pixel gap entries) recovers per-pixel profile integrals.
 """
+
+
+# -------------------------------------------------------------------
+# Grouped (per-profile) dispatch
+# -------------------------------------------------------------------
+
+# Branch-argument axes (after the leading shared/per-line array) for each
+# dispatch function, matching the module-level vmapped versions above.
+_INTEGRATE_AXES = (None, 0, None, 0, 0, 0)
+_EVALUATE_AXES = (None, 0, 0, 0, 0, 0)
+_EVALUATE_AT_CENTERS_AXES = (0, 0, 0, 0, 0, 0)
+
+
+def _make_grouped(branches, in_axes, profile_codes):
+    """Group lines by profile and vmap each kernel over only its own lines.
+
+    ``lax.switch`` under ``vmap`` with a per-line index lowers to "evaluate
+    every branch for every line, then select", so each line pays for every
+    profile in the switch.  Because ``profile_codes`` is concrete at build
+    time, the grouping here is static Python: lines are gathered per
+    profile, each kernel runs once on its slice, and the results are
+    concatenated and permuted back to the original line order.
+
+    The returned function has the same signature as the module-level
+    vmapped dispatch functions, including a trailing ``profile_codes``
+    argument that is accepted and ignored.
+    """
+    codes = np.asarray(profile_codes)
+    unique = [int(c) for c in np.unique(codes)]
+    vmapped = {c: jax.vmap(branches[c], in_axes=in_axes) for c in unique}
+
+    if len(unique) == 1:
+        only = vmapped[unique[0]]
+
+        def single(*args):
+            return only(*args[:-1])
+
+        return single
+
+    groups = [(c, np.flatnonzero(codes == c)) for c in unique]
+    inverse = np.argsort(np.concatenate([idx for _, idx in groups]))
+    is_sorted = bool(np.array_equal(inverse, np.arange(len(inverse))))
+
+    def grouped(*args):
+        *branch_args, _ = args
+        parts = [
+            vmapped[c](
+                *[
+                    a if ax is None else a[idx]
+                    for a, ax in zip(branch_args, in_axes, strict=True)
+                ]
+            )
+            for c, idx in groups
+        ]
+        out = jnp.concatenate(parts, axis=0)
+        return out if is_sorted else out[inverse]
+
+    return grouped
+
+
+def make_grouped_dispatch(profile_codes):
+    """Build per-config dispatch functions that evaluate each profile once.
+
+    Replaces the ``lax.switch`` dispatch of :data:`integrate_lines`,
+    :data:`evaluate_lines` and :data:`evaluate_lines_at_own_centers` for a
+    fixed set of per-line profile codes.  Each line is computed by its own
+    profile kernel only, instead of by every branch of a switch.
+
+    Parameters
+    ----------
+    profile_codes : array-like of int, shape ``(n_lines,)``
+        Concrete :attr:`~unite.line.library.Profile.code` per line.  Must not
+        be a traced value.
+
+    Returns
+    -------
+    integrate_fn, evaluate_fn, evaluate_at_centers_fn : callable
+        Drop-in replacements for the module-level functions with identical
+        signatures.  The trailing ``code`` argument is accepted for
+        compatibility and ignored; the grouping is baked in from
+        ``profile_codes``.
+    """
+    codes = np.asarray(profile_codes)
+    if codes.size == 0:
+        return integrate_lines, evaluate_lines, evaluate_lines_at_own_centers
+    return (
+        _make_grouped(_INTEGRATE_BRANCHES, _INTEGRATE_AXES, codes),
+        _make_grouped(_EVALUATE_BRANCHES, _EVALUATE_AXES, codes),
+        _make_grouped(_EVALUATE_BRANCHES, _EVALUATE_AT_CENTERS_AXES, codes),
+    )

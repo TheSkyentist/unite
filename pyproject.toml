@@ -23,7 +23,8 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14"
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15"
 ]
 
 [project.optional-dependencies]
@@ -91,7 +92,7 @@ lint-fix = "ruff check --fix unite tests docs/tutorials benchmarks profiling"
 type-check = "ty check unite"
 
 [tool.pixi.dependencies]
-python = ">=3.12.0,<3.15"
+python = ">=3.12.0,<3.16"
 ruff = ">=0.15.2,<0.16"
 matplotlib = ">=3.10.8,<4"
 vulture = ">=2.14,<3"
@@ -134,6 +135,9 @@ python = ">=3.13,<3.14"
 [tool.pixi.feature.test-py314.dependencies]
 python = ">=3.14,<3.15"
 
+[tool.pixi.feature.test-py315.dependencies]
+python = ">=3.15,<3.16"
+
 [tool.pixi.feature.test-lowest]
 dependencies = { python = ">=3.12.0,<3.13", numpy = "==2.0.0" }
 tasks = { test-lowest = "pytest" }
@@ -152,6 +156,7 @@ build = {features = ["build"], solve-group = "build"}
 test-py312 = {features = ["test", "test-py312"], solve-group = "py312"}
 test-py313 = {features = ["test", "test-py313"], solve-group = "py313"}
 test-py314 = {features = ["test", "test-py314"], solve-group = "py314"}
+test-py315 = {features = ["test", "test-py315"], solve-group = "py315"}
 test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
 docs = {features = ["docs"], solve-group = "default"}
 bench = {features = ["bench"], solve-group = "default"}

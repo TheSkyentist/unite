@@ -14,7 +14,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-import jax
 import jax.numpy as jnp
 import numpyro
 from astropy import units as u
@@ -30,6 +29,7 @@ from unite.line.compute import (
     _peak_to_area_tau,
     evaluate_lines,
     integrate_lines,
+    make_grouped_dispatch,
 )
 from unite.line.config import ConfigMatrices, LineConfiguration
 from unite.prior import Fixed, Parameter, Prior, topological_sort
@@ -115,14 +115,14 @@ class ModelArgs:
     #: Per-spectrum JIT'd vmapped evaluators, built lazily by :func:`~unite.compute.evaluate_model`.
     #: Cached so that repeated calls with the same :class:`ModelArgs` skip Python-level retracing.
     _evaluators: list[Any] | None = field(default=None, compare=False, repr=False)
-    #: Remapped profile codes (0-based into the specialized branch lists below).
-    #: None when specialization is not active (all profiles used or no lines).
+    #: Per-line profile codes passed (and ignored) by the grouped dispatch
+    #: functions below, which bake the profile grouping in at build time.
     _profile_codes_local: Any | None = field(default=None, compare=False, repr=False)
-    #: Specialized vmapped integrate function (only used-profile branches compiled).
+    #: Grouped integrate function (each profile kernel runs only on its own lines).
     _integrate_fn: Any | None = field(default=None, compare=False, repr=False)
-    #: Specialized vmapped evaluate function.
+    #: Grouped evaluate function.
     _evaluate_fn: Any | None = field(default=None, compare=False, repr=False)
-    #: Specialized vmapped evaluate-at-own-centers function (used by _peak_to_area_tau).
+    #: Grouped evaluate-at-own-centers function (used by _peak_to_area_tau).
     _evaluate_at_centers_fn: Any | None = field(default=None, compare=False, repr=False)
 
     def __len__(self) -> int:
@@ -164,65 +164,6 @@ class ModelArgs:
 
 
 # ------------------------------------------------------------------
-# Specialized profile dispatch
-# ------------------------------------------------------------------
-
-
-def _make_specialized_dispatch(profile_codes: jnp.ndarray) -> tuple[Any, Any, Any, Any]:
-    """Build per-config vmapped dispatch functions with only used profile branches.
-
-    Returns ``(profile_codes_local, integrate_fn, evaluate_fn, evaluate_at_centers_fn)``.
-    When fewer than all registered profiles are used, the returned functions wrap
-    ``lax.switch`` over only the needed branches — reducing XLA graph size and
-    compile time proportionally to the fraction of unused profiles.
-    """
-    from unite.line.compute import (
-        evaluate_lines,
-        evaluate_lines_at_own_centers,
-        integrate_lines,
-    )
-    from unite.line.library import _EVALUATE_BRANCHES, _INTEGRATE_BRANCHES
-
-    n_all = len(_INTEGRATE_BRANCHES)
-    if len(profile_codes) == 0:
-        return (
-            profile_codes,
-            integrate_lines,
-            evaluate_lines,
-            evaluate_lines_at_own_centers,
-        )
-
-    used_codes = sorted({int(c) for c in profile_codes})
-
-    if len(used_codes) == n_all:
-        return (
-            profile_codes,
-            integrate_lines,
-            evaluate_lines,
-            evaluate_lines_at_own_centers,
-        )
-
-    code_to_local = {code: idx for idx, code in enumerate(used_codes)}
-    local_codes = jnp.array([code_to_local[int(c)] for c in profile_codes])
-    int_branches = [_INTEGRATE_BRANCHES[c] for c in used_codes]
-    eval_branches = [_EVALUATE_BRANCHES[c] for c in used_codes]
-
-    def _int_single(edges, center, lsf_fwhm, p0, p1, p2, code):
-        return jax.lax.switch(code, int_branches, edges, center, lsf_fwhm, p0, p1, p2)
-
-    def _eval_single(wavelength, center, lsf_fwhm, p0, p1, p2, code):
-        return jax.lax.switch(
-            code, eval_branches, wavelength, center, lsf_fwhm, p0, p1, p2
-        )
-
-    spec_integrate = jax.vmap(_int_single, in_axes=(None, 0, None, 0, 0, 0, 0))
-    spec_evaluate = jax.vmap(_eval_single, in_axes=(None, 0, 0, 0, 0, 0, 0))
-    spec_eval_centers = jax.vmap(_eval_single, in_axes=(0, 0, 0, 0, 0, 0, 0))
-
-    return local_codes, spec_integrate, spec_evaluate, spec_eval_centers
-
-
-# ------------------------------------------------------------------
 # Numpyro model function
 # ------------------------------------------------------------------
 
@@ -231,7 +172,7 @@ def unite_model(args: ModelArgs) -> None:
     """Numpyro model function for multi-spectrum emission-line fitting.
 
     All lines are integrated simultaneously via :func:`jax.vmap` with
-    ``lax.switch`` dispatching to the correct profile kernel per line.
+    per-profile kernels (grouped by profile at build time) computing each line.
     Parameter broadcasting from unique tokens to per-line arrays is done
     with precomputed indicator matrices.
 
@@ -869,7 +810,7 @@ class ModelBuilder:
         cont_zorder = self._cont_config.zorder if self._cont_config is not None else 0
         cont_applies = (cm.line_zorders > cont_zorder) & cm.is_tau
 
-        local_codes, int_fn, eval_fn, eval_centers_fn = _make_specialized_dispatch(
+        int_fn, eval_fn, eval_centers_fn = make_grouped_dispatch(
             self._matrices.profile_codes
         )
 
@@ -905,7 +846,7 @@ class ModelBuilder:
             integration_mode=integration_mode,
             n_super=n_super_val,
             conv_half_width=conv_half_width_val,
-            _profile_codes_local=local_codes,
+            _profile_codes_local=self._matrices.profile_codes,
             _integrate_fn=int_fn,
             _evaluate_fn=eval_fn,
             _evaluate_at_centers_fn=eval_centers_fn,
