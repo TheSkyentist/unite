@@ -36,7 +36,7 @@ jobs:
           environments: bench-ci
 
       - name: Run benchmarks under CodSpeed
-        uses: CodSpeedHQ/action@v3
+        uses: CodSpeedHQ/action@v5
         with:
           # Deselect `slow` benchmarks in CI — they're for local deep dives.
           run: pixi run --frozen -e bench-ci pytest benchmarks/ --codspeed -m "not slow"
