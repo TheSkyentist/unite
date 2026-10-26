@@ -125,8 +125,8 @@ class TestInitSerialization:
 # ---------------------------------------------------------------------------
 
 
-def _spectrum():
-    wavelength = np.linspace(6500, 6600, 100) * u.AA
+def _spectrum(wmin=6500, wmax=6600, npix=100):
+    wavelength = np.linspace(wmin, wmax, npix) * u.AA
     disperser = SimpleDisperser(wavelength=wavelength, R=3000.0, name='d')
     low = wavelength - 0.5 * np.gradient(wavelength)
     high = wavelength + 0.5 * np.gradient(wavelength)
@@ -135,9 +135,9 @@ def _spectrum():
     unit = u.Unit('1e-17 erg / (s cm2 AA)')
     flux = (
         100 * np.exp(-0.5 * ((wavelength.value - 6563.0) / sigma) ** 2)
-        + rng.normal(0, 2, 100)
+        + rng.normal(0, 2, npix)
     ) * unit
-    error = np.full(100, 2.0) * unit
+    error = np.full(npix, 2.0) * unit
     return Spectrum(
         low=low, high=high, flux=flux, error=error, disperser=disperser, name='s'
     )
@@ -162,11 +162,47 @@ def _two_component_config(*, narrow_init=None, broad_init=None, z_init=None):
     return lc, narrow, broad, z
 
 
-def _builder(lc):
-    spectra = Spectra([_spectrum()], redshift=0.0)
+def _builder(lc, **spectrum_kwargs):
+    spectra = Spectra([_spectrum(**spectrum_kwargs)], redshift=0.0)
     spectra.prepare(lc, None)
     spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
     return model.ModelBuilder(spectra.prepared_line_config, None, spectra)
+
+
+class TestFarSEMGInitialisation:
+    """A Gaussian-limit SEMG line far from other pixels must have finite gradients."""
+
+    def test_init_to_uniform_finds_valid_start(self):
+        from numpyro.infer import init_to_uniform
+        from numpyro.infer.util import initialize_model
+
+        # [O III] and H-alpha are ~7e4 km/s apart; fwhm_exp << fwhm_gauss.
+        z = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'OIII',
+            center=5007.0 * u.AA,
+            redshift=z,
+            fwhm_gauss=line.FWHM('n', prior=prior.Fixed(200.0)),
+            flux=line.Flux(prior=prior.Fixed(50.0)),
+        )
+        lc.add_line(
+            'Ha_wing',
+            center=6563.0 * u.AA,
+            profile='semg',
+            redshift=z,
+            fwhm_gauss=line.FWHM('g', prior=prior.Fixed(480.0)),
+            fwhm_exp=line.FWHM('e', prior=prior.Fixed(5.0)),
+            flux=line.Flux(prior=prior.Fixed(50.0)),
+        )
+        model_fn, args = _builder(lc, wmin=4900, wmax=6700, npix=600).build()
+        info = initialize_model(
+            random.PRNGKey(0),
+            model_fn,
+            model_args=(args,),
+            init_strategy=init_to_uniform,
+        )
+        assert np.all(np.isfinite(np.asarray(info.param_info.potential_energy)))
 
 
 class TestModelArgsInitValues:

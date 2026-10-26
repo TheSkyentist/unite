@@ -16,7 +16,7 @@ from typing import Final
 
 import jax.numpy as jnp
 import numpy as np
-from jax import Array, config, jit
+from jax import Array, jit
 from jax.scipy.special import erf, erfc, owens_t, wofz
 from jax.typing import ArrayLike
 
@@ -1097,10 +1097,27 @@ def evaluate_skewVoigt(
 # Gaussian-Laplace (symmetric EMG) kernel
 # -------------------------------------------------------------------
 
-# Threshold for when exp(x*x) overflows
-_OVERFLOW_THRESHOLD: Final[float] = (
-    26.0 if getattr(config, 'jax_enable_x64', True) else 9.0
-)
+
+def _overflow_threshold(x: ArrayLike) -> int:
+    """Largest ``s`` for which ``exp(s * s)`` is finite in the dtype of ``x``.
+
+    Evaluated at trace time, so it follows the dtype actually in use (26 for
+    float64, 9 for float32) rather than the x64 setting at import.
+    """
+    return math.floor(math.sqrt(math.log(float(jnp.finfo(jnp.asarray(x).dtype).max))))
+
+
+def _exp_erfc(x: ArrayLike, y: ArrayLike, dead: ArrayLike) -> Array:
+    """``exp(x) * erfc(y)``, set to zero where ``dead``.
+
+    The dead branch is fed ``x = y = 0`` rather than just masked afterwards:
+    ``jnp.where`` discards the forward value but still back-propagates through
+    the unselected branch, where ``exp(x) -> inf`` times ``erfc(y) -> 0`` gives
+    NaN gradients.
+    """
+    x = jnp.where(dead, 0.0, x)
+    y = jnp.where(dead, 0.0, y)
+    return jnp.where(dead, 0.0, jnp.exp(x) * erfc(y))
 
 
 def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:
@@ -1126,7 +1143,7 @@ def _integrandGL(t: ArrayLike, a: ArrayLike) -> Array:
     t_abs = jnp.abs(t)
     ta = t_abs + a
     twota = 2 * t_abs * a
-    posterm = jnp.where(ta > _OVERFLOW_THRESHOLD, 0, jnp.exp(twota) * erfc(ta))
+    posterm = _exp_erfc(twota, ta, ta > _overflow_threshold(ta))
     return jnp.sign(t) * jnp.exp(a * a) * (posterm - jnp.exp(-twota) * erfc(-t_abs + a))
 
 
@@ -1175,12 +1192,16 @@ def integrate_gaussianLaplace(
     # Gaussian component (CDF at each edge)
     gaussian_cdf = _gaussian_cdf(edges - center, fwhm_g_total)
 
+    # Large a is the Gaussian limit; the correction is dropped there, and `a` is
+    # zeroed first so the discarded branch has finite gradients.
+    gaussian_limit = a > _overflow_threshold(a)
+    a = jnp.where(gaussian_limit, 0.0, a)
+
     # Exponential correction: antiderivative-style integrand at each edge
     t = (edges - center) / σ
     exp_correction = _integrandGL(t, a)
 
-    # Guard against large a, the Gaussian limit
-    return gaussian_cdf + jnp.where(a > _OVERFLOW_THRESHOLD, 0.0, 0.25 * exp_correction)
+    return gaussian_cdf + jnp.where(gaussian_limit, 0.0, 0.25 * exp_correction)
 
 
 @jit
@@ -1221,19 +1242,23 @@ def evaluate_gaussianLaplace(
     # Uses the same overflow-protection pattern as _integrandGL.
     t = (wavelength - center) / sigma
     a = lam * sigma / np.sqrt(2.0)
+    threshold = _overflow_threshold(a)
+
+    # Pure Gaussian limit when exponential component is negligible; `a` is
+    # zeroed so the discarded branch has finite gradients.
+    gaussian_limit = a > threshold
+    a = jnp.where(gaussian_limit, 0.0, a)
+
     u_abs = jnp.abs(t) / np.sqrt(2.0)
     ua = u_abs + a
     two_ua = 2 * u_abs * a
 
     # Overflow-protected positive term: exp(2|u|a) * erfc(|u| + a)
-    posterm = jnp.where(ua > _OVERFLOW_THRESHOLD, 0.0, jnp.exp(two_ua) * erfc(ua))
+    posterm = _exp_erfc(two_ua, ua, ua > threshold)
     negterm = jnp.exp(-two_ua) * erfc(a - u_abs)
     result = (0.25 * lam) * jnp.exp(a * a) * (posterm + negterm)
 
-    # Pure Gaussian limit when exponential component is negligible
-    return jnp.where(
-        a > _OVERFLOW_THRESHOLD, _gaussian_pdf(wavelength - center, sigma), result
-    )
+    return jnp.where(gaussian_limit, _gaussian_pdf(wavelength - center, sigma), result)
 
 
 # -------------------------------------------------------------------
@@ -1258,7 +1283,7 @@ def _integrandGSL(t: ArrayLike, a: ArrayLike) -> Array:
         Integrand value with numerical stability
     """
     u = a * (a - 2 * t)
-    return jnp.where(u > _OVERFLOW_THRESHOLD**2, 0.0, jnp.exp(u) * erfc(-t + a))
+    return _exp_erfc(u, -t + a, u > _overflow_threshold(u) ** 2)
 
 
 @jit
@@ -1362,11 +1387,8 @@ def evaluate_gaussianSplitLaplace(
     u_right = a_red * (a_red - 2 * t)
     u_left = a_blue * (a_blue + 2 * t)
 
-    right = jnp.where(
-        u_right > _OVERFLOW_THRESHOLD**2, 0.0, jnp.exp(u_right) * erfc(-t + a_red)
-    )
-    left = jnp.where(
-        u_left > _OVERFLOW_THRESHOLD**2, 0.0, jnp.exp(u_left) * erfc(t + a_blue)
-    )
+    limit = _overflow_threshold(u_right) ** 2
+    right = _exp_erfc(u_right, -t + a_red, u_right > limit)
+    left = _exp_erfc(u_left, t + a_blue, u_left > limit)
 
     return lam_red * lam_blue * (right + left) / (2 * (lam_red + lam_blue))
