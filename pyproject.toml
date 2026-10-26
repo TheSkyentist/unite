@@ -2,69 +2,62 @@
 name = "unite"
 description = "Unified liNe Integration Turbo Engine"
 readme = "README.md"
-authors = [{name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com"}]
+authors = [
+    { name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com" },
+]
 requires-python = ">= 3.12"
-version = "3.5.1"
+version = "3.5.2"
 dependencies = [
-  "jax>=0.10.2",
-  "numpy>=2.0",
-  "numpyro>=0.21.0,<0.23",
-  "astropy>=7.2.0,<9",
-  "pyyaml>=6.0.1,<7",
-  ]
+    "jax>=0.10.2",
+    "numpy>=2.0",
+    "numpyro>=0.21.0,<0.23",
+    "astropy>=7.2.0,<9",
+    "pyyaml>=6.0.1,<7",
+]
 classifiers = [
-  "Development Status :: 5 - Production/Stable",
-  "Intended Audience :: Science/Research",
-  "Topic :: Scientific/Engineering :: Astronomy",
-  "Topic :: Scientific/Engineering :: Physics",
-  "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
-  "Operating System :: POSIX :: Linux",
-  "Operating System :: MacOS :: MacOS X",
-  "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
-  "Programming Language :: Python :: 3.15"
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
 ]
 
 [project.optional-dependencies]
 test = [
-  "pytest>=9.0.2, <10",
-  "pytest-cov>=7.0.0, <8",
-  "pytest-xdist>=3.0.0, <4",
+    "pytest>=9.0.2, <10",
+    "pytest-cov>=7.0.0, <8",
+    "pytest-xdist>=3.0.0, <4",
 ]
 docs = [
-  "sphinx>=9.1.0, <10",
-  "sphinx-autodoc-typehints>=3.7.0, <4",
-  "myst-parser>=5.0.0, <6",
-  "numpydoc>=1.10.0, <2",
-  "sphinx-gallery>=0.19.0, <1",
-  "furo>=2025.12.19,<2026",
+    "sphinx>=9.1.0, <10",
+    "sphinx-autodoc-typehints>=3.7.0, <4",
+    "myst-parser>=5.0.0, <6",
+    "numpydoc>=1.10.0, <2",
+    "sphinx-gallery>=0.19.0, <1",
+    "furo>=2025.12.19,<2026",
 ]
 test-lowest = [
-  "unite[test]",
-  "jax==0.10.2",
-  "numpyro==0.21.0",
-  "astropy==7.2.0",
-  "pyyaml==6.0.1",
+    "unite[test]",
+    "jax==0.10.2",
+    "numpyro==0.21.0",
+    "astropy==7.2.0",
+    "pyyaml==6.0.1",
 ]
 bench = [
-  "unite[test]",
-  "pytest-benchmark>=5.2.0, <6",
-  "pyinstrument>=5.0.0, <6",
+    "unite[test]",
+    "pytest-benchmark>=5.2.0, <6",
+    "pyinstrument>=5.0.0, <6",
 ]
-bench-ci = [
-  "unite[test]",
-  "pytest-codspeed>=3.2.0, <4",
-]
-dev = [
-  "unite[test,docs,bench]",
-  "ruff>=0.11.9",
-  "pre-commit",
-]
-build = [
-    "build>=1.4.0, <2",
-]
+bench-ci = ["unite[test]", "pytest-codspeed>=3.2.0, <4"]
+dev = ["unite[test,docs,bench]", "ruff>=0.11.9", "pre-commit"]
+build = ["build>=1.4.0, <2"]
 
 [build-system]
 build-backend = "hatchling.build"
@@ -111,12 +104,12 @@ test-cov = "pytest -n auto --cov=unite --cov-report=term-missing --cov-report=xm
 
 [tool.pixi.feature.bench.tasks]
 # Local wall-time benchmarking (pytest-benchmark).
-bench         = "pytest benchmarks/ --benchmark-only"
-bench-save    = "pytest benchmarks/ --benchmark-only --benchmark-save=baseline"
+bench = "pytest benchmarks/ --benchmark-only"
+bench-save = "pytest benchmarks/ --benchmark-only --benchmark-save=baseline"
 bench-compare = "pytest benchmarks/ --benchmark-only --benchmark-compare=baseline"
 # Standalone JAX profiling (Perfetto trace + optional memory profile).
-profile       = "python profiling/profile_fit.py"
-profile-mem   = "python profiling/profile_fit.py --memory"
+profile = "python profiling/profile_fit.py"
+profile-mem = "python profiling/profile_fit.py --memory"
 
 [tool.pixi.feature.bench-ci.dependencies]
 # pytest-codspeed's Valgrind wrapper is not compiled for Python 3.14+ yet.
@@ -150,17 +143,17 @@ docs = "sphinx-build -b html docs docs/_build/html"
 docs-clean = "rm -rf docs/_build docs/auto_tutorials docs/sg_execution_times.rst && sphinx-build -b html docs docs/_build/html"
 
 [tool.pixi.environments]
-default = {features = [], solve-group = "default"}
-dev = {features = ["dev"], solve-group = "default"}
-build = {features = ["build"], solve-group = "build"}
-test-py312 = {features = ["test", "test-py312"], solve-group = "py312"}
-test-py313 = {features = ["test", "test-py313"], solve-group = "py313"}
-test-py314 = {features = ["test", "test-py314"], solve-group = "py314"}
-test-py315 = {features = ["test", "test-py315"], solve-group = "py315"}
-test-lowest = {features = ["test-lowest"], solve-group = "lowest"}
-docs = {features = ["docs"], solve-group = "default"}
-bench = {features = ["bench"], solve-group = "default"}
-bench-ci = {features = ["bench-ci"], solve-group = "bench-ci"}
+default = { features = [], solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+build = { features = ["build"], solve-group = "build" }
+test-py312 = { features = ["test", "test-py312"], solve-group = "py312" }
+test-py313 = { features = ["test", "test-py313"], solve-group = "py313" }
+test-py314 = { features = ["test", "test-py314"], solve-group = "py314" }
+test-py315 = { features = ["test", "test-py315"], solve-group = "py315" }
+test-lowest = { features = ["test-lowest"], solve-group = "lowest" }
+docs = { features = ["docs"], solve-group = "default" }
+bench = { features = ["bench"], solve-group = "default" }
+bench-ci = { features = ["bench-ci"], solve-group = "bench-ci" }
 
 # ---------------------------------------------------------------------------
 # ty
@@ -187,23 +180,23 @@ skip-magic-trailing-comma = true
 
 [tool.ruff.lint]
 extend-select = [
-  "I",    # isort
-  "N",    # pep8-naming
-  "UP",   # pyupgrade
-  "B",    # flake8-bugbear
-  "SIM",  # flake8-simplify
-  "RUF",  # ruff-specific rules
-  "D",    # pydocstyle
-  "NPY",  # numpy-specific rules
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific rules
+    "D",   # pydocstyle
+    "NPY", # numpy-specific rules
 ]
 ignore = [
-  "D100",  # missing docstring in public module
-  "D102",  # missing docstring in public method (e.g. __new__)
-  "D104",  # missing docstring in public package
-  "D105",  # missing docstring in magic method
-  "D203",  # conflicts with D211
-  "D213",  # conflicts with D212
-  "N802",  # function name should be lowercase (R is physics convention)
+    "D100", # missing docstring in public module
+    "D102", # missing docstring in public method (e.g. __new__)
+    "D104", # missing docstring in public package
+    "D105", # missing docstring in magic method
+    "D203", # conflicts with D211
+    "D213", # conflicts with D212
+    "N802", # function name should be lowercase (R is physics convention)
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -237,12 +230,12 @@ python_files = ["test_*.py", "bench_*.py"]
 addopts = ["-ra", "--strict-markers", "--strict-config"]
 xfail_strict = true
 filterwarnings = [
-  "error",
-  "ignore:XDG_CONFIG_HOME is set to.*:astropy.utils.exceptions.AstropyUserWarning",
+    "error",
+    "ignore:XDG_CONFIG_HOME is set to.*:astropy.utils.exceptions.AstropyUserWarning",
 ]
 markers = [
-  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-  "benchmark: marks tests as benchmarks (also recognised by pytest-codspeed)",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "benchmark: marks tests as benchmarks (also recognised by pytest-codspeed)",
 ]
 
 # ---------------------------------------------------------------------------
@@ -258,9 +251,9 @@ parallel = true
 show_missing = true
 precision = 2
 exclude_lines = [
-  "pragma: no cover",
-  "if TYPE_CHECKING:",
-  "@abstractmethod",
-  "raise NotImplementedError",
-  "\\.\\.\\.",
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
 ]
