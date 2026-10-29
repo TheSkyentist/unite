@@ -1029,7 +1029,7 @@ class TestBlackbody:
         )
         val_um = region_um.form.evaluate(jnp.array([0.55]), 0.55, params_um, 0.5, 0.6)
         # Results should be equal at the same physical wavelength
-        assert val_aa[0] == pytest.approx(val_um[0], rel=1e-5)
+        assert float(val_aa[0]) == pytest.approx(float(val_um[0]), rel=1e-5)
 
     def test_roundtrip(self):
         assert isinstance(form_from_dict(Blackbody().to_dict()), Blackbody)
