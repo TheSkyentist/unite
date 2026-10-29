@@ -183,8 +183,10 @@ line_configuration.add_line(
 )
 
 # Add the [OIII] doublet with fixed 1:3 flux ratio using the ``strength`` argument.
-# Note, the add_lines function by default assumes shared parameters across all lines.
-# This can be changed by passing a list of parameters to a given argument.
+# Note, add_lines only shares the tokens you pass it: a single token (like ``z_common``
+# here) is shared across all lines, while an omitted one gives every line its own
+# parameter. So we pass one shared ``Flux`` for the doublet; ``strength`` then scales it
+# per line, and the 1:3 ratio holds. Pass a list of tokens instead for independent ones.
 line_configuration.add_lines(
     'OIII',
     [4960.295, 5008.24] * u.AA,
@@ -192,6 +194,7 @@ line_configuration.add_lines(
     redshift=z_common,
     fwhm_gauss=fwhm_narrow,
     strength=[1.0, 3.0],
+    flux=line.Flux(prior=prior.Uniform(0, 3)),
 )
 
 # Broad components
