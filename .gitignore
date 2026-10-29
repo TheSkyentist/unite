@@ -48,8 +48,9 @@ docs/sg_execution_times.rst
 .DS_Store
 .zed
 
-# Jupyter
+# Jupyter/Marimo
 .ipynb_checkpoints/
+__marimo__/
 
 # mypy / type-checking
 .mypy_cache/
