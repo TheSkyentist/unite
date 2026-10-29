@@ -43,6 +43,15 @@ jobs:
       - name: Run ty
         run: pixi run --frozen type-check
 
+  type-check-examples:
+    name: Type check (examples)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: prefix-dev/setup-pixi@v0
+      - name: Run ty
+        run: pixi run --frozen -e explore type-check-examples
+
   test:
     name: Test (${{ matrix.env }})
     runs-on: ubuntu-latest

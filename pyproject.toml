@@ -82,7 +82,7 @@ JAX_LOGGING_LEVEL = "ERROR"
 format = "ruff format unite tests docs/tutorials benchmarks profiling examples"
 lint = "ruff check unite tests docs/tutorials benchmarks profiling examples"
 lint-fix = "ruff check --fix unite tests docs/tutorials benchmarks profiling examples"
-type-check = "ty check unite examples"
+type-check = "ty check unite"
 
 [tool.pixi.dependencies]
 python = ">=3.12.0,<3.16"
@@ -142,6 +142,7 @@ anywidget = ">=0.9,<1"
 
 [tool.pixi.feature.explore.tasks]
 explore = "marimo edit examples/explorer.py"
+type-check-examples = "ty check examples"
 
 [tool.pixi.feature.docs.dependencies]
 graphviz = ">=14.1.2,<15"
