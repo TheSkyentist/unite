@@ -586,7 +586,10 @@ class LineConfiguration:
         ``'{name}_{center.value:g}'`` (e.g. ``'NII_6585'``, ``'NII_6550'``).
         When *name* is a sequence, it must have the same length as *centers*.
         All other arguments may be supplied as a single value (broadcast to
-        every line) or as a sequence of the same length as *centers*.
+        every line) or as a sequence of the same length as *centers*.  A single
+        token is **shared** by every line; a token that is omitted gives each
+        line its own independent default.  To tie lines together (e.g. a doublet
+        with fixed ``strength`` ratios), pass one shared ``Flux``.
 
         Parameters
         ----------
@@ -600,7 +603,9 @@ class LineConfiguration:
             Redshift token(s).  A single value is shared across all
             lines; a sequence assigns one token per line.
         flux : Flux or sequence thereof, optional
-            Flux token(s).  Same broadcasting rule as *redshift*.
+            Flux token(s).  Same broadcasting rule as *redshift*.  If omitted,
+            each line gets its own independent flux parameter, so *strength*
+            ratios are not enforced; pass a single ``Flux`` to enforce them.
         tau : Tau or sequence thereof, optional
             Optical depth token(s).  Same broadcasting rule as *flux*.
         strength : float or sequence of float, optional
