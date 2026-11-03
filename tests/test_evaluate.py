@@ -558,3 +558,148 @@ class TestEvaluateFixedExpression:
         samples, args = fixed_expr_setup
         tables = make_spectra_tables(samples, args)
         assert len(tables) == 1
+
+
+# ------------------------------------------------------------------
+# Batched evaluation
+# ------------------------------------------------------------------
+
+
+def _batch_setup(mode, with_absorber, n_samples=7):
+    """Sampled emission (+ optional absorber) + Fixed line + continuum."""
+    from unite.line.config import Tau
+    from unite.line.library import Gaussian
+
+    spec = _make_spectrum(name=f'batch_{mode}_{with_absorber}')
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha',
+        6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Uniform(-0.002, 0.002)),
+        fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 600)),
+        flux=line.Flux(prior=prior.Uniform(0, 5)),
+    )
+    # Fixed parameters broadcast to (n_samples,) and must slice per chunk.
+    lc.add_line(
+        'Hfix',
+        6530.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        flux=line.Flux(prior=prior.Fixed(1.0)),
+    )
+    if with_absorber:
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Uniform(100, 500)),
+            tau=Tau(prior=prior.Uniform(0.1, 2.0)),
+        )
+    cc = ContinuumConfiguration(
+        [ContinuumRegion(6490.0 * u.AA, 6620.0 * u.AA, form=Linear())]
+    )
+    spectra = Spectra([spec], redshift=0.0)
+    spectra.prepare(lc, cc)
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+    model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build(integration_mode=mode)
+    samples = Predictive(model_fn, num_samples=n_samples)(random.PRNGKey(5), args)
+    return samples, args
+
+
+def _close(a, b):
+    # Different batch sizes compile to differently fused XLA kernels, so allow
+    # float rounding at the level of each component's peak (tails ~0 in relative
+    # terms would otherwise fail a pure rtol check).
+    scale = max(float(np.max(np.abs(a))), 1e-300)
+    np.testing.assert_allclose(a, b, rtol=1e-9, atol=1e-12 * scale)
+
+
+def _assert_predictions_equal(a, b):
+    assert len(a) == len(b)
+    for pa, pb in zip(a, b, strict=True):
+        np.testing.assert_array_equal(pa.wavelength, pb.wavelength)
+        _close(pa.total, pb.total)
+        assert pa.lines.keys() == pb.lines.keys()
+        for k in pa.lines:
+            _close(pa.lines[k], pb.lines[k])
+        assert pa.continuum_regions.keys() == pb.continuum_regions.keys()
+        for k in pa.continuum_regions:
+            _close(pa.continuum_regions[k], pb.continuum_regions[k])
+        assert pa.tau_profiles.keys() == pb.tau_profiles.keys()
+        for k in pa.tau_profiles:
+            _close(pa.tau_profiles[k], pb.tau_profiles[k])
+
+
+class TestBatchedEvaluate:
+    """``batch_size`` chunking must not change the output."""
+
+    @pytest.mark.parametrize('mode', ['analytic', 'convolution'])
+    @pytest.mark.parametrize('with_absorber', [False, True])
+    @pytest.mark.parametrize('batch_size', [1, 3, 7, 100])
+    def test_batched_matches_unbatched(self, mode, with_absorber, batch_size):
+        # 7 samples: batch_size 3 leaves a short, padded final chunk.
+        samples, args = _batch_setup(mode, with_absorber)
+        ref = evaluate_model(samples, args)
+        out = evaluate_model(samples, args, batch_size=batch_size)
+        assert out[0].total.shape[0] == 7
+        _assert_predictions_equal(ref, out)
+
+    def test_fixed_only_model(self, fixed_args):
+        # No sampled params: n_samples == 1, batch larger than n_samples.
+        ref = evaluate_model({}, fixed_args)
+        out = evaluate_model({}, fixed_args, batch_size=4)
+        _assert_predictions_equal(ref, out)
+
+    @pytest.mark.parametrize('batch_size', [0, -2])
+    def test_invalid_batch_size(self, simple_setup, batch_size):
+        samples, args, _ = simple_setup
+        with pytest.raises(ValueError, match='batch_size'):
+            evaluate_model(samples, args, batch_size=batch_size)
+
+    def test_single_compile_for_padded_chunks(self):
+        samples, args = _batch_setup('analytic', False)
+        evaluate_model(samples, args, batch_size=3)  # chunks 3, 3, 1 (padded)
+        assert args._evaluators is not None
+        assert args._evaluators[0]._cache_size() == 1
+
+
+class TestBatchedResults:
+    """``batch_size`` passes through the results helpers unchanged."""
+
+    @pytest.mark.parametrize('percentiles', [None, np.array([0.16, 0.5, 0.84])])
+    def test_make_hdul_batched_matches_unbatched(self, percentiles):
+        from unite.results import make_hdul
+
+        samples, args = _batch_setup('analytic', True)
+        ref = make_hdul(samples, args, percentiles=percentiles)
+        out = make_hdul(samples, args, percentiles=percentiles, batch_size=3)
+        assert len(ref) == len(out)
+        for h_ref, h_out in zip(ref[1:], out[1:], strict=True):
+            for col in h_ref.columns.names:
+                ref_col = np.asarray(h_ref.data[col], dtype=float)
+                out_col = np.asarray(h_out.data[col], dtype=float)
+                np.testing.assert_allclose(
+                    ref_col,
+                    out_col,
+                    rtol=1e-9,
+                    atol=1e-12 * float(np.nanmax(np.abs(ref_col), initial=1e-300)),
+                    equal_nan=True,
+                )
+
+    def test_make_hdul_evaluates_model_once(self, monkeypatch):
+        import unite.results as results
+
+        samples, args = _batch_setup('analytic', True)
+        calls = []
+        real = results.evaluate_model
+
+        def counting(*a, **kw):
+            calls.append(kw.get('batch_size'))
+            return real(*a, **kw)
+
+        monkeypatch.setattr(results, 'evaluate_model', counting)
+        results.make_hdul(samples, args, batch_size=3)
+        assert calls == [3]

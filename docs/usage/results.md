@@ -441,6 +441,24 @@ for pred, spectrum in zip(predictions, model_args.spectra):
 {class}`~unite.compute.SpectrumPrediction` is a simple dataclass; use standard NumPy
 operations to compute any derived quantity you need.
 
+### Limiting memory with `batch_size`
+
+By default all draws are evaluated in one vectorised call. In convolution mode the
+per-draw intermediates are large, so many draws (thousands, with dozens of lines) can
+exhaust memory. Pass `batch_size` to evaluate the draws in chunks and concatenate the
+results on the host:
+
+```python
+predictions = evaluate_model(samples, model_args, batch_size=100)
+hdul = make_hdul(samples, model_args, percentiles=[0.16, 0.5, 0.84], batch_size=100)
+```
+
+`batch_size` is accepted by `evaluate_model`, `make_parameter_table`,
+`make_spectra_tables` and `make_hdul`. The output is identical to the unbatched result
+(up to floating-point rounding), with or without `percentiles`; the full per-draw arrays
+are still assembled on the host before percentiles are taken. The default, `None`,
+disables batching.
+
 ---
 
 ## Model Diagnostics

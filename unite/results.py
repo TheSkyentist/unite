@@ -15,7 +15,7 @@ from astropy import units as u
 from astropy.io import fits
 from astropy.table import QTable, Table
 
-from unite.compute import evaluate_model
+from unite.compute import SpectrumPrediction, evaluate_model
 from unite.continuum.library import ContinuumForm
 from unite.model import ModelArgs
 from unite.prior import Fixed
@@ -78,6 +78,8 @@ def make_parameter_table(
     args: ModelArgs,
     *,
     percentiles: np.ndarray | None = None,
+    batch_size: int | None = None,
+    predictions: list[SpectrumPrediction] | None = None,
 ) -> QTable:
     """Build an Astropy table of posterior parameter samples in physical units.
 
@@ -94,6 +96,15 @@ def make_parameter_table(
         Array of percentile values in range (0, 1), e.g. ``[0.16, 0.5, 0.84]``.
         If provided, returns one row per percentile with percentile values.
         If ``None`` (default), returns one row per posterior sample.
+    batch_size : int or None
+        Chunk size for the model evaluation needed by absorption rest
+        equivalent widths; see :func:`~unite.compute.evaluate_model`.  The
+        result is identical to the unbatched one.  Default ``None`` (no
+        batching).
+    predictions : list of SpectrumPrediction or None
+        Precomputed output of :func:`~unite.compute.evaluate_model` for the
+        same ``samples`` and ``args``.  If given, the model is not
+        re-evaluated.
 
     Returns
     -------
@@ -176,7 +187,9 @@ def make_parameter_table(
         tau_names,
         cont_param_lookup,
     )
-    rew_cols = _compute_rew_columns(samples, args)
+    rew_cols = _compute_rew_columns(
+        samples, args, batch_size=batch_size, predictions=predictions
+    )
 
     def _add_param(pname: str, *, pct_arr: np.ndarray | None = None) -> None:
         prior = args.all_priors[pname]
@@ -265,6 +278,8 @@ def make_spectra_tables(
     insert_nan: bool = ...,
     percentiles: np.ndarray | None = ...,
     return_hdul: Literal[False] = ...,
+    batch_size: int | None = ...,
+    predictions: list[SpectrumPrediction] | None = ...,
 ) -> dict[str, Table]: ...
 
 
@@ -276,6 +291,8 @@ def make_spectra_tables(
     insert_nan: bool = ...,
     percentiles: np.ndarray | None = ...,
     return_hdul: Literal[True],
+    batch_size: int | None = ...,
+    predictions: list[SpectrumPrediction] | None = ...,
 ) -> fits.HDUList: ...
 
 
@@ -286,6 +303,8 @@ def make_spectra_tables(
     insert_nan: bool = False,
     percentiles: np.ndarray | None = None,
     return_hdul: bool = False,
+    batch_size: int | None = None,
+    predictions: list[SpectrumPrediction] | None = None,
 ) -> dict[str, Table] | fits.HDUList:
     """Build per-spectrum tables of model decompositions.
 
@@ -310,6 +329,15 @@ def make_spectra_tables(
         HDUs are :class:`~astropy.io.fits.BinTableHDU` entries whose extension
         names are the spectrum names (upper-cased for FITS compatibility).
         Default ``False``.
+    batch_size : int or None
+        Chunk size for the model evaluation; see
+        :func:`~unite.compute.evaluate_model`.  The result is identical to the
+        unbatched one, including with ``percentiles``.  Default ``None`` (no
+        batching).
+    predictions : list of SpectrumPrediction or None
+        Precomputed output of :func:`~unite.compute.evaluate_model` for the
+        same ``samples`` and ``args``.  If given, the model is not
+        re-evaluated and ``batch_size`` is ignored.
 
     Returns
     -------
@@ -321,7 +349,8 @@ def make_spectra_tables(
         In both cases columns carry physical units where ``flux_unit`` was set
         on the spectrum.
     """
-    predictions = evaluate_model(samples, args)
+    if predictions is None:
+        predictions = evaluate_model(samples, args, batch_size=batch_size)
     tables: dict[str, Table] = {}
 
     for i, (pred, spectrum) in enumerate(zip(predictions, args.spectra, strict=True)):
@@ -419,6 +448,7 @@ def make_hdul(
     *,
     insert_nan: bool = False,
     percentiles: np.ndarray | None = None,
+    batch_size: int | None = None,
 ) -> fits.HDUList:
     """Build a FITS HDU list from posterior samples.
 
@@ -434,6 +464,11 @@ def make_hdul(
         Array of percentile values in range (0, 1).
         If provided, output tables contain percentile rows/columns.
         If ``None`` (default), output tables contain all samples.
+    batch_size : int or None
+        Chunk size for the model evaluation; see
+        :func:`~unite.compute.evaluate_model`.  The model is evaluated once and
+        shared between the parameter and spectra tables.  The result is
+        identical to the unbatched one.  Default ``None`` (no batching).
 
     Returns
     -------
@@ -442,9 +477,16 @@ def make_hdul(
         HDU 1: BinTableHDU from parameter table.
         HDU 2+: BinTableHDU per spectrum.
     """
-    param_table = make_parameter_table(samples, args, percentiles=percentiles)
+    predictions = evaluate_model(samples, args, batch_size=batch_size)
+    param_table = make_parameter_table(
+        samples, args, percentiles=percentiles, predictions=predictions
+    )
     spectra_tables = make_spectra_tables(
-        samples, args, insert_nan=insert_nan, percentiles=percentiles
+        samples,
+        args,
+        insert_nan=insert_nan,
+        percentiles=percentiles,
+        predictions=predictions,
     )
 
     primary = fits.PrimaryHDU()
@@ -583,7 +625,11 @@ def _compute_percentiles(
 
 
 def _compute_rew_columns(
-    samples: dict[str, np.ndarray], args: ModelArgs
+    samples: dict[str, np.ndarray],
+    args: ModelArgs,
+    *,
+    batch_size: int | None = None,
+    predictions: list[SpectrumPrediction] | None = None,
 ) -> dict[str, np.ndarray]:
     """Compute rest equivalent width per line per posterior sample.
 
@@ -610,6 +656,11 @@ def _compute_rew_columns(
         Posterior samples.
     args : ModelArgs
         Model arguments from :meth:`ModelBuilder.build`.
+    batch_size : int or None
+        Chunk size forwarded to :func:`~unite.compute.evaluate_model`.
+    predictions : list of SpectrumPrediction or None
+        Precomputed predictions; evaluated here (only if there is absorption)
+        when ``None``.
 
     Returns
     -------
@@ -655,7 +706,8 @@ def _compute_rew_columns(
     cont_scale = args.continuum_scales[0]
 
     # Compute predictions for absorption REW (numerical integration).
-    predictions = evaluate_model(samples, args) if has_absorption else None
+    if predictions is None and has_absorption:
+        predictions = evaluate_model(samples, args, batch_size=batch_size)
 
     result: dict[str, np.ndarray] = {}
 

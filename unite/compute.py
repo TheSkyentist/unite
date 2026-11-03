@@ -61,8 +61,32 @@ class SpectrumPrediction:
     tau_profiles: dict[str, np.ndarray]
 
 
+def _evaluate_in_chunks(fn, context, n_samples: int, batch_size: int):
+    """Apply a vmapped ``fn`` to ``context`` in fixed-size chunks of draws.
+
+    Every chunk is padded to exactly ``batch_size`` rows (by repeating the last
+    valid draw) so the jitted function compiles once.  Each chunk is moved to
+    the host as soon as it is computed, and the padding is stripped before the
+    chunks are concatenated along the sample axis.
+    """
+    outs = []
+    for start in range(0, n_samples, batch_size):
+        stop = min(start + batch_size, n_samples)
+        n_valid = stop - start
+        chunk = {k: v[start:stop] for k, v in context.items()}
+        pad = batch_size - n_valid
+        if pad:
+            chunk = {
+                k: jnp.concatenate([v, jnp.repeat(v[-1:], pad, axis=0)])
+                for k, v in chunk.items()
+            }
+        out = jax.device_get(fn(chunk))
+        outs.append(jax.tree.map(lambda a, n=n_valid: np.asarray(a)[:n], out))
+    return jax.tree.map(lambda *a: np.concatenate(a, axis=0), *outs)
+
+
 def evaluate_model(
-    samples: dict[str, np.ndarray], args: ModelArgs
+    samples: dict[str, np.ndarray], args: ModelArgs, *, batch_size: int | None = None
 ) -> list[SpectrumPrediction]:
     """Evaluate the model for each posterior sample and decompose contributions.
 
@@ -78,12 +102,22 @@ def evaluate_model(
         ``(n_samples, ...)``.
     args : ModelArgs
         Pre-built data bundle from :meth:`ModelBuilder.build`.
+    batch_size : int or None
+        If ``None`` (default), all draws are evaluated in a single vmapped
+        call.  If an integer, draws are evaluated in chunks of that size and
+        the results are concatenated on the host, bounding peak device memory
+        (useful in convolution mode, where per-draw intermediates are large).
+        The output is identical to the unbatched result.  The last chunk is
+        padded to ``batch_size`` so the evaluator compiles only once.
 
     Returns
     -------
     list of SpectrumPrediction
         One prediction per spectrum in ``args.spectra``.
     """
+    if batch_size is not None and batch_size < 1:
+        raise ValueError(f'batch_size must be a positive integer, got {batch_size}.')
+
     cm = args.matrices
     z_sys = args.redshift
     n_lines = cm.wavelengths.shape[0]
@@ -342,7 +376,12 @@ def evaluate_model(
         # Build JIT'd vmapped evaluator once per spectrum; reuse on subsequent calls.
         if args._evaluators[i] is None:
             args._evaluators[i] = jax.jit(jax.vmap(_single))
-        total_arr, line_arr, cont_arr, tau_arr = args._evaluators[i](context)
+        if batch_size is None:
+            total_arr, line_arr, cont_arr, tau_arr = args._evaluators[i](context)
+        else:
+            total_arr, line_arr, cont_arr, tau_arr = _evaluate_in_chunks(
+                args._evaluators[i], context, n_samples, min(batch_size, n_samples)
+            )
         # total_arr:  (n_samples, n_pix)
         # line_arr:   (n_samples, n_lines, n_pix)
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
