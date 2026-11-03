@@ -191,6 +191,9 @@ def evaluate_model(
         edges_disp_base = jnp.asarray(spectrum.edges)
         keep_mask = jnp.asarray(spectrum.keep_mask)
         dlam_edges = disp.dlam_dpix(edges_disp_base) * wl_scale  # (E,)
+        # Static continuum-region membership of each kept pixel (same mask
+        # as the model, from the unshifted grid).
+        pix_region_mask = args.region_masks[i][:, spectrum.keep_mask]
 
         line_scale = float(args.line_flux_scales[i])
         cont_scale = float(args.continuum_scales[i])
@@ -211,6 +214,7 @@ def evaluate_model(
             _ifn=_int_fn,
             _efn=_eval_fn,
             _pc=_pcodes,
+            _prm=pix_region_mask,
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
@@ -274,7 +278,7 @@ def evaluate_model(
             cont_regions_scaled: list[jnp.ndarray] = []
             if args.integration_mode != 'convolution':
                 cont_regions = eval_continuum_regions(
-                    wavelength, args, params, z_sys, cont_lsf_fwhm
+                    wavelength, args, params, z_sys, cont_lsf_fwhm, _prm
                 )
                 cont_total = jnp.zeros_like(wavelength)
                 for region in cont_regions:
@@ -319,7 +323,7 @@ def evaluate_model(
                 # Per-region continuum on fine grid (lsf_fwhm=0): convolve on fine
                 # grid then pixel-average.
                 cont_regions_fine = eval_continuum_regions(
-                    x_flat, args, params, z_sys, 0.0
+                    x_flat, args, params, z_sys, 0.0, np.repeat(_prm, n_super, axis=1)
                 )
                 cont_regions_scaled = [
                     _lsf_convolve(x_flat, r * _cont_scale, sigma_fine, half_width)

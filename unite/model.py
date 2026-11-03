@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 import jax.numpy as jnp
+import numpy as np
 import numpyro
 from astropy import units as u
 from numpyro import distributions as dist
@@ -22,7 +23,11 @@ from numpyro import distributions as dist
 from unite._compose import compose_from_profiles
 from unite._lsf import _FWHM_TO_SIGMA
 from unite._utils import _get_conversion_factor
-from unite.continuum.compute import eval_continuum, integrate_continuum
+from unite.continuum.compute import (
+    eval_continuum,
+    integrate_continuum,
+    static_region_masks,
+)
 from unite.continuum.config import ContinuumConfiguration
 from unite.line.compute import (
     _build_line_params,
@@ -112,6 +117,12 @@ class ModelArgs:
     #: Pre-computed at build time as a Python ``int`` (not a traced value).
     #: ``None`` when ``integration_mode != 'convolution'``.
     conv_half_width: int | None = None
+    #: Per-spectrum static continuum-region membership, each of shape
+    #: ``(n_regions, E - 1)`` over the spectrum's unique-edge intervals.
+    #: Computed at build time from the *unshifted* edges (see
+    #: :func:`~unite.continuum.compute.static_region_masks`) so that the
+    #: likelihood is continuous in ``PixOffset``.
+    region_masks: list[np.ndarray] = field(default_factory=list, repr=False)
     #: Per-spectrum JIT'd vmapped evaluators, built lazily by :func:`~unite.compute.evaluate_model`.
     #: Cached so that repeated calls with the same :class:`ModelArgs` skip Python-level retracing.
     _evaluators: list[Any] | None = field(default=None, compare=False, repr=False)
@@ -258,6 +269,10 @@ def unite_model(args: ModelArgs) -> None:
         edges = edges - (pix_offset * disp.dlam_dpix(spectrum.edges) * wl_scale)
         widths = jnp.diff(edges)  # (E-1,)
 
+        # Static region membership (from the unshifted grid, set at build time)
+        # keeps the likelihood continuous in pix_offset.
+        region_mask = args.region_masks[i]  # (n_regions, E-1)
+
         # Scaled line fluxes and continuum for this spectrum.
         scaled_flux = flux_per_line * lfs / norm
         cont_scale_norm = cs / norm
@@ -279,6 +294,11 @@ def unite_model(args: ModelArgs) -> None:
             low = edges[:-1][keep_mask]
             high = edges[1:][keep_mask]
             n_pixels = low.shape[0]
+            # Static region membership expanded to the fine grid (n_super
+            # consecutive points per kept pixel, matching x_fine.T.ravel()).
+            fine_region_mask = np.repeat(
+                region_mask[:, keep_mask], n_super, axis=1
+            )  # (n_regions, n_pixels * n_super)
 
             # Fine grid: n_super uniform points per pixel, midpoints of sub-bins.
             # Transposed to wavelength order: all sub-bins of pixel 0, then pixel 1, etc.
@@ -301,9 +321,10 @@ def unite_model(args: ModelArgs) -> None:
                 _csn=cont_scale_norm,
                 _efn=_eval_fn,
                 _pc=_pcodes,
+                _frm=fine_region_mask,
             ):
                 phi = _efn(wav, centers, _zero_lsf, p0, p1, p2, _pc)
-                cont = eval_continuum(wav, args, context, z_sys, 0.0) * _csn
+                cont = eval_continuum(wav, args, context, z_sys, 0.0, _frm) * _csn
                 return compose_from_profiles(
                     phi,
                     _scaled_flux,
@@ -351,7 +372,7 @@ def unite_model(args: ModelArgs) -> None:
             else:
                 cont_lsf_per_region = jnp.zeros(0)
             cont_per_interval = integrate_continuum(
-                edges, args, context, z_sys, cont_lsf_per_region
+                edges, args, context, z_sys, cont_lsf_per_region, region_mask
             )  # (E-1,)
             cont = cont_per_interval[keep_mask] * cont_scale_norm  # (npix,)
 
@@ -798,6 +819,14 @@ class ModelBuilder:
             cont_nw_conv = None
             cont_forms = None
 
+        # Static continuum-region membership per spectrum, from the unshifted
+        # edges so it cannot depend on a sampled PixOffset.
+        redshift = self._spectra.redshift
+        region_masks = [
+            static_region_masks(s.edges * conv, cont_low, cont_high, redshift)
+            for s, conv in zip(trimmed_spectra, spec_to_canonical, strict=True)
+        ]
+
         line_labels = _make_line_labels(self._line_config)
         continuum_labels = (
             _make_continuum_labels(self._cont_config)
@@ -817,7 +846,7 @@ class ModelBuilder:
         args = ModelArgs(
             matrices=self._matrices,
             spectra=trimmed_spectra,
-            redshift=self._spectra.redshift,
+            redshift=redshift,
             cont_config=self._cont_config,
             cont_resolved_params=(
                 self._cont_config.resolved_params
@@ -846,6 +875,7 @@ class ModelBuilder:
             integration_mode=integration_mode,
             n_super=n_super_val,
             conv_half_width=conv_half_width_val,
+            region_masks=region_masks,
             _profile_codes_local=self._matrices.profile_codes,
             _integrate_fn=int_fn,
             _evaluate_fn=eval_fn,
