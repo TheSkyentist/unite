@@ -839,15 +839,21 @@ def _voigt_faddeeva_pdf(x: ArrayLike, fwhm_g: ArrayLike, fwhm_l: ArrayLike) -> A
     Array
         Normalised profile value at each wavelength point.
     """
-    sigma_g = _fwhm_to_sigma(fwhm_g)
     gamma_l = 0.5 * fwhm_l
+
+    # A zero Gaussian width (e.g. a pure Lorentzian with LSF = 0 in convolution
+    # mode) makes the Faddeeva form divide by zero; that limit is exactly the
+    # Cauchy PDF. Use a safe sigma in the Faddeeva branch so gradients stay finite.
+    is_lorentz = jnp.asarray(fwhm_g) <= 0.0
+    sigma_g = _fwhm_to_sigma(jnp.where(is_lorentz, 1.0, fwhm_g))
 
     # Voigt complex argument: z = (dx + i*gamma) / (sigma * sqrt(2))
     denom = sigma_g * np.sqrt(2)
     z = (x + 1j * gamma_l) / denom
 
     # Voigt profile: V(x) = Re[w(z)] / (sigma * sqrt(2*pi))
-    return jnp.real(wofz(z)) / (sigma_g * np.sqrt(2.0 * np.pi))
+    voigt = jnp.real(wofz(z)) / (sigma_g * np.sqrt(2.0 * np.pi))
+    return jnp.where(is_lorentz, _cauchy_pdf(x, gamma_l), voigt)
 
 
 # -------------------------------------------------------------------
@@ -1233,8 +1239,13 @@ def evaluate_gaussianLaplace(
         Normalised profile value at each wavelength point.
     """
     fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
-    sigma = _fwhm_to_sigma(fwhm_g_total)
     lam = _EXP_SCALE_TO_FWHM / fwhm_l
+
+    # Zero Gaussian width (pure Laplace, LSF = 0 in convolution mode): the EMG
+    # reduces exactly to the Laplace PDF; use a safe sigma in the EMG branch.
+    is_laplace = jnp.asarray(fwhm_g_total) <= 0.0
+    sigma = _fwhm_to_sigma(jnp.where(is_laplace, 1.0, fwhm_g_total))
+    laplace = 0.5 * lam * jnp.exp(-lam * jnp.abs(wavelength - center))
 
     # Symmetric EMG PDF: Gaussian convolved wi_absth symmetric Laplace.
     # f(x) = (lam/4) * exp(a^2) * [exp(2|u|a)*erfc(|u|+a) + exp(-2|u|a)*erfc(a-|u|)]
@@ -1258,7 +1269,8 @@ def evaluate_gaussianLaplace(
     negterm = jnp.exp(-two_ua) * erfc(a - u_abs)
     result = (0.25 * lam) * jnp.exp(a * a) * (posterm + negterm)
 
-    return jnp.where(gaussian_limit, _gaussian_pdf(wavelength - center, sigma), result)
+    emg = jnp.where(gaussian_limit, _gaussian_pdf(wavelength - center, sigma), result)
+    return jnp.where(is_laplace, laplace, emg)
 
 
 # -------------------------------------------------------------------

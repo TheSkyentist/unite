@@ -757,3 +757,60 @@ class TestGaussianSplitLaplace:
             self.wavelength, self.center, self.lsf_fwhm, 80.0, 60.0, 40.0
         )
         assert jnp.all(result >= 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Zero-LSF (convolution-mode intrinsic evaluation)
+# ---------------------------------------------------------------------------
+
+
+class TestZeroLSF:
+    """Convolution mode evaluates the intrinsic model with ``lsf_fwhm = 0``."""
+
+    wavelength = jnp.linspace(4990.0, 5010.0, 201)
+
+    @pytest.mark.parametrize(
+        'profile',
+        [
+            Gaussian,
+            Cauchy,
+            PseudoVoigt,
+            Laplace,
+            SEMG,
+            GaussHermite,
+            SplitNormal,
+            SkewNormal,
+            BoxGauss,
+            SkewVoigt,
+            GaussianSplitLaplace,
+        ],
+    )
+    def test_finite(self, profile):
+        prof = profile()
+        names = prof.param_names()
+        n = len(names)
+        params = [3.0] * n
+        for i, name in enumerate(names):
+            if name in ('h3', 'h4'):
+                params[i] = 0.05
+            elif name == 'alpha':
+                params[i] = 0.5
+        params += [0.0] * (3 - n)
+        fn = prof.evaluate_branch()
+        vals = fn(self.wavelength, 5000.0, 0.0, *params)
+        assert bool(jnp.all(jnp.isfinite(vals)))
+
+    def test_cauchy_matches_analytic(self):
+        fn = Cauchy().evaluate_branch()
+        vals = fn(self.wavelength, 5000.0, 0.0, 4.0, 0.0, 0.0)
+        expected = (2.0 / np.pi) / ((self.wavelength - 5000.0) ** 2 + 4.0)
+        np.testing.assert_allclose(vals, expected, rtol=1e-10)
+
+    def test_cauchy_grad_finite(self):
+        import jax
+
+        fn = Cauchy().evaluate_branch()
+        g = jax.grad(lambda w: jnp.sum(fn(self.wavelength, 5000.0, 0.0, w, 0.0, 0.0)))(
+            4.0
+        )
+        assert bool(jnp.isfinite(g))
