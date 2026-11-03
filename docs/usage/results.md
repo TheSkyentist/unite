@@ -459,6 +459,30 @@ hdul = make_hdul(samples, model_args, percentiles=[0.16, 0.5, 0.84], batch_size=
 are still assembled on the host before percentiles are taken. The default, `None`,
 disables batching.
 
+### Intrinsic model at arbitrary wavelengths
+
+{func}`~unite.compute.evaluate_intrinsic` evaluates the model on any wavelength grid
+you choose, as the source emits it: no LSF broadening, no pixel integration, and no
+instrument calibration (`RScale`, `PixOffset` and `FluxScale` are ignored). Lines and
+continuum are evaluated pointwise and absorbers are applied as `exp(-tau * phi)` with
+the intrinsic profile, so the result is exact and independent of `integration_mode`.
+
+```python
+import astropy.units as u
+import numpy as np
+from unite.compute import evaluate_intrinsic
+
+wl = np.linspace(6500, 6620, 2000) * u.AA  # any length unit
+pred = evaluate_intrinsic(samples, model_args, wl)
+# pred.total, pred.lines, pred.continuum_regions, pred.tau_profiles
+# all have shape (n_samples, n_wavelengths)
+```
+
+It returns a single {class}`~unite.compute.SpectrumPrediction` (not one per spectrum).
+Fluxes are in the first spectrum's flux unit unless you pass `flux_unit=`. Because
+`FluxScale` is not applied, the model differs from a spectrum's data by that factor
+when it is not 1.
+
 ---
 
 ## Model Diagnostics

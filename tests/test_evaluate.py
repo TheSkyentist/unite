@@ -7,7 +7,7 @@ from jax import random
 from numpyro.infer import Predictive
 
 from unite import line, model, prior
-from unite.compute import SpectrumPrediction, evaluate_model
+from unite.compute import SpectrumPrediction, evaluate_intrinsic, evaluate_model
 from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
 from unite.continuum.library import Linear
 from unite.instrument.base import PixOffset
@@ -703,3 +703,96 @@ class TestBatchedResults:
         monkeypatch.setattr(results, 'evaluate_model', counting)
         results.make_hdul(samples, args, batch_size=3)
         assert calls == [3]
+
+
+# ---------------------------------------------------------------------------
+# evaluate_intrinsic
+# ---------------------------------------------------------------------------
+
+
+def _intrinsic_setup(resolving_power=3000.0, with_absorber=False):
+    npix = 400
+    wavelength = np.linspace(6500, 6600, npix) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=resolving_power, name='hiR')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    rng = np.random.default_rng(1)
+    flux = (5.0 + rng.normal(0, 0.1, npix)) * flux_unit
+    spec = Spectrum(
+        low=low,
+        high=high,
+        flux=flux,
+        error=np.full(npix, 0.1) * flux_unit,
+        disperser=disperser,
+        name='hiR',
+    )
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'Ha',
+        6563.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(600.0)),
+        flux=line.Flux(prior=prior.Fixed(2.0)),
+    )
+    if with_absorber:
+        lc.add_line(
+            'Habs',
+            6563.0 * u.AA,
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(0.5)),
+        )
+    cc = ContinuumConfiguration(
+        [ContinuumRegion(6500 * u.AA, 6600 * u.AA, form=Linear())]
+    )
+    model_fn, args = _build_model(spec, lc, cc)
+    samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(0), args)
+    return samples, args
+
+
+def test_intrinsic_matches_high_R_pixel_average():
+    """Pixel-averaging the intrinsic model recovers evaluate_model at R -> inf."""
+    samples, args = _intrinsic_setup(resolving_power=1e7)
+    ref = evaluate_model(samples, args)[0]
+    sub = 20
+    low = np.asarray(args.spectra[0].low)
+    high = np.asarray(args.spectra[0].high)
+    off = (np.arange(sub) + 0.5) / sub
+    fine = (low[:, None] + off[None, :] * (high - low)[:, None]).ravel() * u.AA
+    pred = evaluate_intrinsic(samples, args, fine)
+    avg = pred.total.reshape(3, -1, sub).mean(axis=2)
+    np.testing.assert_allclose(avg, ref.total, rtol=2e-3)
+    assert pred.total.shape == (3, fine.size)
+
+
+def test_intrinsic_decomposition_sums_to_total():
+    samples, args = _intrinsic_setup()
+    wl = np.linspace(6520, 6580, 301) * u.AA
+    pred = evaluate_intrinsic(samples, args, wl)
+    parts = sum(pred.lines.values()) + sum(pred.continuum_regions.values())
+    np.testing.assert_allclose(parts, pred.total, rtol=1e-10)
+
+
+def test_intrinsic_unit_invariance_and_flux_unit():
+    samples, args = _intrinsic_setup()
+    wl_aa = np.linspace(6520, 6580, 101) * u.AA
+    a = evaluate_intrinsic(samples, args, wl_aa)
+    b = evaluate_intrinsic(samples, args, wl_aa.to(u.um))
+    np.testing.assert_allclose(a.total, b.total, rtol=1e-10)
+    c = evaluate_intrinsic(samples, args, wl_aa, flux_unit='1e-18 erg / (s cm2 AA)')
+    np.testing.assert_allclose(c.total, 10 * a.total, rtol=1e-10)
+
+
+def test_intrinsic_absorber_peak_tau():
+    samples, args = _intrinsic_setup(with_absorber=True)
+    wl = np.linspace(6520, 6600, 2001) * u.AA
+    pred = evaluate_intrinsic(samples, args, wl)
+    assert pred.tau_profiles['Habs'].max() == pytest.approx(0.5, rel=1e-3)
+    assert pred.lines['Habs'].min() < 0.0
+
+
+def test_intrinsic_requires_quantity():
+    samples, args = _intrinsic_setup()
+    with pytest.raises(TypeError):
+        evaluate_intrinsic(samples, args, np.linspace(6520, 6580, 10))

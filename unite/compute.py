@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
+from astropy import units as u
 
 from unite._compose import compose_leave_one_out
 from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
@@ -85,6 +86,42 @@ def _evaluate_in_chunks(fn, context, n_samples: int, batch_size: int):
     return jax.tree.map(lambda *a: np.concatenate(a, axis=0), *outs)
 
 
+def _build_context(
+    samples: dict[str, np.ndarray], args: ModelArgs
+) -> tuple[dict[str, jnp.ndarray], int]:
+    """Build the parameter dict with a uniform ``(n_samples,)`` leading axis.
+
+    Returns the dict and ``n_samples``.
+    """
+    context: dict[str, jnp.ndarray] = {}
+    obj_ctx: dict[object, jnp.ndarray] = {}  # token -> value, for Fixed expr resolution
+    n_samples = None
+    for pname in args.dependency_order:
+        prior = args.all_priors[pname]
+        if isinstance(prior, Fixed):
+            arr = jnp.asarray(prior.resolved_value(obj_ctx))
+        else:
+            arr = jnp.asarray(samples[pname])
+            if n_samples is None and arr.ndim >= 1:
+                n_samples = arr.shape[0]
+        context[pname] = arr
+        tok = args.name_to_token.get(pname)
+        if tok is not None:
+            obj_ctx[tok] = arr
+
+    if n_samples is None:
+        n_samples = 1
+
+    # Broadcast Fixed (scalar) params to (n_samples,) so every leaf has the
+    # same leading axis and vmap can map uniformly over the dict pytree.
+    context = {
+        k: (jnp.broadcast_to(v, (n_samples,)) if v.ndim == 0 else v)
+        for k, v in context.items()
+    }
+
+    return context, n_samples
+
+
 def evaluate_model(
     samples: dict[str, np.ndarray], args: ModelArgs, *, batch_size: int | None = None
 ) -> list[SpectrumPrediction]:
@@ -132,32 +169,7 @@ def evaluate_model(
     _int_fn = args._integrate_fn if args._integrate_fn is not None else integrate_lines
     _eval_fn = args._evaluate_fn if args._evaluate_fn is not None else evaluate_lines
 
-    # --- Build parameter dict with a uniform (n_samples,) leading axis ---
-    context: dict[str, jnp.ndarray] = {}
-    obj_ctx: dict[object, jnp.ndarray] = {}  # token -> value, for Fixed expr resolution
-    n_samples = None
-    for pname in args.dependency_order:
-        prior = args.all_priors[pname]
-        if isinstance(prior, Fixed):
-            arr = jnp.asarray(prior.resolved_value(obj_ctx))
-        else:
-            arr = jnp.asarray(samples[pname])
-            if n_samples is None and arr.ndim >= 1:
-                n_samples = arr.shape[0]
-        context[pname] = arr
-        tok = args.name_to_token.get(pname)
-        if tok is not None:
-            obj_ctx[tok] = arr
-
-    if n_samples is None:
-        n_samples = 1
-
-    # Broadcast Fixed (scalar) params to (n_samples,) so every leaf has the
-    # same leading axis and vmap can map uniformly over the dict pytree.
-    context = {
-        k: (jnp.broadcast_to(v, (n_samples,)) if v.ndim == 0 else v)
-        for k, v in context.items()
-    }
+    context, n_samples = _build_context(samples, args)
 
     # --- Per-spectrum evaluation (vectorised over samples) ---
     # Lazily build and JIT-compile per-spectrum vmapped evaluators on first call.
@@ -421,3 +433,137 @@ def evaluate_model(
         )
 
     return results
+
+
+def evaluate_intrinsic(
+    samples: dict[str, np.ndarray],
+    args: ModelArgs,
+    wavelength: u.Quantity,
+    flux_unit: u.UnitBase | str | None = None,
+) -> SpectrumPrediction:
+    """Evaluate the exact intrinsic model at arbitrary wavelengths.
+
+    Returns the astrophysical model as the source emits it (at the systemic
+    redshift) before any instrument touches it: no LSF broadening, no
+    pixel integration, and no per-disperser calibration (``RScale``,
+    ``PixOffset`` and ``FluxScale`` are ignored).  Line profiles and
+    continuum forms are evaluated pointwise, and absorbers are applied as
+    ``exp(-tau * phi)`` with the intrinsic profile, so the result is exact
+    for emission, absorption and continuum alike.  It is independent of
+    ``args.integration_mode``.
+
+    The observed spectra were fit with their ``FluxScale`` applied, so this
+    model differs from a spectrum's data by that factor when it is not 1.
+
+    Parameters
+    ----------
+    samples : dict of str to ndarray
+        Posterior samples as returned by ``mcmc.get_samples()``.  Sites for
+        instrument calibration parameters are ignored.
+    args : ModelArgs
+        Pre-built data bundle from :meth:`ModelBuilder.build`.
+    wavelength : astropy.units.Quantity
+        Observed-frame wavelength grid, shape ``(n_wavelengths,)``, in any
+        length unit.
+    flux_unit : astropy.units.UnitBase or str, optional
+        Output flux-density unit.  Defaults to the flux unit of the first
+        spectrum in ``args.spectra``.
+
+    Returns
+    -------
+    SpectrumPrediction
+        ``wavelength`` holds the input grid in the unit it was given;
+        all flux arrays have shape ``(n_samples, n_wavelengths)`` and are in
+        ``flux_unit``.  ``lines``, ``continuum_regions`` and ``tau_profiles``
+        follow the same conventions as :func:`evaluate_model`.
+    """
+    if not isinstance(wavelength, u.Quantity):
+        raise TypeError('wavelength must be an astropy Quantity with length units.')
+    if wavelength.ndim != 1:
+        raise ValueError('wavelength must be one-dimensional.')
+
+    cm = args.matrices
+    z_sys = args.redshift
+    n_lines = cm.wavelengths.shape[0]
+    has_tau = bool(cm.tau_names)
+
+    ref = args.spectra[0]
+    base_unit = ref.flux_unit
+    out_unit = base_unit if flux_unit is None else u.Unit(flux_unit)
+    unit_factor = float((1.0 * base_unit).to(out_unit).value)
+    line_scale = float(args.line_flux_scales[0]) * unit_factor
+    cont_scale = float(args.continuum_scales[0]) * unit_factor
+
+    wl = jnp.asarray(wavelength.to(args.canonical_unit).value)
+
+    _pcodes = (
+        args._profile_codes_local
+        if args._profile_codes_local is not None
+        else cm.profile_codes
+    )
+    _eval_fn = args._evaluate_fn if args._evaluate_fn is not None else evaluate_lines
+    context, _ = _build_context(samples, args)
+
+    def _single(params):
+        flux_per_line, tau_per_line, centers, p0, p1, p2 = _build_line_params(
+            cm, params, n_lines, z_sys
+        )
+        if has_tau:
+            tau_per_line = _peak_to_area_tau(
+                tau_per_line,
+                centers,
+                p0,
+                p1,
+                p2,
+                _pcodes,
+                cm.is_tau,
+                _eval_fn=args._evaluate_at_centers_fn,
+            )
+        zero_lsf = jnp.zeros_like(centers)
+        phi = _eval_fn(wl, centers, zero_lsf, p0, p1, p2, _pcodes)
+
+        cont_regions = eval_continuum_regions(wl, args, params, z_sys, 0.0)
+        cont_total = jnp.zeros_like(wl)
+        for r in cont_regions:
+            cont_total = cont_total + r
+        total, deltas = compose_leave_one_out(
+            phi,
+            flux_per_line * line_scale,
+            tau_per_line,
+            cm.is_tau,
+            cm.applies_matrix,
+            args.cont_applies,
+            cont_total * cont_scale,
+            has_tau=has_tau,
+        )
+        if has_tau:
+            tau_profiles = jnp.where(
+                cm.is_tau[:, None], tau_per_line[:, None] * phi, 0.0
+            )
+        else:
+            tau_profiles = jnp.zeros((n_lines, wl.shape[0]))
+        return (total, deltas, [r * cont_scale for r in cont_regions], tau_profiles)
+
+    total_arr, line_arr, cont_arr, tau_arr = jax.jit(jax.vmap(_single))(context)
+
+    line_np = np.asarray(line_arr)
+    lines_dict = {args.line_labels[j]: line_np[:, j, :] for j in range(n_lines)}
+    cont_dict: dict[str, np.ndarray] = {}
+    if args.cont_config is not None:
+        for k in range(len(args.cont_config)):
+            cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
+    tau_dict: dict[str, np.ndarray] = {}
+    if has_tau:
+        tau_np = np.asarray(tau_arr)
+        is_abs = np.asarray(cm.is_tau)
+        tau_dict = {
+            args.line_labels[j]: tau_np[:, j, :] for j in range(n_lines) if is_abs[j]
+        }
+
+    return SpectrumPrediction(
+        wavelength=np.asarray(wavelength.value),
+        total=np.asarray(total_arr),
+        lines=lines_dict,
+        continuum_regions=cont_dict,
+        tau_profiles=tau_dict,
+    )
