@@ -68,3 +68,6 @@ scratch/
 
 # Claude work directory
 .claude/
+
+# README figure sample cache
+docs/images/.readme_samples.pkl

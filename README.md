@@ -13,6 +13,8 @@
 
 Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 
+![unite: One Model, Many Spectra. A single shared line model fit simultaneously to a NIRSpec PRISM and G395M spectrum.](docs/images/readme_figure.png)
+
 ## What it does
 
 - **Two pixel-integration modes**: analytic (exact CDF-based, default) and numerical LSF convolution (`n_super` uniform fine-grid points per pixel + banded wavelength-varying Gaussian convolution, correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` for absorption lines)
