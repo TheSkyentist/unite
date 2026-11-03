@@ -266,6 +266,37 @@ class TestModelArgsInitValues:
         assert float(start[broad.name]) == pytest.approx(1500.0)
         assert float(start[z.name]) == pytest.approx(0.001)
 
+    def test_dependent_bounds_follow_parent_with_float_inits(self):
+        """Dependent bounds must not freeze at their init-time values.
+
+        ``init_values`` are Python floats; if the resolved bound were a float
+        NumPyro would treat the support as static and cache the transform.
+        """
+        from numpyro.infer import init_to_value
+        from numpyro.infer.util import initialize_model
+
+        lc, narrow, broad, _z = _two_component_config(
+            narrow_init=200.0, broad_init=1000.0
+        )
+        model_fn, args = _builder(lc).build()
+        assert all(isinstance(v, float) for v in args.init_values.values())
+        info = initialize_model(
+            random.PRNGKey(0),
+            model_fn,
+            model_args=(args,),
+            init_strategy=init_to_value(values=args.init_values),
+        )
+        z0 = dict(info.param_info.z)
+        n_key = next(k for k in z0 if k.startswith('fwhm') and 'narrow' in k)
+        for dz in (-0.5, 0.5, 1.0):
+            c = info.postprocess_fn({**z0, n_key: z0[n_key] + dz})
+            n, b = float(c[narrow.name]), float(c[broad.name])
+            assert b >= 2 * n + 150.0
+            assert b <= 3000.0
+        lo = info.postprocess_fn({**z0, n_key: z0[n_key] - 0.5})
+        hi = info.postprocess_fn({**z0, n_key: z0[n_key] + 1.0})
+        assert float(lo[broad.name]) != pytest.approx(float(hi[broad.name]))
+
 
 class TestFitInitStrategy:
     """``fit()`` applies ``init_values`` and honours an explicit strategy."""

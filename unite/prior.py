@@ -35,6 +35,7 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 
+import jax.numpy as jnp
 import numpyro.distributions as dist
 
 # -------------------------------------------------------------------
@@ -314,10 +315,17 @@ class Prior(ABC):
 # -------------------------------------------------------------------
 
 
-def _resolve_bound(value: Bound, context: dict) -> float:
-    """Resolve a bound that may be a fixed float or a parameter expression."""
+def _resolve_bound(value: Bound, context: dict) -> float | jnp.ndarray:
+    """Resolve a bound that may be a fixed float or a parameter expression.
+
+    Expression bounds are always returned as JAX arrays.  If the context holds
+    Python floats (e.g. when a sampler is initialised via ``init_to_value``),
+    the resolved bound would otherwise be a plain float, which NumPyro treats
+    as a static support: the constrained transform would be built once and
+    frozen at the initial values instead of following the parent parameter.
+    """
     if isinstance(value, _Expr):
-        return value.resolve(context)
+        return jnp.asarray(value.resolve(context))
     return value
 
 
