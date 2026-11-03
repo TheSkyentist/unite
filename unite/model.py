@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -865,6 +865,7 @@ class ModelBuilder:
         conv_half_width: int | None = None,
         init_strategy: Callable | None = None,
         chain_method: Literal['parallel', 'sequential', 'vectorized'] = 'parallel',
+        extra_fields: Sequence[str] = ('diverging',),
     ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -920,6 +921,14 @@ class ModelBuilder:
             one GPU busy; the chains advance in lockstep, so each step takes
             as long as the slowest chain.  ``'sequential'`` always runs one
             chain at a time.  Ignored when ``num_chains=1``.
+        extra_fields : sequence of str, optional
+            NUTS sampler fields to record and return as additional keys in
+            ``samples`` (default: ``('diverging',)``).  Each name is passed to
+            :meth:`numpyro.infer.MCMC.run` and stored under the same name,
+            e.g. ``'accept_prob'``, ``'num_steps'``, ``'energy'`` or a dotted
+            attribute such as ``'adapt_state.step_size'``.  Fields must be
+            arrays with one entry per sample; pytree fields (``'z'``,
+            ``'adapt_state'``) are rejected.  Pass ``()`` to record none.
 
         Returns
         -------
@@ -935,6 +944,18 @@ class ModelBuilder:
             * ``'log_likelihood'`` — sum of per-pixel Normal log-probabilities
               across all spectra for each sample.
 
+            Each entry of ``extra_fields`` is also added as a key, e.g. the
+            default ``'diverging'`` is a boolean array flagging divergent
+            transitions (``samples['diverging'].sum()`` counts them).
+
+        Raises
+        ------
+        ValueError
+            If an ``extra_fields`` name collides with ``'log_prob'``,
+            ``'log_likelihood'`` or a model parameter name.
+        TypeError
+            If an ``extra_fields`` entry is not an array (e.g. ``'z'``).
+
         Examples
         --------
         >>> samples, model_args = builder.fit(num_warmup=200, num_samples=500, num_chains=4)
@@ -943,6 +964,12 @@ class ModelBuilder:
         import numpy as _np
         from numpyro import infer
         from numpyro.infer.util import log_likelihood as _npy_ll
+
+        extra_fields = tuple(extra_fields)
+        reserved = {'log_prob', 'log_likelihood'} & set(extra_fields)
+        if reserved:
+            msg = f'extra_fields may not include reserved key(s) {sorted(reserved)}.'
+            raise ValueError(msg)
 
         model_fn, model_args = self.build(
             integration_mode=integration_mode,
@@ -965,12 +992,27 @@ class ModelBuilder:
             chain_method=chain_method,
         )
         mcmc.run(
-            jax.random.PRNGKey(seed), model_args, extra_fields=('potential_energy',)
+            jax.random.PRNGKey(seed),
+            model_args,
+            extra_fields=('potential_energy', *extra_fields),
         )
         samples = mcmc.get_samples()
         # log_prob = log joint = log_likelihood + log_prior (up to a constant).
         extra = mcmc.get_extra_fields()
         samples['log_prob'] = -_np.asarray(extra['potential_energy'])
+        for name in extra_fields:
+            if name in samples:
+                msg = f'extra_fields entry {name!r} collides with a sample key.'
+                raise ValueError(msg)
+            value = extra[name]
+            if not isinstance(value, jax.Array | _np.ndarray):
+                msg = (
+                    f'extra_fields entry {name!r} is a {type(value).__name__}, '
+                    'not an array; request an array-valued field or attribute '
+                    "instead (e.g. 'adapt_state.step_size')."
+                )
+                raise TypeError(msg)
+            samples[name] = _np.asarray(value)
         # log_likelihood: sum of per-pixel Normal log-probs across all spectra.
         ll_dict = _npy_ll(model_fn, samples, model_args)
         if ll_dict:

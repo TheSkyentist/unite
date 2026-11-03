@@ -26,6 +26,15 @@ table = make_parameter_table(samples, model_args)
 # 'log_prob' and 'log_likelihood' appear as extra columns automatically
 ```
 
+NUTS sampler diagnostics requested via `extra_fields` are added to the samples dict
+under the same name. The default, `extra_fields=('diverging',)`, records a boolean
+flag per sample; pass e.g. `('diverging', 'accept_prob', 'num_steps')` for more, or
+`()` for none. These keys are not added to the parameter table.
+
+```python
+print(f"{samples['diverging'].sum()} divergent transitions")
+```
+
 Both keys are consumed by {func}`~unite.results.freeze_from_samples` (see
 [below](#freezing-parameters-for-a-re-fit)) and by
 {meth}`~unite.model.ModelBuilder.fit`'s `mode='map'` / `mode='mle'` options.

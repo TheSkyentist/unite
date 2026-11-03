@@ -757,6 +757,63 @@ class TestModelBuilderFit:
         flux_key2 = next(k for k in samples2 if 'flux' in k and 'scale' not in k)
         assert jnp.allclose(samples1[flux_key], samples2[flux_key2], rtol=1e-6)
 
+    @staticmethod
+    def _minimal_builder():
+        spectra = Spectra([create_simple_spectrum()], redshift=0.0)
+        spectra.prepare(create_minimal_config(), None)
+        spectra.compute_scales(
+            spectra.prepared_line_config, spectra.prepared_cont_config
+        )
+        return model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        )
+
+    @pytest.mark.slow
+    def test_fit_default_diverging(self):
+        """fit() records 'diverging' as a boolean per-sample key by default."""
+        samples, _args = self._minimal_builder().fit(
+            num_warmup=10, num_samples=15, seed=1, progress_bar=False
+        )
+        assert samples['diverging'].dtype == bool
+        assert samples['diverging'].shape == (15,)
+
+    @pytest.mark.slow
+    def test_fit_custom_extra_fields(self):
+        """Requested extra_fields become sample keys; () records none."""
+        builder = self._minimal_builder()
+        samples, _args = builder.fit(
+            num_warmup=10,
+            num_samples=15,
+            seed=1,
+            progress_bar=False,
+            extra_fields=('accept_prob', 'adapt_state.step_size'),
+        )
+        assert samples['accept_prob'].shape == (15,)
+        assert samples['adapt_state.step_size'].shape == (15,)
+        assert 'diverging' not in samples
+
+        samples, _args = builder.fit(
+            num_warmup=10, num_samples=15, seed=1, progress_bar=False, extra_fields=()
+        )
+        assert 'diverging' not in samples
+        assert 'log_prob' in samples
+
+    def test_fit_extra_fields_reserved_key(self):
+        """Reserved keys are rejected before sampling."""
+        with pytest.raises(ValueError, match='reserved'):
+            self._minimal_builder().fit(extra_fields=('log_prob',))
+
+    @pytest.mark.slow
+    def test_fit_extra_fields_pytree_rejected(self):
+        """Non-array fields such as 'adapt_state' raise TypeError."""
+        with pytest.raises(TypeError, match='adapt_state'):
+            self._minimal_builder().fit(
+                num_warmup=5,
+                num_samples=5,
+                progress_bar=False,
+                extra_fields=('adapt_state',),
+            )
+
 
 class TestFullyMaskedSpectra:
     """Test graceful handling of spectra with no continuum overlap."""
