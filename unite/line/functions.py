@@ -38,7 +38,10 @@ _EXP_SCALE_TO_FWHM: Final[float] = 2 * math.log(2)
 
 def _combine_fwhm(fwhm1: ArrayLike, fwhm2: ArrayLike) -> Array:
     """Combine two FWHM values in quadrature: ``sqrt(fwhm1**2 + fwhm2**2)``."""
-    return jnp.sqrt(fwhm1 * fwhm1 + fwhm2 * fwhm2)
+    # Double-where keeps the gradient finite (zero) when both widths are 0.
+    s = fwhm1 * fwhm1 + fwhm2 * fwhm2
+    positive = s > 0.0
+    return jnp.where(positive, jnp.sqrt(jnp.where(positive, s, 1.0)), 0.0)
 
 
 def _fwhm_to_sigma(fwhm: ArrayLike) -> Array:
@@ -1388,11 +1391,23 @@ def evaluate_gaussianSplitLaplace(
         Normalised profile value at each wavelength point.
     """
     fwhm_g_total = _combine_fwhm(lsf_fwhm, fwhm_g)
-    sigma = fwhm_g_total / _HALFVAR_SIGMA_TO_FWHM
+    # Zero Gaussian width (pure split-Laplace, LSF = 0 in convolution mode): the
+    # asymmetric EMG reduces exactly to the split-Laplace PDF; use a safe sigma in
+    # the EMG branch so gradients stay finite.
+    is_laplace = jnp.asarray(fwhm_g_total) <= 0.0
+    sigma = jnp.where(is_laplace, 1.0, fwhm_g_total) / _HALFVAR_SIGMA_TO_FWHM
     lam_red = _EXP_SCALE_TO_FWHM / fwhm_l_red
     lam_blue = _EXP_SCALE_TO_FWHM / fwhm_l_blue
 
-    t = (wavelength - center) / (sigma)
+    dx = wavelength - center
+    split_laplace = (
+        lam_red
+        * lam_blue
+        / (lam_red + lam_blue)
+        * jnp.exp(-jnp.where(dx >= 0, lam_red, lam_blue) * jnp.abs(dx))
+    )
+
+    t = dx / sigma
     a_red = lam_red * sigma / 2
     a_blue = lam_blue * sigma / 2
 
@@ -1403,4 +1418,5 @@ def evaluate_gaussianSplitLaplace(
     right = _exp_erfc(u_right, -t + a_red, u_right > limit)
     left = _exp_erfc(u_left, t + a_blue, u_left > limit)
 
-    return lam_red * lam_blue * (right + left) / (2 * (lam_red + lam_blue))
+    emg = lam_red * lam_blue * (right + left) / (2 * (lam_red + lam_blue))
+    return jnp.where(is_laplace, split_laplace, emg)

@@ -800,6 +800,44 @@ class TestZeroLSF:
         vals = fn(self.wavelength, 5000.0, 0.0, *params)
         assert bool(jnp.all(jnp.isfinite(vals)))
 
+    @pytest.mark.parametrize(
+        'profile', [PseudoVoigt, SEMG, SkewVoigt, GaussianSplitLaplace]
+    )
+    def test_zero_intrinsic_gauss_finite(self, profile):
+        """``fwhm_gauss = 0`` exactly with ``lsf_fwhm = 0`` stays finite."""
+        import jax
+
+        prof = profile()
+        names = prof.param_names()
+        base = []
+        for name in names:
+            if name == 'fwhm_gauss':
+                base.append(0.0)
+            elif name == 'alpha':
+                base.append(0.5)
+            elif name in ('h3', 'h4'):
+                base.append(0.05)
+            else:
+                base.append(3.0)
+        fn = prof.evaluate_branch()
+        pad = [0.0] * (3 - len(base))
+        vals = fn(self.wavelength, 5000.0, 0.0, *base, *pad)
+        assert bool(jnp.all(jnp.isfinite(vals)))
+
+        # gradient with respect to every parameter must be finite too
+        def total(p):
+            return jnp.sum(fn(self.wavelength, 5000.0, 0.0, *p, *pad))
+
+        g = jax.grad(total)(jnp.asarray(base))
+        assert bool(jnp.all(jnp.isfinite(g)))
+
+    def test_split_laplace_zero_gauss_matches_limit(self):
+        """Exact zero agrees with a vanishingly small Gaussian width."""
+        fn = GaussianSplitLaplace().evaluate_branch()
+        zero = fn(self.wavelength, 5000.0, 0.0, 0.0, 2.0, 5.0)
+        tiny = fn(self.wavelength, 5000.0, 0.0, 1e-6, 2.0, 5.0)
+        np.testing.assert_allclose(zero, tiny, atol=1e-5)
+
     def test_cauchy_matches_analytic(self):
         fn = Cauchy().evaluate_branch()
         vals = fn(self.wavelength, 5000.0, 0.0, 4.0, 0.0, 0.0)
