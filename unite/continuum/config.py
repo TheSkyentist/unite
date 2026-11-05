@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -760,6 +760,63 @@ class ContinuumConfiguration:
 
     def __getitem__(self, idx: int) -> ContinuumRegion:
         return self._regions[idx]
+
+    def remove_region(self, key: int | str) -> None:
+        """Remove one region by name or index, in place.
+
+        Parameters
+        ----------
+        key : int or str
+            Region name, or integer index into the wavelength-sorted region
+            list (negative indices allowed).
+
+        Raises
+        ------
+        KeyError
+            If *key* is a string matching no region name.
+        IndexError
+            If *key* is an out-of-range integer.
+        """
+        self.remove_regions([key])
+
+    def remove_regions(self, keys: int | str | Sequence[int | str]) -> None:
+        """Remove several regions by name and/or index, in place.
+
+        Indices refer to the region order *before* removal.  The operation is
+        atomic: if any key is invalid, nothing is removed.  Parameter tokens
+        keep their already-assigned names.
+
+        Parameters
+        ----------
+        keys : int, str, or sequence of int or str
+            Region names and/or indices.
+
+        Raises
+        ------
+        KeyError
+            If a string key matches no region name.
+        IndexError
+            If an integer key is out of range.
+        """
+        if isinstance(keys, int | str):
+            keys = [keys]
+        n = len(self._regions)
+        drop: set[int] = set()
+        for key in keys:
+            if isinstance(key, str):
+                idx = [i for i, r in enumerate(self._regions) if r.name == key]
+                if not idx:
+                    names = [r.name for r in self._regions if r.name is not None]
+                    msg = f'No region named {key!r}. Available: {names}.'
+                    raise KeyError(msg)
+                drop.update(idx)
+            else:
+                if not -n <= key < n:
+                    msg = f'Region index {key} out of range for {n} region(s).'
+                    raise IndexError(msg)
+                drop.add(key % n)
+        self._regions = [r for i, r in enumerate(self._regions) if i not in drop]
+        self._resolved_params = self._resolve_params()
 
     def __add__(self, other: ContinuumConfiguration) -> ContinuumConfiguration:
         """Combine two configurations (strict mode — raises on parameter name collisions).

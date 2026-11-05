@@ -1157,3 +1157,43 @@ class TestFromArraysLoader:
         _, _, _, flux, error, disperser = _raw_arrays()
         with pytest.raises(ValueError, match='must provide'):
             from_arrays(flux=flux, error=error, disperser=disperser)
+
+
+class TestRemoveSpectra:
+    def _spectra(self):
+        s = [
+            _make_spectrum(name='a'),
+            _make_spectrum(name='b'),
+            _make_spectrum(name='c'),
+        ]
+        return Spectra(s, redshift=0.0)
+
+    def test_remove_by_name_and_index(self):
+        sp = self._spectra()
+        sp.remove_spectrum('b')
+        assert [s.name for s in sp] == ['a', 'c']
+        sp.remove_spectrum(0)
+        assert [s.name for s in sp] == ['c']
+
+    def test_resets_prepared_state(self):
+        sp = self._spectra()
+        sp.prepare(_make_line_config())
+        assert sp.is_prepared
+        sp.remove_spectra(['a'])
+        assert not sp.is_prepared
+        assert sp.prepared_line_config is None
+        assert sp.prepared_cont_config is None
+
+    def test_cannot_remove_all(self):
+        sp = self._spectra()
+        with pytest.raises(ValueError, match='at least one'):
+            sp.remove_spectra([0, 1, 2])
+        assert len(sp) == 3
+
+    def test_invalid_keys_atomic(self):
+        sp = self._spectra()
+        with pytest.raises(KeyError):
+            sp.remove_spectra(['a', 'zzz'])
+        with pytest.raises(IndexError):
+            sp.remove_spectra([0, 9])
+        assert len(sp) == 3

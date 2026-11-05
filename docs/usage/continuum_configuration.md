@@ -84,6 +84,19 @@ cc_combined = cc1 + cc2
 Both configurations must share the same `zorder`; combining configurations with
 different zorders raises `ValueError`.
 
+### Removing Regions
+
+Regions can be removed in place by name or by integer index (in wavelength order).
+Names and indices can be mixed in the plural form, and indices refer to the order before
+removal. If any key is invalid, nothing is removed.
+
+```python
+cc.remove_region('blue')
+cc.remove_regions(['red', 0])
+```
+
+Parameter names already assigned to the remaining regions do not change.
+
 ### Depth Ordering (`zorder`)
 
 `ContinuumConfiguration` accepts a `zorder` integer that controls which tau

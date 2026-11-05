@@ -488,6 +488,23 @@ and you want them to be treated as the same model parameter. However, proceed wi
 
 ---
 
+## Removing Lines
+
+Lines can be removed by name, in place. Removing several lines at once is atomic: if any
+name is unknown, a `KeyError` is raised and nothing is removed.
+
+```python
+lc.remove_line('Ha_broad')
+lc.remove_lines(['[NII]_6550', '[NII]_6585'])
+```
+
+Parameters shared with the remaining lines are kept, and the names of removed lines
+become available for reuse.
+
+A line's entry can be looked up by name or index with `lc['Ha_broad']` or `lc[0]`.
+
+---
+
 ## Absorption Lines
 
 `unite` supports absorption lines alongside emission lines. Absorption profiles

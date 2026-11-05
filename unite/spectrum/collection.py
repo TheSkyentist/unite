@@ -670,6 +670,71 @@ class Spectra:
 
         return filtered_lines, filtered_cont
 
+    # -- removal --------------------------------------------------------------
+
+    def remove_spectrum(self, key: int | str) -> None:
+        """Remove one spectrum by name or index, in place.
+
+        See :meth:`remove_spectra` for the side effects.
+
+        Parameters
+        ----------
+        key : int or str
+            Spectrum name or integer index.
+        """
+        self.remove_spectra([key])
+
+    def remove_spectra(self, keys: int | str | Sequence[int | str]) -> None:
+        """Remove several spectra by name and/or index, in place.
+
+        Indices refer to the order *before* removal.  The operation is atomic.
+        Because coverage and scales depend on which spectra are present, the
+        prepared state is reset (:attr:`is_prepared` becomes ``False``,
+        :attr:`prepared_line_config` / :attr:`prepared_cont_config` become
+        ``None``) and :attr:`scale_diagnostics` is cleared.  ``line_scale`` and
+        ``continuum_scale`` are kept; call :meth:`compute_scales` again if they
+        were derived from the removed spectra.  Call :meth:`prepare` again
+        before building a model.
+
+        Parameters
+        ----------
+        keys : int, str, or sequence of int or str
+            Spectrum names and/or indices.
+
+        Raises
+        ------
+        KeyError
+            If a string key matches no spectrum name.
+        IndexError
+            If an integer key is out of range.
+        ValueError
+            If the removal would leave the collection empty.
+        """
+        if isinstance(keys, int | str):
+            keys = [keys]
+        n = len(self._spectra)
+        drop: set[int] = set()
+        for key in keys:
+            if isinstance(key, str):
+                idx = [i for i, s in enumerate(self._spectra) if s.name == key]
+                if not idx:
+                    msg = f'No spectrum found with name {key!r}.'
+                    raise KeyError(msg)
+                drop.update(idx)
+            else:
+                if not -n <= key < n:
+                    msg = f'Spectrum index {key} out of range for {n} spectrum/a.'
+                    raise IndexError(msg)
+                drop.add(key % n)
+        if len(drop) >= n:
+            msg = 'Cannot remove all spectra; a collection must contain at least one.'
+            raise ValueError(msg)
+        self._spectra = [s for i, s in enumerate(self._spectra) if i not in drop]
+        self._is_prepared = False
+        self._prepared_line_config = None
+        self._prepared_cont_config = None
+        self._scale_diagnostics = None
+
     # -- container interface --------------------------------------------------
 
     def __len__(self) -> int:

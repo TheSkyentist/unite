@@ -47,6 +47,19 @@ The canonical unit propagates to all output tables and FITS files.  In particula
 
 When in doubt, inspect `spectra.canonical_unit` before running the model.
 
+### Removing Spectra
+
+Spectra can be removed in place by name or index. At least one spectrum must remain.
+
+```python
+spectra.remove_spectrum('g395h')
+spectra.remove_spectra(['g140h', 1])
+```
+
+Removing spectra resets the prepared state, so call `spectra.prepare(...)` again before
+building a model. `line_scale` and `continuum_scale` are kept; re-run
+`spectra.compute_scales(...)` if they were derived from the removed spectra.
+
 ---
 
 ## Coverage Filtering

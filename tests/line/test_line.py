@@ -728,3 +728,70 @@ class TestAbsorptionMerge:
         assert len(merged) == 2
         tau_ids = {id(e.tau) for e in merged._entries}
         assert len(tau_ids) == 1
+
+
+class TestRemoveLines:
+    def _config(self):
+        cfg = LineConfiguration()
+        z = Redshift('sys', prior=Uniform(-0.1, 0.1))
+        fw = FWHM('n', prior=Uniform(100, 500))
+        cfg.add_line('Ha', 6564.6 * u.AA, redshift=z, fwhm_gauss=fw)
+        cfg.add_line('NII', 6585.3 * u.AA, redshift=z, fwhm_gauss=fw)
+        cfg.add_line('Hb', 4862.7 * u.AA)
+        return cfg
+
+    def test_remove_line(self):
+        cfg = self._config()
+        cfg.remove_line('NII')
+        assert [e.name for e in cfg] == ['Ha', 'Hb']
+        assert len(cfg.build_matrices().wavelengths) == 2
+
+    def test_remove_lines_and_readd(self):
+        cfg = self._config()
+        cfg.remove_lines(['Ha', 'Hb'])
+        assert [e.name for e in cfg] == ['NII']
+        cfg.add_line('Ha', 6564.6 * u.AA)  # name is free again
+
+    def test_site_names_released(self):
+        cfg = self._config()
+        flux_name = next(e.flux.name for e in cfg if e.name == 'Hb')
+        cfg.remove_line('Hb')
+        cfg.add_line('Hb2', 4862.7 * u.AA, flux=Flux(name=flux_name.split('_', 1)[1]))
+
+    def test_shared_tokens_kept(self):
+        cfg = self._config()
+        cfg.remove_line('Ha')
+        nii = next(e for e in cfg if e.name == 'NII')
+        assert nii.redshift.name == 'z_sys'  # shared token survives
+        cfg.remove_line('NII')
+        # sole owner gone: 'z_sys' is free to be claimed by a new token
+        cfg.add_line('Ha', 6564.6 * u.AA, redshift=Redshift('sys'))
+
+    def test_unknown_is_atomic(self):
+        cfg = self._config()
+        with pytest.raises(KeyError):
+            cfg.remove_lines(['Ha', 'nope'])
+        assert len(cfg) == 3
+
+    def test_string_accepted(self):
+        cfg = self._config()
+        cfg.remove_lines('Ha')
+        assert len(cfg) == 2
+
+
+class TestGetItem:
+    def test_by_name_and_index(self):
+        cfg = LineConfiguration()
+        cfg.add_line('Ha', 6564.6 * u.AA)
+        cfg.add_line('Hb', 4862.7 * u.AA)
+        assert cfg['Hb'].name == 'Hb'
+        assert cfg[0].name == 'Ha'
+        assert cfg[-1] is cfg['Hb']
+
+    def test_missing(self):
+        cfg = LineConfiguration()
+        cfg.add_line('Ha', 6564.6 * u.AA)
+        with pytest.raises(KeyError):
+            cfg['nope']
+        with pytest.raises(IndexError):
+            cfg[5]

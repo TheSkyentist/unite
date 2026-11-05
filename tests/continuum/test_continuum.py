@@ -1917,3 +1917,48 @@ class TestDLAPowerLaw:
 
 
 # ---------------------------------------------------------------------------
+
+
+class TestRemoveRegions:
+    def _config(self):
+        regs = [
+            ContinuumRegion(lo * u.um, (lo + 1) * u.um, Linear(), name=n)
+            for lo, n in [(1.0, 'a'), (3.0, 'b'), (5.0, 'c')]
+        ]
+        return ContinuumConfiguration(regs)
+
+    def test_remove_by_name(self):
+        cfg = self._config()
+        cfg.remove_region('b')
+        assert [r.name for r in cfg] == ['a', 'c']
+        assert len(cfg.resolved_params) == 2
+
+    def test_remove_by_index_and_negative(self):
+        cfg = self._config()
+        cfg.remove_regions([0, -1])
+        assert [r.name for r in cfg] == ['b']
+
+    def test_mixed_and_duplicate_keys(self):
+        cfg = self._config()
+        cfg.remove_regions(['a', 0, 2])
+        assert [r.name for r in cfg] == ['b']
+
+    def test_remove_all_then_repr(self):
+        cfg = self._config()
+        cfg.remove_regions([0, 1, 2])
+        assert len(cfg) == 0
+        assert 'empty' in repr(cfg)
+
+    def test_invalid_is_atomic(self):
+        cfg = self._config()
+        with pytest.raises(KeyError):
+            cfg.remove_regions(['a', 'zzz'])
+        with pytest.raises(IndexError):
+            cfg.remove_regions([0, 7])
+        assert len(cfg) == 3
+
+    def test_param_names_stable(self):
+        cfg = self._config()
+        before = [p['scale'].name for p in cfg.resolved_params]
+        cfg.remove_region('a')
+        assert [p['scale'].name for p in cfg.resolved_params] == before[1:]

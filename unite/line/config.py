@@ -660,6 +660,59 @@ class LineConfiguration:
                 **kw,
             )
 
+    def remove_line(self, name: str) -> None:
+        """Remove one line by name, in place.
+
+        Tokens used only by the removed line are released: their site names
+        become available again.  Tokens shared with remaining lines are kept.
+
+        Parameters
+        ----------
+        name : str
+            Name of the line to remove.
+
+        Raises
+        ------
+        KeyError
+            If no line with that name exists.
+
+        Notes
+        -----
+        Priors of remaining parameters that reference a token belonging only
+        to the removed line (dependent priors) are not rewritten; building a
+        model from such a configuration will fail.
+        """
+        self.remove_lines([name])
+
+    def remove_lines(self, names: str | Sequence[str]) -> None:
+        """Remove several lines by name, in place.
+
+        The operation is atomic: if any name is unknown, nothing is removed.
+
+        Parameters
+        ----------
+        names : str or sequence of str
+            Names of the lines to remove.
+
+        Raises
+        ------
+        KeyError
+            If any name does not match a line in this configuration.
+        """
+        names = [names] if isinstance(names, str) else list(names)
+        missing = [n for n in names if n not in self._used_line_names]
+        if missing:
+            msg = f'No line(s) named {missing}. Available: {sorted(self._used_line_names)}.'
+            raise KeyError(msg)
+        drop = set(names)
+        new = self._filter([e.name not in drop for e in self._entries])
+        # Adopt the rebuilt state so registries match the remaining lines.
+        self._entries = new._entries
+        self._token_registry = new._token_registry
+        self._used_names = new._used_names
+        self._counters = new._counters
+        self._used_line_names = new._used_line_names
+
     def _register_token(
         self, token: Parameter, category: str, hint_label: str | None = None
     ) -> None:
@@ -1245,6 +1298,29 @@ class LineConfiguration:
 
     def __iter__(self):
         return iter(self._entries)
+
+    def __getitem__(self, key: str | int) -> _LineEntry:
+        """Return a line entry by name or integer index.
+
+        Parameters
+        ----------
+        key : str or int
+            Line name, or integer index in insertion order.
+
+        Raises
+        ------
+        KeyError
+            If *key* is a string matching no line name.
+        IndexError
+            If *key* is an out-of-range integer.
+        """
+        if isinstance(key, str):
+            for entry in self._entries:
+                if entry.name == key:
+                    return entry
+            msg = f'No line named {key!r}. Available: {sorted(self._used_line_names)}.'
+            raise KeyError(msg)
+        return self._entries[key]
 
     def __repr__(self) -> str:
         if not self._entries:
