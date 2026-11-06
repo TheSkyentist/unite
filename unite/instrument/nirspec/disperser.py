@@ -204,18 +204,18 @@ class NIRSpec(Disperser):
             self._R_grid: jnp.ndarray | None = uniform['R']
             self._R_poly: jnp.ndarray | None = None
             _r_grid = uniform['R']
-            self.R = lambda wavelength: jnp.interp(  # ty: ignore[invalid-assignment]
+            self.R = lambda wavelength: jnp.interp(
                 wavelength, self._wavelength_grid, _r_grid
             )
         else:
             self._R_grid = None
             self._R_poly = jnp.asarray(_DEGRAAFF25_R_COEFFS[grating], dtype=float)
             _r_poly = self._R_poly
-            self.R = lambda wavelength: jnp.polyval(_r_poly, wavelength)  # ty: ignore[invalid-assignment]
+            self.R = lambda wavelength: jnp.polyval(_r_poly, wavelength)
 
     # -- Disperser interface -------------------------------------------------
 
-    def R(self, wavelength):  # ty: ignore[invalid-method-override]
+    def R(self, wavelength):
         """Return the resolving power at the given wavelengths (µm)."""
         raise NotImplementedError('R method should be set dynamically in __init__.')
 

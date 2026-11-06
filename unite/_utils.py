@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 
 from astropy import units as u
-from astropy.constants import c  # ty: ignore[unresolved-import]
+from astropy.constants import c  # ty: ignore[import-not-found]
 
 _T = TypeVar('_T')
 

@@ -12,9 +12,9 @@ from typing import Final
 import jax.numpy as jnp
 from astropy import units as u
 from astropy.constants import (
-    c as _c,  # ty: ignore[unresolved-import]
-    h as _h,  # ty: ignore[unresolved-import]
-    k_B as _k_B,  # ty: ignore[unresolved-import]
+    c as _c,  # ty: ignore[import-not-found]
+    h as _h,  # ty: ignore[import-not-found]
+    k_B as _k_B,  # ty: ignore[import-not-found]
 )
 from jax import Array, jit
 from jax.typing import ArrayLike
