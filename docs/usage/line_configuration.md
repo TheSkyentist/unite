@@ -596,6 +596,33 @@ lc.add_line('HI_Ha', 6563.0 * u.AA, tau=tau)
 lc.add_line('HI_Hb', 4861.0 * u.AA, tau=tau)
 ```
 
+### Covering Fraction
+
+By default an absorber covers the full background: transmission is `exp(-τ)`.  To
+let a fraction of the light bypass the absorber, attach a
+{class}`~unite.line.CoveringFraction` token to a `Tau` line:
+
+```python
+cf = line.CoveringFraction('nad', prior=prior.Uniform(0, 1))
+lc.add_line('NaD', 5893.0 * u.AA, tau=line.Tau(), covering_fraction=cf)
+```
+
+The transmission of one absorber is `T = 1 - cf * (1 - exp(-τ))`, applied to every
+component with a lower `zorder`.  `cf = 1` is the ordinary fully covering absorber and
+`cf = 0` removes the absorber.  Several absorbers act as independent screens, so their
+transmissions multiply.  The default prior of a `CoveringFraction` is `Fixed(1.0)`;
+if the argument is omitted entirely, no parameter is created and the model is
+unchanged.  Sharing one token across lines (e.g. a doublet) gives one parameter.  The
+site name is prefixed `cf_`.
+
+```{note}
+For optically thin lines the depth is roughly `cf * τ`, so the two parameters are
+degenerate unless the line is optically thick or a shared `cf` is constrained by
+several lines.  Use informative priors where appropriate.  The `tau_profiles` output
+of {func}`~unite.compute.evaluate_model` reports the optical depth `τ φ` before the
+covering fraction is applied.
+```
+
 ### Mixing Emission and Absorption
 
 Emission and absorption lines coexist naturally in the same configuration:

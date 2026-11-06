@@ -112,6 +112,33 @@ def _build_line_params(cm, context, n_lines, z_sys):
     return flux_per_line, tau_per_line, centers, p0, p1, p2
 
 
+def _build_cover_params(cm, context, n_lines):
+    """Per-line covering fractions, or ``None`` when the transform is a no-op.
+
+    Parameters
+    ----------
+    cm : ConfigMatrices
+        Precomputed parameter matrices and line metadata.
+    context : dict of str to array
+        Parameter values keyed by numpyro site name.
+    n_lines : int
+        Number of lines.
+
+    Returns
+    -------
+    jnp.ndarray or None
+        Shape ``(n_lines,)``; lines without a covering-fraction token have
+        ``cf = 1``.  ``None`` (a static, build-time decision) when every
+        covering fraction is a literal ``Fixed(1.0)`` so the compose functions
+        skip the transform entirely.
+    """
+    if not cm.has_cover:
+        return None
+    vals = jnp.stack([context[n] for n in cm.cover_names])
+    has_tok = cm.cover_matrix.sum(axis=0)  # 1 where a token is attached, else 0
+    return vals @ cm.cover_matrix + (1.0 - has_tok)
+
+
 # -------------------------------------------------------------------
 # Pointwise evaluation
 # -------------------------------------------------------------------

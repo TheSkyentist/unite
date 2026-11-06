@@ -15,7 +15,14 @@ from astropy import units as u
 
 from unite._utils import _alpha_name, _broadcast, _ensure_wavelength
 from unite.line.library import Profile, profile_from_dict, resolve_profile
-from unite.prior import Parameter, Prior, TruncatedNormal, Uniform, prior_from_dict
+from unite.prior import (
+    Fixed,
+    Parameter,
+    Prior,
+    TruncatedNormal,
+    Uniform,
+    prior_from_dict,
+)
 
 # ------------------------------------------------------------------
 # Parameter token classes
@@ -23,7 +30,12 @@ from unite.prior import Parameter, Prior, TruncatedNormal, Uniform, prior_from_d
 
 # Maps category name → type prefix for NumPyro site names.
 # Categories not in this map use the category name itself as prefix.
-_CATEGORY_PREFIX: dict[str, str] = {'redshift': 'z', 'flux': 'flux', 'tau': 'tau'}
+_CATEGORY_PREFIX: dict[str, str] = {
+    'redshift': 'z',
+    'flux': 'flux',
+    'tau': 'tau',
+    'covering_fraction': 'cf',
+}
 
 
 def _prefix_for(category: str) -> str:
@@ -120,6 +132,42 @@ class Tau(Parameter):
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Uniform(0, 10)
+        super().__init__(name, prior=prior)
+
+
+class CoveringFraction(Parameter):
+    """
+    A named covering-fraction parameter for absorption lines.
+
+    The covering fraction ``cf`` is the fraction of the background light (in
+    every component the absorber attenuates, i.e. those with a lower zorder)
+    that is intercepted by the absorber; the remaining ``1 - cf`` passes
+    through unabsorbed.  The transmission of one absorber is
+
+    ``T(lam) = 1 - cf * (1 - exp(-tau(lam)))``
+
+    so ``cf = 1`` (the default) recovers the usual ``exp(-tau(lam))`` and
+    ``cf = 0`` removes the absorber entirely.  Multiple absorbers are treated
+    as independent screens: their transmissions multiply.
+
+    Pass an instance to :meth:`LineConfiguration.add_line` via
+    ``covering_fraction=`` on a line parametrized by :class:`Tau`.  Lines
+    sharing one instance share one model parameter.  Lines without a
+    covering-fraction token implicitly have ``cf = 1`` and no extra model
+    parameter is created.
+
+    For optically thin absorption (``tau << 1``) the observable depth is
+    approximately ``cf * tau``, so ``cf`` and ``tau`` are degenerate unless
+    the line is optically thick or other lines (e.g. a doublet sharing ``cf``)
+    break the degeneracy.  Choose priors accordingly.
+
+    Default prior is ``Fixed(1.0)``.  Use e.g. ``prior=Uniform(0, 1)`` to fit
+    it.
+    """
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Fixed(1.0)
         super().__init__(name, prior=prior)
 
 
@@ -291,6 +339,17 @@ class ConfigMatrices:
     #: Boolean mask indicating which lines are absorption lines. Shape ``(n_lines,)``.
     is_tau: jnp.ndarray
 
+    #: NumPyro site names for unique covering-fraction parameters.
+    cover_names: list[str]
+    #: Indicator matrix mapping covering-fraction parameters to lines.
+    #: Shape ``(n_cover, n_lines)``.  Lines without a token have an all-zero
+    #: column and implicitly ``cf = 1``.
+    cover_matrix: jnp.ndarray
+    #: Static flag: ``True`` unless every covering fraction is a literal
+    #: ``Fixed(1.0)`` (or absent).  When ``False`` the covering-fraction
+    #: transform is skipped entirely and the model is unchanged.
+    has_cover: bool
+
     #: Depth-ordering integer for each line. Shape ``(n_lines,)``.
     #: Tau absorbers at zorder Z attenuate components with zorder < Z.
     line_zorders: jnp.ndarray
@@ -380,10 +439,26 @@ class _LineEntry:
     fwhms: dict[str, Parameter]  # profile param name -> parameter token
     flux: Flux | None = None  # set for emission lines
     tau: Tau | None = None  # set for absorption lines
+    covering_fraction: CoveringFraction | None = None  # optional, tau lines only
     strength: int | float = 1.0
     zorder: int = (
         0  # depth ordering: tau absorbers at zorder Z absorb components with zorder < Z
     )
+
+    @property
+    def tokens(self) -> tuple[Parameter, ...]:
+        """All parameter tokens of this line (``None`` entries dropped)."""
+        return tuple(
+            t
+            for t in (
+                self.flux,
+                self.tau,
+                self.covering_fraction,
+                self.redshift,
+                *self.fwhms.values(),
+            )
+            if t is not None
+        )
 
 
 # ------------------------------------------------------------------
@@ -435,6 +510,7 @@ class LineConfiguration:
         redshift: Redshift | None = None,
         flux: Flux | None = None,
         tau: Tau | None = None,
+        covering_fraction: CoveringFraction | None = None,
         strength: int | float = 1.0,
         zorder: int | None = None,
         **param_kwargs: Parameter | None,
@@ -461,6 +537,11 @@ class LineConfiguration:
             Optical depth parameter token for absorption lines.  A fresh
             ``Tau()`` is created if not provided.  Cannot be used with
             emission profiles.
+        covering_fraction : CoveringFraction, optional
+            Covering-fraction token for absorption lines: the fraction of
+            the attenuated light that the absorber intercepts.  If omitted
+            the covering fraction is 1 and no parameter is created.  Only
+            valid together with *tau*.
         strength : float or sequence of float, optional
             Relative flux strength.  For multiplets, broadcast to match
             the number of centers.  Default ``1.0``.
@@ -484,8 +565,9 @@ class LineConfiguration:
         ValueError
             If *name* is already used by another line in this configuration.
         TypeError
-            If *flux* is passed for an absorption profile, or *tau* is
-            passed for an emission profile.
+            If *flux* is passed for an absorption profile, *tau* is
+            passed for an emission profile, or *covering_fraction* is passed
+            without *tau* (or is not a :class:`CoveringFraction`).
         """
         # --- Enforce unique line names ---
         if name in self._used_line_names:
@@ -519,6 +601,19 @@ class LineConfiguration:
                 'Use flux for emission lines or tau for absorption lines.'
             )
             raise TypeError(msg)
+        if covering_fraction is not None:
+            if not isinstance(covering_fraction, CoveringFraction):
+                msg = (
+                    'covering_fraction must be a CoveringFraction, got '
+                    f'{type(covering_fraction).__name__}.'
+                )
+                raise TypeError(msg)
+            if tau is None:
+                msg = (
+                    'covering_fraction is only valid for absorption lines; '
+                    'pass tau=Tau() as well.'
+                )
+                raise TypeError(msg)
         if tau is not None:
             # Absorption line
             if not isinstance(tau, Tau):
@@ -544,6 +639,10 @@ class LineConfiguration:
             self._register_token(flux_tok, 'flux', hint_label=name)
         if tau_tok is not None:
             self._register_token(tau_tok, 'tau', hint_label=name)
+        if covering_fraction is not None:
+            self._register_token(
+                covering_fraction, 'covering_fraction', hint_label=name
+            )
 
         # Default zorder: 1 for absorption lines, 0 for emission lines.
         if zorder is None:
@@ -561,6 +660,7 @@ class LineConfiguration:
                 fwhms=fwhms,
                 flux=flux_tok,
                 tau=tau_tok,
+                covering_fraction=covering_fraction,
                 strength=strength,
                 zorder=resolved_zorder,
             )
@@ -575,6 +675,9 @@ class LineConfiguration:
         redshift: Redshift | Sequence[Redshift | None] | None = None,
         flux: Flux | Sequence[Flux | None] | None = None,
         tau: Tau | Sequence[Tau | None] | None = None,
+        covering_fraction: (
+            CoveringFraction | Sequence[CoveringFraction | None] | None
+        ) = None,
         strength: int | float | Sequence[int | float] = 1.0,
         zorder: int | None = None,
         **param_kwargs,
@@ -608,6 +711,10 @@ class LineConfiguration:
             ratios are not enforced; pass a single ``Flux`` to enforce them.
         tau : Tau or sequence thereof, optional
             Optical depth token(s).  Same broadcasting rule as *flux*.
+        covering_fraction : CoveringFraction or sequence thereof, optional
+            Covering-fraction token(s).  A single token is shared by every
+            line (e.g. a doublet from one absorber); omitted means ``cf = 1``
+            with no parameter.
         strength : float or sequence of float, optional
             Relative flux strengths.  Default ``1.0``.
         \*\*param_kwargs : Parameter or sequence of Parameter
@@ -642,6 +749,7 @@ class LineConfiguration:
         redshifts = _broadcast(redshift, 'redshift', n)
         fluxes = _broadcast(flux, 'flux', n)
         taus = _broadcast(tau, 'tau', n)
+        covers = _broadcast(covering_fraction, 'covering_fraction', n)
         strengths = _broadcast(strength, 'strength', n)
         broadcasted_kwargs = {k: _broadcast(v, k, n) for k, v in param_kwargs.items()}
 
@@ -655,6 +763,7 @@ class LineConfiguration:
                 redshift=redshifts[i],
                 flux=fluxes[i],
                 tau=taus[i],
+                covering_fraction=covers[i],
                 strength=strengths[i],
                 zorder=zorder,
                 **kw,
@@ -822,6 +931,23 @@ class LineConfiguration:
 
         is_tau = jnp.array([e.tau is not None for e in self], dtype=bool)
 
+        # Covering-fraction matrix — only lines that carry an explicit token.
+        cover_entries = [
+            (j, e.covering_fraction)
+            for j, e in enumerate(self)
+            if e.covering_fraction is not None
+        ]
+        cover_names, cover_matrix = _slot_matrix(cover_entries, n)
+        # The transform is a no-op when every token is a literal Fixed(1.0).
+        has_cover = any(
+            not (
+                isinstance(tok.prior, Fixed)
+                and isinstance(tok.prior.value, float)
+                and tok.prior.value == 1.0
+            )
+            for _, tok in cover_entries
+        )
+
         line_zorders_np = np.array([e.zorder for e in self], dtype=np.int32)
         line_zorders = jnp.array(line_zorders_np)
         # applies_matrix[j, k] = True when tau k applies to component j
@@ -864,8 +990,8 @@ class LineConfiguration:
         priors: dict[str, Prior] = {}
         seen_ids: set[int] = set()
         for entry in self:
-            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
-                if tok is not None and id(tok) not in seen_ids:
+            for tok in entry.tokens:
+                if id(tok) not in seen_ids:
                     seen_ids.add(id(tok))
                     priors[tok.name] = tok.prior
 
@@ -890,6 +1016,9 @@ class LineConfiguration:
             tau_names=tau_names,
             tau_matrix=tau_matrix,
             is_tau=is_tau,
+            cover_names=cover_names,
+            cover_matrix=cover_matrix,
+            has_cover=has_cover,
             line_zorders=line_zorders,
             applies_matrix=applies_matrix,
             priors=priors,
@@ -931,6 +1060,8 @@ class LineConfiguration:
                 _collect(entry.flux, 'flux')
             if entry.tau is not None:
                 _collect(entry.tau, 'tau')
+            if entry.covering_fraction is not None:
+                _collect(entry.covering_fraction, 'covering_fraction')
 
         # Create a global param_namer that includes all tokens from all sections
         # This is needed for priors that reference parameters from other sections
@@ -959,6 +1090,8 @@ class LineConfiguration:
                 item['flux'] = entry.flux.name
             if entry.tau is not None:
                 item['tau'] = entry.tau.name
+            if entry.covering_fraction is not None:
+                item['covering_fraction'] = entry.covering_fraction.name
             item['profile'] = entry.profile.to_dict()
             if entry.strength != 1.0:
                 item['strength'] = entry.strength
@@ -1003,6 +1136,7 @@ class LineConfiguration:
                     redshift=entry.redshift,
                     flux=entry.flux,
                     tau=entry.tau,
+                    covering_fraction=entry.covering_fraction,
                     strength=entry.strength,
                     zorder=entry.zorder,
                     **entry.fwhms,
@@ -1030,6 +1164,8 @@ class LineConfiguration:
                 return Flux
             if section == 'tau':
                 return Tau
+            if section == 'covering_fraction':
+                return CoveringFraction
             if section.startswith('fwhm'):
                 return FWHM
             return LineShape
@@ -1089,6 +1225,11 @@ class LineConfiguration:
             tau_tok = (
                 section_tokens['tau'][line_data['tau']] if 'tau' in line_data else None
             )
+            cover_tok = (
+                section_tokens['covering_fraction'][line_data['covering_fraction']]
+                if 'covering_fraction' in line_data
+                else None
+            )
             # Backward-compatible default: 1 for tau lines, 0 for emission lines.
             default_zorder = 1 if 'tau' in line_data else 0
             config.add_line(
@@ -1100,6 +1241,7 @@ class LineConfiguration:
                 ),
                 flux=cast(Flux | None, flux_tok),
                 tau=cast(Tau | None, tau_tok),
+                covering_fraction=cast(CoveringFraction | None, cover_tok),
                 strength=line_data.get('strength', 1.0),
                 zorder=line_data.get('zorder', default_zorder),
                 **param_kwargs,
@@ -1200,20 +1342,14 @@ class LineConfiguration:
         # Build a mapping of token name → token from self's entries.
         self_tokens: dict[str, Parameter] = {}
         for entry in self._entries:
-            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
-                if (
-                    tok is not None
-                    and tok._name is not None
-                    and tok._name not in self_tokens
-                ):
+            for tok in entry.tokens:
+                if tok._name is not None and tok._name not in self_tokens:
                     self_tokens[tok._name] = tok
 
         # Build a mapping from other's token id → replacement token.
         other_remap: dict[int, Parameter] = {}
         for entry in other._entries:
-            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values()):
-                if tok is None:
-                    continue
+            for tok in entry.tokens:
                 tid = id(tok)
                 if tid in other_remap:
                     continue
@@ -1246,6 +1382,7 @@ class LineConfiguration:
                 redshift=entry.redshift,
                 flux=entry.flux,
                 tau=entry.tau,
+                covering_fraction=entry.covering_fraction,
                 strength=entry.strength,
                 zorder=entry.zorder,
                 **entry.fwhms,
@@ -1260,6 +1397,12 @@ class LineConfiguration:
                 Tau | None,
                 other_remap[id(entry.tau)] if entry.tau is not None else None,
             )
+            remapped_cover = cast(
+                CoveringFraction | None,
+                other_remap[id(entry.covering_fraction)]
+                if entry.covering_fraction is not None
+                else None,
+            )
             remapped_fwhms = {k: other_remap[id(v)] for k, v in entry.fwhms.items()}
             merged.add_line(
                 entry.name,
@@ -1268,6 +1411,7 @@ class LineConfiguration:
                 redshift=remapped_z,
                 flux=remapped_flux,
                 tau=remapped_tau,
+                covering_fraction=remapped_cover,
                 strength=entry.strength,
                 zorder=entry.zorder,
                 **remapped_fwhms,
@@ -1426,6 +1570,17 @@ class LineConfiguration:
                     seen_tau.add(tid)
                     tau_params.append((entry.tau.name, entry.tau.prior))
 
+        seen_cf: set[int] = set()
+        cf_params: list[tuple[str, Prior]] = []
+        for entry in self._entries:
+            if entry.covering_fraction is not None:
+                cid = id(entry.covering_fraction)
+                if cid not in seen_cf:
+                    seen_cf.add(cid)
+                    cf_params.append(
+                        (entry.covering_fraction.name, entry.covering_fraction.prior)
+                    )
+
         def _fmt_section(title: str, params: list[tuple[str, Prior]]) -> list[str]:
             name_w = max(len(p[0]) for p in params)
             out = ['', f'  {title}:']
@@ -1443,5 +1598,8 @@ class LineConfiguration:
 
         if tau_params:
             lines_out += _fmt_section('Tau', tau_params)
+
+        if cf_params:
+            lines_out += _fmt_section('CoveringFraction', cf_params)
 
         return '\n'.join(lines_out)

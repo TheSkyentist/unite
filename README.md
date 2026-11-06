@@ -20,7 +20,7 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 - **Two pixel-integration modes**: analytic (exact CDF-based, default) and numerical LSF convolution (`n_super` uniform fine-grid points per pixel + banded wavelength-varying Gaussian convolution, correctly computes `LSF ⊗ [F · exp(-τ · φ_intrinsic)]` for absorption lines)
 - **Simultaneous multi-spectrum fitting** across gratings and instruments with shared kinematic parameters (redshift, FWHM)
 - **Multiple line profiles**: Gaussian, Cauchy, Pseudo-Voigt, Laplace, SEMG, Gauss-Hermite, Split-Normal, Skew-Normal, Skew-Voigt, Box-Gauss, Gaussian-Split-Laplace (asymmetric EMG)
-- **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)`, with per-component depth ordering (`zorder`) so each absorber selectively attenuates only the sources behind it
+- **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)` with an optional covering fraction, with per-component depth ordering (`zorder`) so each absorber selectively attenuates only the sources behind it
 - **Flexible continuum models**: Linear, Polynomial, Chebyshev, Legendre, Bernstein, B-Spline, Power-Law, DLA Power-Law (UV power law with damped Lyman-alpha absorption and Lyman break), Blackbody, Modified Blackbody, Attenuated Blackbody, Template (user-supplied file) — auto-generated from line configurations
 - **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
 - **YAML serialization** for reproducible, human-editable configurations
@@ -71,7 +71,9 @@ lc.add_line(
     fwhm_gauss=fwhm,
     flux=line.Flux(prior=prior.Uniform(0, 10))
 )
-# Tau-parametrized absorption line: transmission = exp(-tau * phi)
+# Tau-parametrized absorption line: transmission = exp(-tau * phi).
+# Optionally pass covering_fraction=line.CoveringFraction(prior=prior.Uniform(0, 1))
+# for partial covering: transmission = 1 - cf * (1 - exp(-tau * phi))
 lc.add_line(
     'HI_abs',
     6563.0 * u.AA,

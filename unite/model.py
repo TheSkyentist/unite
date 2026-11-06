@@ -30,6 +30,7 @@ from unite.continuum.compute import (
 )
 from unite.continuum.config import ContinuumConfiguration
 from unite.line.compute import (
+    _build_cover_params,
     _build_line_params,
     _peak_to_area_tau,
     evaluate_lines,
@@ -241,6 +242,8 @@ def unite_model(args: ModelArgs) -> None:
     flux_per_line, tau_per_line, centers, p0, p1, p2 = _build_line_params(
         cm, context, n_lines, z_sys
     )
+    # Covering fractions; None (static) when every cf is a literal Fixed(1.0).
+    cover_per_line = _build_cover_params(cm, context, n_lines)
 
     # --- 2b. Convert peak-tau to area-tau ---
     if cm.tau_names:
@@ -345,6 +348,7 @@ def unite_model(args: ModelArgs) -> None:
                     args.cont_applies,
                     cont,
                     has_tau=has_tau,
+                    cover_per_line=cover_per_line,
                 )
 
             model_fine_intrinsic = _conv_eval(x_flat)  # (n_pixels * n_super,)
@@ -402,6 +406,7 @@ def unite_model(args: ModelArgs) -> None:
                 args.cont_applies,
                 cont,
                 has_tau=has_tau,
+                cover_per_line=cover_per_line,
             )
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(
@@ -599,8 +604,7 @@ class ModelBuilder:
             # the original entries since tokens carry their .name attribute.
             tok: tok.name
             for entry in line_config._entries
-            for tok in (entry.flux, entry.tau, entry.redshift, *entry.fwhms.values())
-            if tok is not None
+            for tok in entry.tokens
         }
 
         # Calibration tokens from each unique disperser.

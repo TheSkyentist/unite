@@ -13,6 +13,41 @@ import jax.numpy as jnp
 import numpy as np
 
 
+def _effective_depth(tau_per_line, absorption_phi, cover_per_line):
+    """Per-absorber effective optical depth including covering fraction.
+
+    A partially covering absorber transmits ``T = 1 - cf * (1 - exp(-x))`` with
+    ``x = tau * phi``.  Writing ``T = exp(-x_eff)`` lets absorbers keep
+    composing by summing optical depths (independent screens multiply their
+    transmissions), so all downstream code is unchanged.  ``cf = 1`` gives
+    ``x_eff = x`` exactly.
+
+    ``cf = 1`` is special-cased: the general formula would evaluate
+    ``log1p(-1) = -inf`` once ``exp(-x)`` underflows relative to 1 (``x`` of
+    a few tens), which is reachable in mixed configurations where an absorber
+    without a covering-fraction token implicitly has ``cf = 1`` while another
+    absorber's ``cf`` is free.  The ``where`` guard also keeps gradients finite.
+
+    Parameters
+    ----------
+    tau_per_line : jnp.ndarray, shape ``(n_lines,)``
+        Area-tau per line (zero for emission lines).
+    absorption_phi : jnp.ndarray, shape ``(n_lines, n_points)``
+        Absorption profiles (zero rows for emission lines).
+    cover_per_line : jnp.ndarray, shape ``(n_lines,)``
+        Covering fraction per line in ``[0, 1]``.
+
+    Returns
+    -------
+    jnp.ndarray, shape ``(n_lines, n_points)``
+        Effective optical depth ``-log(1 - cf * (1 - exp(-tau * phi)))``.
+    """
+    x = tau_per_line[:, None] * absorption_phi
+    full = cover_per_line[:, None] >= 1.0
+    cf_safe = jnp.where(full, 0.0, cover_per_line[:, None])
+    return jnp.where(full, x, -jnp.log1p(cf_safe * jnp.expm1(-x)))
+
+
 def compose_from_profiles(
     profiles,
     flux_per_line,
@@ -23,6 +58,7 @@ def compose_from_profiles(
     continuum,
     *,
     has_tau: bool = True,
+    cover_per_line=None,
 ):
     """Compose the total model from pre-evaluated profiles and continuum.
 
@@ -58,6 +94,11 @@ def compose_from_profiles(
         contains any tau-parametrized lines.  When ``False`` the
         absorption pipeline is skipped entirely; the compiled graph
         becomes a single sum + add.  Default ``True``.
+    cover_per_line : jnp.ndarray, shape ``(n_lines,)``, optional
+        Covering fraction of each absorber (1 for emission lines or absorbers
+        without one).  ``None`` (static) means every ``cf = 1`` and the
+        transform is skipped, leaving the graph identical to the fully
+        covering model.
 
     Returns
     -------
@@ -77,14 +118,21 @@ def compose_from_profiles(
 
     # Per-component effective tau field:
     # tau_fields[j, p] = sum_k applies_matrix[j,k] * tau_per_line[k] * absorption_phi[k,p]
-    tau_fields = (
-        applies_matrix * tau_per_line[None, :]
-    ) @ absorption_phi  # (n_lines, n_points)
+    if cover_per_line is None:
+        tau_fields = (
+            applies_matrix * tau_per_line[None, :]
+        ) @ absorption_phi  # (n_lines, n_points)
+        cont_tau = (
+            cont_applies * tau_per_line[None, :]
+        ) @ absorption_phi  # (G, n_points)
+    else:
+        depth = _effective_depth(tau_per_line, absorption_phi, cover_per_line)
+        tau_fields = applies_matrix @ depth
+        cont_tau = cont_applies @ depth
     t_eff = jnp.exp(-tau_fields)  # (n_lines, n_points)
 
     attenuated_emission = (flux_per_line[:, None] * emission_phi * t_eff).sum(axis=0)
 
-    cont_tau = (cont_applies * tau_per_line[None, :]) @ absorption_phi  # (G, n_points)
     t_cont = jnp.exp(-cont_tau)  # (G, n_points)
 
     return attenuated_emission + (t_cont * continuum).sum(axis=0)
@@ -100,6 +148,7 @@ def compose_leave_one_out(
     continuum,
     *,
     has_tau: bool = True,
+    cover_per_line=None,
 ):
     """Compose the total model and per-line contributions.
 
@@ -134,6 +183,11 @@ def compose_leave_one_out(
         Static (Python-time) flag indicating whether the configuration
         contains any tau-parametrized lines.  When ``False`` the
         absorption pipeline is skipped entirely.  Default ``True``.
+    cover_per_line : jnp.ndarray, shape ``(n_lines,)``, optional
+        Covering fraction of each absorber (1 for emission lines or absorbers
+        without one).  ``None`` (static) means every ``cf = 1`` and the
+        transform is skipped, leaving the graph identical to the fully
+        covering model.
 
     Returns
     -------
@@ -154,7 +208,11 @@ def compose_leave_one_out(
     emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)  # (n_lines, n_points)
     absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)  # (n_lines, n_points)
 
-    tau_fields = (applies_matrix * tau_per_line[None, :]) @ absorption_phi
+    if cover_per_line is None:
+        depth = tau_per_line[:, None] * absorption_phi  # (n_lines, n_points)
+    else:
+        depth = _effective_depth(tau_per_line, absorption_phi, cover_per_line)
+    tau_fields = applies_matrix @ depth
     t_eff = jnp.exp(-tau_fields)  # (n_lines, n_points)
 
     # Precompute attenuated per-line terms; reused in the tau LOO loop below.
@@ -163,7 +221,7 @@ def compose_leave_one_out(
     )  # (n_lines, n_points)
     attenuated_emission = attenuated_per_line.sum(axis=0)
 
-    cont_tau = (cont_applies * tau_per_line[None, :]) @ absorption_phi  # (G, n)
+    cont_tau = cont_applies @ depth  # (G, n)
     t_cont = jnp.exp(-cont_tau)  # (G, n)
     total = attenuated_emission + (t_cont * continuum).sum(axis=0)
 
@@ -183,11 +241,9 @@ def compose_leave_one_out(
     def _tau_delta(j):
         # Rank-1 removal: removing tau j subtracts its contribution from
         # tau_fields, equivalent to multiplying t_eff by exp(+contribution).
-        contrib = applies_matrix[:, j, None] * (tau_per_line[j] * absorption_phi[j])
+        contrib = applies_matrix[:, j, None] * depth[j]
         attenuated_loo = (attenuated_per_line * jnp.exp(contrib)).sum(axis=0)
-        cont_contrib = cont_applies[:, j, None] * (
-            tau_per_line[j] * absorption_phi[j]
-        )  # (G, n)
+        cont_contrib = cont_applies[:, j, None] * depth[j]  # (G, n)
         total_loo = attenuated_loo + (t_cont * jnp.exp(cont_contrib) * continuum).sum(
             axis=0
         )

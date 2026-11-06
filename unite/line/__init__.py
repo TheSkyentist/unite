@@ -1,6 +1,14 @@
 """Emission and absorption line fitting framework — profiles and configuration."""
 
-from unite.line.config import FWHM, Flux, LineConfiguration, LineShape, Redshift, Tau
+from unite.line.config import (
+    FWHM,
+    CoveringFraction,
+    Flux,
+    LineConfiguration,
+    LineShape,
+    Redshift,
+    Tau,
+)
 from unite.line.library import (
     SEMG,
     BoxGauss,
@@ -20,6 +28,7 @@ __all__ = [
     'SEMG',
     'BoxGauss',
     'Cauchy',
+    'CoveringFraction',
     'Flux',
     'GaussHermite',
     'Gaussian',

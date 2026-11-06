@@ -18,6 +18,7 @@ from unite._compose import compose_leave_one_out
 from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
 from unite.continuum.compute import _group_sum, eval_continuum_regions
 from unite.line.compute import (
+    _build_cover_params,
     _build_line_params,
     _peak_to_area_tau,
     evaluate_lines,
@@ -55,7 +56,8 @@ class SpectrumPrediction:
     #: (e.g. ``'linear_6400_6700'``, ``'powerlaw_0.95_2.5'``).
     #: Shape ``(n_samples, n_pixels)`` each.
     continuum_regions: dict[str, np.ndarray]
-    #: LSF-convolved optical depth profiles ``tau_j * phi_j(λ)`` for absorption
+    #: LSF-convolved optical depth profiles ``tau_j * phi_j(λ)`` (before any
+    #: covering fraction is applied) for absorption
     #: lines, evaluated at pixel midpoints.  Dimensionless and non-negative.
     #: Keyed by line label; empty dict for emission-only models.
     #: Shape ``(n_samples, n_pixels)`` each.
@@ -221,6 +223,7 @@ def evaluate_model(
             flux_per_line, tau_per_line, centers, p0, p1, p2 = _build_line_params(
                 cm, params, n_lines, z_sys
             )
+            cover_per_line = _build_cover_params(cm, params, n_lines)
 
             # --- Convert peak-tau to area-tau ---
             if cm.tau_names:
@@ -351,6 +354,7 @@ def evaluate_model(
                     args.cont_applies,
                     cont_fine_scaled,
                     has_tau=has_tau,
+                    cover_per_line=cover_per_line,
                 )
 
                 # Convolve on fine grid, then pixel-average.
@@ -383,6 +387,7 @@ def evaluate_model(
                     args.cont_applies,
                     cont_total_scaled,
                     has_tau=has_tau,
+                    cover_per_line=cover_per_line,
                 )
 
             # Apply flux_scale to total and per-line contributions.
@@ -514,6 +519,7 @@ def evaluate_intrinsic(
         flux_per_line, tau_per_line, centers, p0, p1, p2 = _build_line_params(
             cm, params, n_lines, z_sys
         )
+        cover_per_line = _build_cover_params(cm, params, n_lines)
         if has_tau:
             tau_per_line = _peak_to_area_tau(
                 tau_per_line,
@@ -539,6 +545,7 @@ def evaluate_intrinsic(
             args.cont_applies,
             cont_total * cont_scale,
             has_tau=has_tau,
+            cover_per_line=cover_per_line,
         )
         if has_tau:
             tau_profiles = jnp.where(
