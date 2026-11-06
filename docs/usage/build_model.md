@@ -348,6 +348,10 @@ cc = ContinuumConfiguration.from_lines(lc)
 cc_behind = ContinuumConfiguration.from_lines(lc, zorder=2)
 ```
 
+The configuration-level `zorder` is a default: an individual
+`ContinuumRegion(..., zorder=...)` overrides it, so different regions (including
+overlapping ones) can sit at different depths.
+
 #### Mapping from the old `absorber_position` modes
 
 The three modes from the previous API translate directly to zorder choices:

@@ -1646,15 +1646,50 @@ class TestContinuumConfigurationAdd:
         merged = cc1 + cc2
         assert merged.zorder == 2
 
-    def test_add_mismatched_zorder_raises(self):
+    def test_add_mismatched_zorder_pins_region_zorders(self):
         cc1 = ContinuumConfiguration(
             [ContinuumRegion(1.0 * u.um, 2.0 * u.um)], zorder=0
         )
         cc2 = ContinuumConfiguration(
             [ContinuumRegion(3.0 * u.um, 4.0 * u.um)], zorder=2
         )
-        with pytest.raises(ValueError, match='zorder'):
-            cc1 + cc2
+        merged = cc1 + cc2
+        assert merged.zorder == 0
+        assert merged.region_zorders == [0, 2]
+        # Originals untouched.
+        assert cc2.regions[0].zorder is None
+        assert cc2.region_zorders == [2]
+
+
+class TestRegionZorder:
+    def test_region_inherits_config_default(self):
+        cc = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 2.0 * u.um),
+                ContinuumRegion(3.0 * u.um, 4.0 * u.um, zorder=3),
+            ],
+            zorder=1,
+        )
+        assert cc.region_zorders == [1, 3]
+
+    def test_yaml_roundtrip(self):
+        cc = ContinuumConfiguration(
+            [
+                ContinuumRegion(1.0 * u.um, 2.0 * u.um),
+                ContinuumRegion(3.0 * u.um, 4.0 * u.um, zorder=3),
+            ],
+            zorder=1,
+        )
+        cc2 = ContinuumConfiguration.from_yaml(cc.to_yaml())
+        assert cc2.zorder == 1
+        assert cc2.region_zorders == [1, 3]
+        assert cc2.regions[0].zorder is None
+
+    def test_legacy_yaml_without_region_zorder(self):
+        cc = ContinuumConfiguration([ContinuumRegion(1.0 * u.um, 2.0 * u.um)], zorder=2)
+        d = cc.to_dict()
+        assert 'zorder' not in d['regions'][0]
+        assert ContinuumConfiguration.from_dict(d).region_zorders == [2]
 
 
 # ---------------------------------------------------------------------------

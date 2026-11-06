@@ -115,6 +115,19 @@ cc = ContinuumConfiguration.from_lines(lc, zorder=2)
 
 # Manual regions also accept zorder
 cc = ContinuumConfiguration(regions, zorder=2)
+
+# Individual regions can override the configuration-level default.  Overlapping
+# regions with different zorders are allowed: each is attenuated by its own
+# absorbers and the results are summed (e.g. a dust continuum behind a screen
+# overlapping a stellar continuum in front of it).
+cc = ContinuumConfiguration(
+    [
+        ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=PowerLaw(), name='stars'),
+        ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=Blackbody(), name='dust',
+                        zorder=2),
+    ],
+    allow_overlap=True,
+)
 ```
 
 The `zorder` is shown in the configuration header when you print the object:

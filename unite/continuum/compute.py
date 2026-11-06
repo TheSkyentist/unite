@@ -81,6 +81,17 @@ def static_region_masks(edges, cont_low, cont_high, z_sys):
     return (mids[None, :] >= low) & (mids[None, :] <= high)
 
 
+def _group_sum(per_region, group_matrix, shape):
+    """Sum per-region arrays within zorder groups.
+
+    Returns shape ``(n_groups, *shape)``; zeros when there are no regions.
+    """
+    group_matrix = jnp.asarray(group_matrix, dtype=float)
+    if not per_region:
+        return jnp.zeros((group_matrix.shape[0], *shape))
+    return jnp.tensordot(group_matrix, jnp.stack(per_region), axes=1)
+
+
 def eval_continuum(
     wavelength,
     args,
@@ -88,6 +99,7 @@ def eval_continuum(
     z_sys,
     lsf_fwhm: float | jnp.ndarray = 0.0,
     region_mask=None,
+    group_matrix=None,
 ):
     """Evaluate the total continuum at arbitrary wavelength points.
 
@@ -108,20 +120,30 @@ def eval_continuum(
         Static membership, shape ``(n_regions, n_points)``.  When given it
         replaces the wavelength-bound comparison (see
         :func:`static_region_masks`).
+    group_matrix : array-like, optional
+        Static ``(n_groups, n_regions)`` 0/1 matrix assigning regions to
+        zorder groups (see ``ModelArgs.cont_group_matrix``).  When given, the
+        regions are summed within each group instead of all together.
 
     Returns
     -------
     jnp.ndarray
         Continuum flux density at each wavelength point (unscaled — before
-        ``continuum_scale`` and normalisation are applied).
+        ``continuum_scale`` and normalisation are applied).  Shape
+        ``(n_points,)``, or ``(n_groups, n_points)`` when *group_matrix* is
+        given.
     """
-    continuum = jnp.zeros_like(wavelength)
-    if args.cont_config is not None:
-        for region_cont in eval_continuum_regions(
-            wavelength, args, context, z_sys, lsf_fwhm, region_mask
-        ):
+    regions = (
+        eval_continuum_regions(wavelength, args, context, z_sys, lsf_fwhm, region_mask)
+        if args.cont_config is not None
+        else []
+    )
+    if group_matrix is None:
+        continuum = jnp.zeros_like(wavelength)
+        for region_cont in regions:
             continuum = continuum + region_cont
-    return continuum
+        return continuum
+    return _group_sum(regions, group_matrix, wavelength.shape)
 
 
 def eval_continuum_regions(
@@ -183,6 +205,7 @@ def integrate_continuum(
     z_sys,
     lsf_fwhm_per_region: float | jnp.ndarray = 0.0,
     region_mask=None,
+    group_matrix=None,
 ):
     """Pixel-averaged continuum via each form's edges-based integrate method.
 
@@ -209,18 +232,23 @@ def integrate_continuum(
         replaces the comparison of interval midpoints with the region
         bounds (see :func:`static_region_masks`); required for a
         discontinuity-free dependence on ``PixOffset``.
+    group_matrix : array-like, optional
+        Static ``(n_groups, n_regions)`` 0/1 matrix assigning regions to
+        zorder groups.  When given, regions are summed within each group.
 
     Returns
     -------
-    jnp.ndarray, shape ``(E - 1,)``
+    jnp.ndarray, shape ``(E - 1,)`` or ``(n_groups, E - 1)``
         Pixel-averaged continuum (unscaled) across all ``E - 1`` edge
-        intervals.  Entries that span inter-pixel gaps must be discarded
-        by the caller via the spectrum's ``keep_mask``.
+        intervals (one row per zorder group when *group_matrix* is given).
+        Entries that span inter-pixel gaps must be discarded by the caller
+        via the spectrum's ``keep_mask``.
     """
     edges = jnp.asarray(edges)
     widths = jnp.diff(edges)
     mids = 0.5 * (edges[1:] + edges[:-1])
     continuum_per_interval = jnp.zeros_like(widths)
+    per_region: list[jnp.ndarray] = []
     if args.cont_config is not None:
         lsf_arr = jnp.atleast_1d(jnp.asarray(lsf_fwhm_per_region))
         if lsf_arr.shape[0] == 1:
@@ -237,7 +265,9 @@ def integrate_continuum(
                 edges, obs_center, cont_params, obs_low, obs_high, lsf_arr[k], z_sys
             )
             per_pixel_avg = jnp.diff(cum) / widths
-            continuum_per_interval = continuum_per_interval + jnp.where(
-                in_region, per_pixel_avg, 0.0
-            )
-    return continuum_per_interval
+            masked = jnp.where(in_region, per_pixel_avg, 0.0)
+            per_region.append(masked)
+            continuum_per_interval = continuum_per_interval + masked
+    if group_matrix is None:
+        return continuum_per_interval
+    return _group_sum(per_region, group_matrix, widths.shape)

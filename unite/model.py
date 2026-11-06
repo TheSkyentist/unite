@@ -101,10 +101,16 @@ class ModelArgs:
     #: Human-readable column labels for each continuum region, parallel to ``cont_config``.
     #: Derived from form type and wavelength bounds.
     continuum_labels: list[str]
-    #: Boolean mask: which tau lines (by line index) attenuate the continuum.
-    #: ``cont_applies[k]`` is True when ``line_zorders[k] > cont_zorder`` and ``is_tau[k]``.
-    #: Shape ``(n_lines,)``.
+    #: Boolean mask: which tau lines (by line index) attenuate each continuum
+    #: zorder group.  ``cont_applies[g, k]`` is True when
+    #: ``line_zorders[k] > group_zorder[g]`` and ``is_tau[k]``.
+    #: Shape ``(n_groups, n_lines)``.
     cont_applies: jnp.ndarray
+    #: Static 0/1 matrix assigning continuum regions to zorder groups, shape
+    #: ``(n_groups, n_regions)``.  Regions sharing a zorder form one group and
+    #: are summed before attenuation.  With no continuum there is a single
+    #: empty group.
+    cont_group_matrix: jnp.ndarray
     #: Line integration mode: ``'analytic'`` (default) uses exact CDF-based
     #: integration for all line profiles individually; ``'convolution'``
     #: evaluates the intrinsic model on a fine sub-pixel grid and numerically
@@ -324,7 +330,12 @@ def unite_model(args: ModelArgs) -> None:
                 _frm=fine_region_mask,
             ):
                 phi = _efn(wav, centers, _zero_lsf, p0, p1, p2, _pc)
-                cont = eval_continuum(wav, args, context, z_sys, 0.0, _frm) * _csn
+                cont = (
+                    eval_continuum(
+                        wav, args, context, z_sys, 0.0, _frm, args.cont_group_matrix
+                    )
+                    * _csn
+                )
                 return compose_from_profiles(
                     phi,
                     _scaled_flux,
@@ -372,9 +383,15 @@ def unite_model(args: ModelArgs) -> None:
             else:
                 cont_lsf_per_region = jnp.zeros(0)
             cont_per_interval = integrate_continuum(
-                edges, args, context, z_sys, cont_lsf_per_region, region_mask
-            )  # (E-1,)
-            cont = cont_per_interval[keep_mask] * cont_scale_norm  # (npix,)
+                edges,
+                args,
+                context,
+                z_sys,
+                cont_lsf_per_region,
+                region_mask,
+                args.cont_group_matrix,
+            )  # (n_groups, E-1)
+            cont = cont_per_interval[:, keep_mask] * cont_scale_norm  # (G, npix)
 
             model = flux_scale * compose_from_profiles(
                 pixints,
@@ -834,10 +851,23 @@ class ModelBuilder:
             else []
         )
 
-        # cont_applies[k] = True when tau line k (zorder_k > cont_zorder) attenuates the continuum.
+        # Continuum regions sharing a zorder form one group.
+        # cont_applies[g, k] = True when tau line k (zorder_k > group zorder)
+        # attenuates group g.
         cm = self._matrices
-        cont_zorder = self._cont_config.zorder if self._cont_config is not None else 0
-        cont_applies = (cm.line_zorders > cont_zorder) & cm.is_tau
+        region_zorders = (
+            self._cont_config.region_zorders if self._cont_config is not None else []
+        )
+        group_zorders = sorted(set(region_zorders)) or [0]
+        cont_group_matrix = jnp.asarray(
+            np.array(
+                [[float(z == g) for z in region_zorders] for g in group_zorders],
+                dtype=float,
+            ).reshape(len(group_zorders), len(region_zorders))
+        )
+        cont_applies = (
+            cm.line_zorders[None, :] > jnp.asarray(group_zorders)[:, None]
+        ) & cm.is_tau[None, :]
 
         int_fn, eval_fn, eval_centers_fn = make_grouped_dispatch(
             self._matrices.profile_codes
@@ -872,6 +902,7 @@ class ModelBuilder:
             line_labels=line_labels,
             continuum_labels=continuum_labels,
             cont_applies=cont_applies,
+            cont_group_matrix=cont_group_matrix,
             integration_mode=integration_mode,
             n_super=n_super_val,
             conv_half_width=conv_half_width_val,

@@ -16,7 +16,7 @@ from astropy import units as u
 
 from unite._compose import compose_leave_one_out
 from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
-from unite.continuum.compute import eval_continuum_regions
+from unite.continuum.compute import _group_sum, eval_continuum_regions
 from unite.line.compute import (
     _build_line_params,
     _peak_to_area_tau,
@@ -274,16 +274,18 @@ def evaluate_model(
             # --- Continuum (per-region for decomposition) ---
             # For analytic: evaluate at pixel centres with LSF.
             # For convolution: evaluated on the fine grid inside the branch below.
-            cont_total_scaled: jnp.ndarray = jnp.zeros_like(wavelength)
+            cont_total_scaled: jnp.ndarray = jnp.zeros(
+                (args.cont_group_matrix.shape[0], wavelength.shape[0])
+            )
             cont_regions_scaled: list[jnp.ndarray] = []
             if args.integration_mode != 'convolution':
                 cont_regions = eval_continuum_regions(
                     wavelength, args, params, z_sys, cont_lsf_fwhm, _prm
                 )
-                cont_total = jnp.zeros_like(wavelength)
-                for region in cont_regions:
-                    cont_total = cont_total + region
-                cont_total_scaled = cont_total * _cont_scale
+                cont_total_scaled = (
+                    _group_sum(cont_regions, args.cont_group_matrix, wavelength.shape)
+                    * _cont_scale
+                )
                 cont_regions_scaled = [
                     r * _cont_scale * flux_scale_val for r in cont_regions
                 ]
@@ -334,10 +336,10 @@ def evaluate_model(
                 ]
 
                 # Total continuum on fine grid for model composition.
-                cont_fine_total = jnp.zeros_like(x_flat)
-                for r in cont_regions_fine:
-                    cont_fine_total = cont_fine_total + r
-                cont_fine_scaled = cont_fine_total * _cont_scale
+                cont_fine_scaled = (
+                    _group_sum(cont_regions_fine, args.cont_group_matrix, x_flat.shape)
+                    * _cont_scale
+                )
 
                 # Leave-one-out decomposition on fine grid.
                 total_fine, deltas_fine = compose_leave_one_out(
@@ -527,9 +529,7 @@ def evaluate_intrinsic(
         phi = _eval_fn(wl, centers, zero_lsf, p0, p1, p2, _pcodes)
 
         cont_regions = eval_continuum_regions(wl, args, params, z_sys, 0.0)
-        cont_total = jnp.zeros_like(wl)
-        for r in cont_regions:
-            cont_total = cont_total + r
+        cont_total = _group_sum(cont_regions, args.cont_group_matrix, wl.shape)
         total, deltas = compose_leave_one_out(
             phi,
             flux_per_line * line_scale,

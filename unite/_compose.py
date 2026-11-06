@@ -47,11 +47,12 @@ def compose_from_profiles(
         Static boolean matrix.  ``applies_matrix[j, k]`` is True when tau
         line *k* applies to emission line *j* (i.e. ``zorder_k > zorder_j``
         and ``is_tau[k]``).
-    cont_applies : jnp.ndarray, shape ``(n_lines,)``
-        Boolean mask: True for tau lines whose zorder exceeds the
-        continuum zorder (i.e. they attenuate the continuum).
-    continuum : jnp.ndarray, shape ``(n_points,)``
-        Continuum flux density at each point.
+    cont_applies : jnp.ndarray, shape ``(n_groups, n_lines)`` or ``(n_lines,)``
+        Boolean mask per continuum group (regions sharing a zorder): True
+        for tau lines whose zorder exceeds the group's zorder (i.e. they
+        attenuate that group).  A 1-D array is treated as a single group.
+    continuum : jnp.ndarray, shape ``(n_groups, n_points)`` or ``(n_points,)``
+        Continuum flux density of each group at each point (unattenuated).
     has_tau : bool, optional
         Static (Python-time) flag indicating whether the configuration
         contains any tau-parametrized lines.  When ``False`` the
@@ -63,8 +64,13 @@ def compose_from_profiles(
     jnp.ndarray, shape ``(n_points,)``
         Total model flux density (before ``flux_scale`` and normalisation).
     """
+    # Continuum may be 1-D (single group) or (n_groups, n_points): groups of
+    # regions sharing a zorder, each with its own row of ``cont_applies``.
+    continuum = jnp.atleast_2d(continuum)
+    cont_applies = jnp.atleast_2d(cont_applies)
+
     if not has_tau:
-        return (flux_per_line[:, None] * profiles).sum(axis=0) + continuum
+        return (flux_per_line[:, None] * profiles).sum(axis=0) + continuum.sum(axis=0)
 
     emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)  # (n_lines, n_points)
     absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)  # (n_lines, n_points)
@@ -78,10 +84,10 @@ def compose_from_profiles(
 
     attenuated_emission = (flux_per_line[:, None] * emission_phi * t_eff).sum(axis=0)
 
-    cont_tau = (cont_applies * tau_per_line) @ absorption_phi  # (n_points,)
-    t_cont = jnp.exp(-cont_tau)  # (n_points,)
+    cont_tau = (cont_applies * tau_per_line[None, :]) @ absorption_phi  # (G, n_points)
+    t_cont = jnp.exp(-cont_tau)  # (G, n_points)
 
-    return attenuated_emission + t_cont * continuum
+    return attenuated_emission + (t_cont * continuum).sum(axis=0)
 
 
 def compose_leave_one_out(
@@ -120,10 +126,10 @@ def compose_leave_one_out(
         Boolean mask: True for tau-parametrized lines.
     applies_matrix : jnp.ndarray, shape ``(n_lines, n_lines)``
         Static boolean matrix (see :func:`compose_from_profiles`).
-    cont_applies : jnp.ndarray, shape ``(n_lines,)``
-        Boolean mask: tau lines that attenuate the continuum.
-    continuum : jnp.ndarray, shape ``(n_points,)``
-        Continuum flux density at each point.
+    cont_applies : jnp.ndarray, shape ``(n_groups, n_lines)`` or ``(n_lines,)``
+        Boolean mask per continuum group: tau lines that attenuate it.
+    continuum : jnp.ndarray, shape ``(n_groups, n_points)`` or ``(n_points,)``
+        Continuum flux density of each group at each point (unattenuated).
     has_tau : bool, optional
         Static (Python-time) flag indicating whether the configuration
         contains any tau-parametrized lines.  When ``False`` the
@@ -137,9 +143,12 @@ def compose_leave_one_out(
         Per-line contribution.  Emission lines: attenuated flux profile
         (positive).  Absorption lines: flux removed (negative).
     """
+    continuum = jnp.atleast_2d(continuum)
+    cont_applies = jnp.atleast_2d(cont_applies)
+
     if not has_tau:
         emission_deltas = flux_per_line[:, None] * profiles  # (n_lines, n_points)
-        total = emission_deltas.sum(axis=0) + continuum
+        total = emission_deltas.sum(axis=0) + continuum.sum(axis=0)
         return total, emission_deltas
 
     emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)  # (n_lines, n_points)
@@ -154,9 +163,9 @@ def compose_leave_one_out(
     )  # (n_lines, n_points)
     attenuated_emission = attenuated_per_line.sum(axis=0)
 
-    cont_tau = (cont_applies * tau_per_line) @ absorption_phi
-    t_cont = jnp.exp(-cont_tau)
-    total = attenuated_emission + t_cont * continuum
+    cont_tau = (cont_applies * tau_per_line[None, :]) @ absorption_phi  # (G, n)
+    t_cont = jnp.exp(-cont_tau)  # (G, n)
+    total = attenuated_emission + (t_cont * continuum).sum(axis=0)
 
     # Emission deltas are vectorised (independent of tau), so compute them all
     # at once rather than in a Python loop.
@@ -176,8 +185,12 @@ def compose_leave_one_out(
         # tau_fields, equivalent to multiplying t_eff by exp(+contribution).
         contrib = applies_matrix[:, j, None] * (tau_per_line[j] * absorption_phi[j])
         attenuated_loo = (attenuated_per_line * jnp.exp(contrib)).sum(axis=0)
-        cont_contrib = cont_applies[j] * (tau_per_line[j] * absorption_phi[j])
-        total_loo = attenuated_loo + t_cont * jnp.exp(cont_contrib) * continuum
+        cont_contrib = cont_applies[:, j, None] * (
+            tau_per_line[j] * absorption_phi[j]
+        )  # (G, n)
+        total_loo = attenuated_loo + (t_cont * jnp.exp(cont_contrib) * continuum).sum(
+            axis=0
+        )
         return total - total_loo
 
     tau_deltas = jax.vmap(_tau_delta)(tau_idx)  # (n_tau, n_points)

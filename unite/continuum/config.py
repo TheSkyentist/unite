@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import warnings
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
@@ -123,6 +124,12 @@ class ContinuumRegion:
         :meth:`ContinuumForm.param_names`.  Parameters not listed here
         receive auto-created tokens with the form's default priors when
         the region is added to a :class:`ContinuumConfiguration`.
+    zorder : int, optional
+        Depth-ordering integer for this region.  Tau absorbers with a higher
+        zorder attenuate the region.  ``None`` (default) inherits the
+        ``zorder`` of the :class:`ContinuumConfiguration` the region is
+        added to.  Overlapping regions with different zorders are allowed:
+        each is attenuated by its own absorbers and the results are summed.
     name : str, optional
         Human-readable label for this region.  When provided, auto-created
         parameter tokens use this as a suffix (e.g. ``scale_blue``,
@@ -172,8 +179,12 @@ class ContinuumRegion:
     form: ContinuumForm | str = field(default_factory=Linear)
     params: dict[str, Parameter] = field(default_factory=dict)
     name: str | None = None
+    zorder: int | None = None
 
     def __post_init__(self) -> None:
+        if self.zorder is not None:
+            self.zorder = int(self.zorder)
+
         # Resolve string form names to ContinuumForm instances.
         if isinstance(self.form, str):
             self.form = get_form(self.form)
@@ -279,6 +290,10 @@ class ContinuumConfiguration:
     ----------
     regions : list of ContinuumRegion, optional
         Continuum regions.  Will be sorted by ``low`` bound.
+    zorder : int, optional
+        Default depth-ordering integer for regions that do not set their own
+        :attr:`ContinuumRegion.zorder`.  Tau absorbers with a higher zorder
+        attenuate the region.  Default ``0``.
     allow_overlap : bool, optional
         If ``True``, suppress the warning when two regions overlap.
         Overlapping contributions are always summed in the model regardless
@@ -357,6 +372,15 @@ class ContinuumConfiguration:
             self._check_overlaps()
         self._check_duplicate_region_names()
         self._resolved_params: list[dict[str, Parameter]] = self._resolve_params()
+
+    @property
+    def region_zorders(self) -> list[int]:
+        """Effective zorder of each region (parallel to :attr:`regions`).
+
+        A region without its own ``zorder`` inherits the configuration-level
+        :attr:`zorder`.
+        """
+        return [self.zorder if r.zorder is None else r.zorder for r in self._regions]
 
     def _check_duplicate_region_names(self) -> None:
         """Raise if two regions share the same non-None name."""
@@ -610,6 +634,8 @@ class ContinuumConfiguration:
             }
             if region.name is not None:
                 rd['name'] = region.name
+            if region.zorder is not None:
+                rd['zorder'] = region.zorder
             regions_section.append(rd)
 
         result: dict = {
@@ -682,6 +708,7 @@ class ContinuumConfiguration:
                     form=form_objects[rd['form']],
                     params=params,
                     name=rd.get('name', None),
+                    zorder=rd.get('zorder', None),
                 )
             )
         return cls(regions, zorder=d.get('zorder', 0))
@@ -840,14 +867,6 @@ class ContinuumConfiguration:
         if not isinstance(other, ContinuumConfiguration):
             return NotImplemented
 
-        if self.zorder != other.zorder:
-            msg = (
-                f'Cannot add ContinuumConfigurations with different zorders '
-                f'({self.zorder} vs {other.zorder}). Set zorder explicitly on both '
-                f'before adding, or construct a single configuration with all regions.'
-            )
-            raise ValueError(msg)
-
         # Collect user-provided token names from each config (region.params only;
         # auto-created tokens are re-indexed on construction and never collide).
         self_names = {
@@ -870,8 +889,21 @@ class ContinuumConfiguration:
             )
             raise ValueError(msg)
 
+        # Regions inheriting a differing config-level zorder get it pinned
+        # explicitly (on shallow copies) so each keeps its effective zorder.
+        def _pinned(cfg: ContinuumConfiguration) -> list[ContinuumRegion]:
+            if cfg.zorder == self.zorder:
+                return list(cfg._regions)
+            out = []
+            for r in cfg._regions:
+                if r.zorder is None:
+                    r = copy.copy(r)
+                    r.zorder = cfg.zorder
+                out.append(r)
+            return out
+
         return ContinuumConfiguration(
-            list(self._regions) + list(other._regions),
+            _pinned(self) + _pinned(other),
             zorder=self.zorder,
             allow_overlap=self.allow_overlap and other.allow_overlap,
         )
@@ -886,7 +918,13 @@ class ContinuumConfiguration:
             for tok in resolved.values():
                 seen_tok_ids.add(id(tok))
 
-        header = f'ContinuumConfiguration: {len(self._regions)} region(s), {len(seen_tok_ids)} parameter(s), zorder={self.zorder}'
+        region_zorders = self.region_zorders
+        zorder_str = (
+            str(self.zorder)
+            if all(z == self.zorder for z in region_zorders)
+            else f'{self.zorder} (default; per-region {region_zorders})'
+        )
+        header = f'ContinuumConfiguration: {len(self._regions)} region(s), {len(seen_tok_ids)} parameter(s), zorder={zorder_str}'
 
         # Build table.
         rows = []

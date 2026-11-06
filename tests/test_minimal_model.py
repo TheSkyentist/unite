@@ -1495,7 +1495,7 @@ class TestAbsorptionModel:
         # tau line does not absorb itself
         assert not bool(cm.applies_matrix[1, 1])
         # cont_applies: tau absorbs continuum (zorder 1 > default cont zorder 0)
-        assert bool(args.cont_applies[1])
+        assert bool(args.cont_applies[0, 1])
         samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
         assert 'obs_abs_spec' in samples
 
@@ -1529,6 +1529,105 @@ class TestAbsorptionModel:
         samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
         assert 'obs_abs_spec' in samples
 
+    @staticmethod
+    def _two_region_args(zb, tau=2.0, mode='analytic'):
+        """Build args for two overlapping unit-flux regions (zorders 0 and *zb*)."""
+        from unite.continuum.config import (
+            ContinuumConfiguration,
+            ContinuumRegion,
+            ContShape,
+            NormWavelength,
+            Scale,
+        )
+        from unite.continuum.library import Linear
+        from unite.line.library import Gaussian
+
+        def _region(name, zorder):
+            return ContinuumRegion(
+                6400.0 * u.AA,
+                6700.0 * u.AA,
+                form=Linear(),
+                name=name,
+                zorder=zorder,
+                params={
+                    'scale': Scale(prior=prior.Fixed(1.0)),
+                    'norm_wav': NormWavelength(prior=prior.Fixed(6563.0)),
+                    'angle': ContShape(prior=prior.Fixed(0.0)),
+                },
+            )
+
+        lc = line.LineConfiguration()
+        lc.add_line(
+            'HI_abs',
+            6563.0 * u.AA,
+            profile=Gaussian(),
+            redshift=line.Redshift(prior=prior.Fixed(0.0)),
+            fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+            tau=line.Tau(prior=prior.Fixed(tau)),
+            zorder=1,
+        )
+        cc = ContinuumConfiguration(
+            [_region('a', 0), _region('b', zb)], allow_overlap=True
+        )
+        spectra = Spectra([_create_absorption_spectrum()], redshift=0.0)
+        spectra.prepare(lc, cc)
+        spectra.line_scale = 1.0 * u.Unit('1e-17 erg / (s cm2)')
+        spectra.continuum_scale = 1.0 * u.Unit('1e-17 erg / (s cm2 AA)')
+        _, args = model.ModelBuilder(
+            spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+        ).build(integration_mode=mode)
+        assert args.cont_group_matrix.shape == (len({0, zb}), 2)
+        return args
+
+    @classmethod
+    def _peak(cls, zb, tau=2.0, mode='analytic'):
+        from unite.compute import evaluate_model
+
+        pred = evaluate_model({}, cls._two_region_args(zb, tau, mode))[0]
+        idx = int(np.argmin(np.abs(pred.wavelength - 6563.0)))
+        return pred, idx
+
+    def test_per_region_continuum_zorder(self):
+        """Overlapping regions with different zorders are attenuated separately."""
+        both_behind = self._peak(0)
+        mixed = self._peak(2)  # b in front of the absorber
+        no_absorber = self._peak(2, tau=0.0)
+        t = [float(p.total[0, i]) for p, i in (both_behind, mixed, no_absorber)]
+        assert t[0] < t[1] < t[2]
+
+    def test_per_region_zorder_convolution_matches_analytic(self):
+        """Convolution mode honours per-region zorder groups (wide absorber)."""
+        for zb in (0, 2):
+            pa, i = self._peak(zb, mode='analytic')
+            pc, j = self._peak(zb, mode='convolution')
+            np.testing.assert_allclose(
+                float(pc.total[0, j]), float(pa.total[0, i]), rtol=0.03
+            )
+        # Convolution mode still distinguishes the two geometries.
+        peaks = []
+        for zb in (0, 2):
+            pc, j = self._peak(zb, mode='convolution')
+            peaks.append(float(pc.total[0, j]))
+        assert peaks[0] < peaks[1]
+
+    def test_absorber_removed_flux_scales_with_attenuated_groups(self):
+        """Removed flux is ``total - total_without_absorber`` for every group."""
+        from unite.compute import evaluate_intrinsic
+
+        wl = np.linspace(6540.0, 6586.0, 41) * u.AA
+        removed, totals = {}, {}
+        for zb in (0, 2):
+            pred = evaluate_intrinsic({}, self._two_region_args(zb), wl)
+            removed[zb] = np.asarray(next(iter(pred.lines.values())))
+            totals[zb] = np.asarray(pred.total)
+        # Unabsorbed continuum is 2 (two unit regions): total = 2 + removed.
+        for zb in (0, 2):
+            np.testing.assert_allclose(totals[zb], 2.0 + removed[zb], atol=1e-10)
+        # Both groups attenuated removes twice the flux of one attenuated group.
+        assert np.all(removed[0] <= 0)
+        np.testing.assert_allclose(removed[0], 2.0 * removed[2], rtol=1e-8, atol=1e-12)
+        assert removed[0].min() < -0.1
+
     def test_zorder_tau_does_not_absorb_continuum_when_behind(self):
         """Tau absorber with zorder <= cont zorder does not attenuate continuum."""
         from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
@@ -1557,7 +1656,7 @@ class TestAbsorptionModel:
         ).build()
 
         # tau at zorder 0, continuum at zorder 0: 0 > 0 is False → no attenuation
-        assert not bool(args.cont_applies[0])
+        assert not bool(args.cont_applies[0, 0])
         samples = Predictive(model_fn, num_samples=2)(random.PRNGKey(0), args)
         assert 'obs_abs_spec' in samples
 
@@ -1599,7 +1698,7 @@ class TestAbsorptionModel:
         _, args = model.ModelBuilder(lc_prep, cc_prep, spectra).build()
 
         # tau at zorder 1, continuum at zorder 2: 1 > 2 is False → no attenuation
-        assert not bool(args.cont_applies[0])
+        assert not bool(args.cont_applies[0, 0])
 
     def test_absorption_only_model(self):
         """Model with only absorption lines (no emission) builds and runs."""
