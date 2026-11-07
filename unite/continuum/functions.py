@@ -166,7 +166,7 @@ def bspline_basis(t: ArrayLike, knots: ArrayLike, degree: int) -> Array:
 
     # Handle the right-boundary condition (x == knots[-1])
     # by pushing points slightly inside the last interval.
-    t = jnp.clip(t, knots[0], knots[-1] - 1e-14)
+    t = jnp.clip(t, knots[0], jnp.nextafter(knots[-1], knots[0]))
 
     # Degree 0 basis: indicator functions
     basis = jnp.where(
@@ -181,11 +181,15 @@ def bspline_basis(t: ArrayLike, knots: ArrayLike, degree: int) -> Array:
         dt_left = knots[d : d + n_basis] - knots[:n_basis]
         dt_right = knots[d + 1 : d + 1 + n_basis] - knots[1 : 1 + n_basis]
 
-        # Avoid division by zero for repeated knots
-        # Using 1.0 as a dummy denominator; the 'where' will zero out the result anyway
-        left_w = jnp.where(dt_left > 0, (t[:, None] - knots[:n_basis]) / dt_left, 0.0)
+        # Avoid division by zero for repeated knots. Use a dummy denominator of
+        # 1.0 *before* dividing so the masked branch has a finite gradient.
+        safe_left = jnp.where(dt_left > 0, dt_left, 1.0)
+        safe_right = jnp.where(dt_right > 0, dt_right, 1.0)
+        left_w = jnp.where(dt_left > 0, (t[:, None] - knots[:n_basis]) / safe_left, 0.0)
         right_w = jnp.where(
-            dt_right > 0, (knots[d + 1 : d + 1 + n_basis] - t[:, None]) / dt_right, 0.0
+            dt_right > 0,
+            (knots[d + 1 : d + 1 + n_basis] - t[:, None]) / safe_right,
+            0.0,
         )
 
         # Update basis: linear combination of lower-degree bases

@@ -1,5 +1,6 @@
 """Tests for JAX-jitted continuum evaluation kernels."""
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from scipy.special import comb as scipy_comb
@@ -144,6 +145,41 @@ class TestBSpline:
         wl = jnp.linspace(0.01, 0.99, 20)
         result = bspline_eval(wl, coeffs, knots, degree)
         np.testing.assert_allclose(result, 5.0, atol=1e-5)
+
+    @staticmethod
+    def _library_knots(interior, degree=3, low=-1.0, high=1.0, dtype=jnp.float32):
+        """Clamped knots as built by ``BSpline._prepare`` (degree+1 repeats)."""
+        p = degree + 1
+        return jnp.asarray(
+            np.concatenate([np.full(p, low), interior, np.full(p, high)]), dtype=dtype
+        )
+
+    def test_partition_of_unity_including_edges_float32(self):
+        """All-ones coefficients give 1 everywhere, including both edges."""
+        knots = self._library_knots([-0.3, 0.2, 0.6])
+        t = jnp.linspace(-1, 1, 5, dtype=jnp.float32)
+        result = bspline_eval(t, jnp.ones(7, dtype=jnp.float32), knots, 3)
+        np.testing.assert_allclose(result, 1.0, atol=1e-5)
+
+    def test_grad_wrt_wavelength_finite(self):
+        """Gradient w.r.t. wavelength must be finite despite repeated knots."""
+        knots = self._library_knots([-0.3, 0.2, 0.6], dtype=jnp.float64)
+        coeffs = jnp.array([1.0, 2.0, 0.5, 3.0, 1.5, 0.7, 1.2])
+        t = jnp.linspace(-1, 1, 21)
+
+        def f(offset):
+            return jnp.sum(bspline_eval(t + offset, coeffs, knots, 3))
+
+        assert jnp.isfinite(jax.grad(f)(0.01))
+
+    def test_grad_wrt_wavelength_finite_float32(self):
+        knots = self._library_knots([0.0])
+        coeffs = jnp.array([1.0, 2.0, 0.5, 3.0, 1.5], dtype=jnp.float32)
+        t = jnp.linspace(-1, 1, 21, dtype=jnp.float32)
+        g = jax.grad(lambda o: jnp.sum(bspline_eval(t + o, coeffs, knots, 3)))(
+            jnp.float32(0.0)
+        )
+        assert jnp.isfinite(g)
 
 
 # ---------------------------------------------------------------------------
