@@ -1215,7 +1215,7 @@ class BSpline(ContinuumForm):
     @override
     def _prepare(self, low: u.Quantity, high: u.Quantity) -> None:
         """Validate and prepare the knot vector for evaluation within the region bounds."""
-        if any((self._knots <= low) or (self._knots >= high)):
+        if any((self._knots <= low) | (self._knots >= high)):
             msg = f'All knots must be within the region bounds [{low}, {high}], got {self._knots}'
             raise ValueError(msg)
         # Add n-1 extra knots at each end for clamping (B-spline convention)

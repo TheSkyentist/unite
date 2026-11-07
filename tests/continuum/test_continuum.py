@@ -241,6 +241,20 @@ class TestContinuumRegion:
         r = ContinuumRegion(0.9 * u.um, 1.1 * u.um, BSpline(knots, degree=3))
         assert r.form.n_basis == 5
 
+    def test_bspline_multiple_knots_within_region_ok(self):
+        """BSpline with several interior knots should not raise."""
+        knots = [0.95, 1.0, 1.05] * u.um
+        r = ContinuumRegion(0.9 * u.um, 1.1 * u.um, BSpline(knots, degree=3))
+        assert r.form.n_basis == 7
+
+    def test_bspline_multiple_knots_one_outside_raises(self):
+        """With several knots, a single out-of-bounds knot should raise."""
+        knots = [0.95, 1.0, 1.2] * u.um
+        with pytest.raises(
+            ValueError, match=r'All knots must be within the region bounds'
+        ):
+            ContinuumRegion(0.9 * u.um, 1.1 * u.um, BSpline(knots, degree=3))
+
     def test_bspline_knots_not_array_raises(self):
         """BSpline knots within region bounds should not raise."""
         knots = 1.0 * u.um
