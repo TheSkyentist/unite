@@ -1198,8 +1198,9 @@ class BSpline(ContinuumForm):
         nw = params['norm_wav']
         u_nw = 2 * (nw - obs_low) / obs_range - 1
 
-        # Also map knots to [-1, 1]
-        knots_norm = 2 * (self._knots_eval - obs_low) / obs_range - 1
+        # Knots were normalised to [-1, 1] in the rest-frame region in _prepare;
+        # this is frame-independent, so it is valid for any z_sys.
+        knots_norm = self._knots_eval
 
         shape_coeffs = jnp.concatenate(
             [jnp.array([1.0])]
@@ -1227,7 +1228,10 @@ class BSpline(ContinuumForm):
                 high.value * jnp.ones(p),
             ]
         )
-        self._knots_eval = knots_clamped
+        # Normalise to [-1, 1] over the region (frame-independent).
+        self._knots_eval = (
+            2 * (knots_clamped - low.value) / (high.value - low.value) - 1
+        )
 
     @override
     def to_dict(self) -> dict:

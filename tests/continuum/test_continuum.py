@@ -1,6 +1,7 @@
 """Tests for unite.continuum (forms, regions, and configuration)."""
 
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from astropy import units as u
 
@@ -254,6 +255,51 @@ class TestContinuumRegion:
             ValueError, match=r'All knots must be within the region bounds'
         ):
             ContinuumRegion(0.9 * u.um, 1.1 * u.um, BSpline(knots, degree=3))
+
+    def _bspline_region(self):
+        knots = [9050.0, 9800.0, 10550.0] * u.AA
+        form = BSpline(knots, degree=3)
+        ContinuumRegion(8300.0 * u.AA, 11300.0 * u.AA, form)
+        return form
+
+    def _bspline_params(self, form, z):
+        p = {f'coeff_{i}': c for i, c in enumerate([2.0, 0.5, 3.0, 1.0, 2.5, 0.8], 1)}
+        p['scale'] = 1.0
+        p['norm_wav'] = 9800.0 * (1 + z)
+        assert len(p) == form.n_basis + 1
+        return p
+
+    def test_bspline_frame_independent(self):
+        """Rest-frame and observed-frame calls give the same shape."""
+        form = self._bspline_region()
+        z = 3.55
+        w_rest = jnp.linspace(8300.0, 11300.0, 50)
+        rest = form.evaluate(
+            w_rest, 9800.0, self._bspline_params(form, 0.0), 8300.0, 11300.0
+        )
+        obs = form.evaluate(
+            w_rest * (1 + z),
+            9800.0 * (1 + z),
+            self._bspline_params(form, z),
+            8300.0 * (1 + z),
+            11300.0 * (1 + z),
+            z_sys=z,
+        )
+        assert float(jnp.ptp(rest)) > 0.1
+        np.testing.assert_allclose(obs, rest, rtol=1e-10)
+
+    def test_bspline_varies_with_coeffs_at_z(self):
+        """At z_sys > 0 the continuum must respond to coeff_* values."""
+        form = self._bspline_region()
+        z = 3.55
+        w = jnp.linspace(8300.0, 11300.0, 50) * (1 + z)
+        args = (9800.0 * (1 + z), None, 8300.0 * (1 + z), 11300.0 * (1 + z))
+        p1 = self._bspline_params(form, z)
+        p2 = dict(p1, coeff_3=10.0)
+        f1 = form.evaluate(w, args[0], p1, args[2], args[3], z_sys=z)
+        f2 = form.evaluate(w, args[0], p2, args[2], args[3], z_sys=z)
+        assert float(jnp.ptp(f1)) > 0.1
+        assert not np.allclose(f1, f2)
 
     def test_bspline_knots_not_array_raises(self):
         """BSpline knots within region bounds should not raise."""
