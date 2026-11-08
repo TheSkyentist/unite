@@ -220,5 +220,7 @@ def bspline_eval(
     Array
         Continuum flux, shape ``(N,)``.
     """
-    basis = bspline_basis(wavelength, knots, degree)
-    return basis @ coeffs
+    wavelength = jnp.asarray(wavelength)
+    shape = wavelength.shape
+    basis = bspline_basis(wavelength.reshape(-1), knots, degree)
+    return (basis @ coeffs).reshape(shape)

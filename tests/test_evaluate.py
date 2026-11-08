@@ -9,10 +9,10 @@ from numpyro.infer import Predictive
 from unite import line, model, prior
 from unite.compute import SpectrumPrediction, evaluate_intrinsic, evaluate_model
 from unite.continuum.config import ContinuumConfiguration, ContinuumRegion
-from unite.continuum.library import Linear
+from unite.continuum.library import BSpline, Linear
 from unite.instrument.base import PixOffset
 from unite.instrument.generic import GenericDisperser, SimpleDisperser
-from unite.results import make_spectra_tables
+from unite.results import make_hdul, make_spectra_tables
 from unite.spectrum import Spectra, Spectrum
 
 
@@ -796,3 +796,23 @@ def test_intrinsic_requires_quantity():
     samples, args = _intrinsic_setup()
     with pytest.raises(TypeError):
         evaluate_intrinsic(samples, args, np.linspace(6520, 6580, 10))
+
+
+class TestBSplineResults:
+    """Regression: make_hdul with a BSpline region (scalar wavelength path)."""
+
+    def test_make_hdul_bspline(self):
+        spec = _make_spectrum()
+        cc = ContinuumConfiguration(
+            [
+                ContinuumRegion(
+                    6490.0 * u.AA,
+                    6620.0 * u.AA,
+                    form=BSpline([6555.0] * u.AA, degree=3),
+                )
+            ]
+        )
+        model_fn, args = _build_model(spec, _simple_lc(), cc)
+        samples = Predictive(model_fn, num_samples=3)(random.PRNGKey(2), args)
+        hdul = make_hdul(samples, args)
+        assert len(hdul) > 1
