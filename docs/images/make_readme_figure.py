@@ -178,15 +178,15 @@ def make_figure(spectra, tables, out: Path):
         }
     )
 
-    fig = pyplot.figure(figsize=(15, 17.5))
+    fig = pyplot.figure(figsize=(15, 18.5))
     outer = gridspec.GridSpec(
-        3, 1, figure=fig, height_ratios=[0.11, 1.0, 0.84], hspace=0.17
+        3, 1, figure=fig, height_ratios=[0.03, 1.0, 0.84], hspace=0.30
     )
     ax_title = fig.add_subplot(outer[0])
     ax_title.axis('off')
     ax_title.text(
         0.5,
-        -0.1,
+        -1.8,
         r'\textbf{unite: One Model, Many Spectra}',
         ha='center',
         va='bottom',
@@ -340,6 +340,15 @@ def make_figure(spectra, tables, out: Path):
             clip_on=False,
         )
     )
+    axm.text(
+        0.5,
+        1.02,
+        r'\textbf{One potential \texttt{unite} configuration}',
+        ha='center',
+        va='bottom',
+        fontsize=24,
+        transform=axm.transAxes,
+    )
     x0 = 0.025
 
     def title(y, text):
@@ -473,7 +482,7 @@ def make_figure(spectra, tables, out: Path):
     )
 
     fig.savefig(out.with_suffix('.png'), dpi=200, bbox_inches='tight')
-    fig.savefig(out.with_suffix('.pdf'), bbox_inches='tight')
+    # fig.savefig(out.with_suffix('.pdf'), bbox_inches='tight')
     print(f'Wrote {out.with_suffix('.png')}')
 
 
