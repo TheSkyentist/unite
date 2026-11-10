@@ -171,7 +171,13 @@ def build_windows(
             # Unbounded PixOffset: any pixel may become active.
             p0, p1 = 0, n_pixels
         elif active.size == 0:
-            # The table may still reach the spectrum edge after a shift.
+            # The table may still reach the spectrum edge after a shift of up
+            # to *margin* pixels; otherwise the order never contributes.
+            widths = np.diff(edges)[kept_idx]
+            reach_hi = pix_mids[-1] + margin * widths[-1]
+            reach_lo = pix_mids[0] - margin * widths[0]
+            if hi < reach_lo or lo > reach_hi:
+                continue
             edge = int(np.searchsorted(pix_mids, lo))
             p0, p1 = max(edge - margin, 0), min(edge + margin, n_pixels)
         else:
