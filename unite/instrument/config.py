@@ -64,6 +64,7 @@ from unite._utils import _alpha_name
 from unite.instrument.base import (
     Disperser,
     FluxScale,
+    OrderScale,
     PixOffset,
     RScale,
     format_calibration_sections,
@@ -100,6 +101,7 @@ _CALIB_REGISTRY: dict[str, type[Parameter]] = {
     'RScale': RScale,
     'FluxScale': FluxScale,
     'PixOffset': PixOffset,
+    'OrderScale': OrderScale,
 }
 
 # ---------------------------------------------------------------------------

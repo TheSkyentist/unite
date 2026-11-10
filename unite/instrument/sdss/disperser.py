@@ -21,11 +21,14 @@ Unit("Angstrom")
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import jax.numpy as jnp
 from astropy import units as u
 from jax.typing import ArrayLike
 
 from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.overlap import OrderOverlap
 
 
 class SDSSDisperser(Disperser):
@@ -56,7 +59,13 @@ class SDSSDisperser(Disperser):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the pixel shift.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
     """
+
+    #: SDSS arms each cover less than an octave: no higher-order overlap.
+    supports_order_overlap: bool = False
 
     def __init__(
         self,
@@ -64,6 +73,7 @@ class SDSSDisperser(Disperser):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             unit=u.AA,
@@ -71,6 +81,7 @@ class SDSSDisperser(Disperser):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
         # Placeholder grids — overwritten by from_sdss_fits() at load time.
         self._wavelength_grid: jnp.ndarray = jnp.array([3800.0, 9200.0], dtype=float)

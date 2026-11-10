@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
+from typing import TYPE_CHECKING
 
 from astropy import units as u
 from jax.typing import ArrayLike
 
 from unite.prior import Fixed, Parameter, Prior
+
+if TYPE_CHECKING:
+    from unite.instrument.overlap import OrderOverlap
 
 # ---------------------------------------------------------------------------
 # CalibParam tokens — subclasses of Parameter with instrument-specific defaults
@@ -108,6 +113,37 @@ class PixOffset(CalibParam):
         super().__init__(name=name, prior=prior)
 
 
+class OrderScale(CalibParam):
+    """Multiplicative scale on a higher-order throughput ratio ``r_m``.
+
+    Nominal value is 1.  The order-*m* overlap term of the model is
+    ``OrderScale * r_m(λ) * F(λ / m)`` (same direction as
+    :class:`FluxScale`: the forward model multiplies), so a free prior
+    represents the uncertainty on the order-*m* calibration curve.  Attach it
+    through :class:`~unite.instrument.overlap.OrderOverlap`.
+
+    Sharing: the same instance on several overlaps (orders or dispersers)
+    gives a single model parameter.
+
+    Parameters
+    ----------
+    name : str, optional
+        Human-readable label.  The site name is ``'order_scale_{label}'``; an
+        unlabelled, unshared token on a named disperser is auto-named
+        ``'order_scale_{disperser_name}_{order}'``.
+    prior : Prior, optional
+        Prior on the scale factor.  Defaults to ``Fixed(1.0)``.
+    """
+
+    #: Type prefix of the numpyro site name (``'order_scale_<label>'``).
+    site_prefix: str = 'order_scale'
+
+    def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
+        if prior is None:
+            prior = Fixed(1.0)
+        super().__init__(name=name, prior=prior)
+
+
 # ---------------------------------------------------------------------------
 # Disperser ABC
 # ---------------------------------------------------------------------------
@@ -160,7 +196,35 @@ class Disperser(ABC):
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.  ``None`` (default)
         creates a private token fixed at nominal (0.0).
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap, one
+        :class:`~unite.instrument.overlap.OrderOverlap` per order (no
+        duplicate orders).  Adds ``OrderScale_m * r_m(λ) * F(λ / m)`` to the
+        first-order model.  ``None`` (default) disables the term.  Dispersers
+        for which the term is not physical (prisms, sub-octave multi-arm
+        spectrographs; :attr:`supports_order_overlap` is ``False``) warn but
+        accept it.
+
+    Notes
+    -----
+    **Order overlap.**  The term describes order-*m* light of the *same
+    source* landing on its own first-order spectrum, in a spectrum that was
+    flux-calibrated with the first-order throughput only.  It applies to
+    gratings that cover more than an octave behind their order-sorting filter
+    (NIRSpec gratings, MUSE extended mode, optical long-slit/MOS set-ups).
+    It does not apply to prisms, cross-dispersed echelles, sub-octave
+    multi-arm spectrographs, or slitless grisms (where contamination comes
+    from other sources).
+
+    ``RScale`` and ``PixOffset`` act on the overlap exactly as on first
+    order: the order-*m* image has resolving power ``R_m(λ / m) = m R(λ / m)``
+    at the photon wavelength, and the pixel displacement is the same in every
+    order.  ``FluxScale`` multiplies the whole model.
     """
+
+    #: Whether higher-order overlap is physical for this disperser.  When
+    #: ``False``, passing ``order_overlap`` emits a :class:`UserWarning`.
+    supports_order_overlap: bool = True
 
     def __init__(
         self,
@@ -170,6 +234,7 @@ class Disperser(ABC):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         if r_scale is not None and not isinstance(r_scale, RScale):
             msg = f'r_scale must be an RScale token, got {type(r_scale).__name__}'
@@ -191,6 +256,17 @@ class Disperser(ABC):
         self.r_scale = r_scale if r_scale is not None else RScale()
         self.flux_scale = flux_scale if flux_scale is not None else FluxScale()
         self.pix_offset = pix_offset if pix_offset is not None else PixOffset()
+        self.order_overlap: tuple[OrderOverlap, ...] = _validate_order_overlap(
+            order_overlap
+        )
+        if self.order_overlap and not self.supports_order_overlap:
+            warnings.warn(
+                f'{type(self).__name__} does not normally have higher-order '
+                'overlap (prisms, sub-octave multi-arm spectrographs); '
+                'order_overlap is applied as given.',
+                UserWarning,
+                stacklevel=3,
+            )
 
         # Apply the type prefix to any token that has a user-supplied label but
         # no site name yet.  Fully anonymous tokens (label=None, name=None) are
@@ -236,9 +312,11 @@ class Disperser(ABC):
         """Yield every calibration token on this disperser as ``(slot, token)``.
 
         ``slot`` is the fixed slot name (``'r_scale'``, ``'flux_scale'``,
-        ``'pix_offset'``).  Tokens are yielded once per slot, so a token
-        occupying several slots is yielded several times; callers that need
-        unique tokens deduplicate by identity.
+        ``'pix_offset'``), followed by ``'order_scale_{m}'`` for the
+        :class:`OrderScale` of each entry of :attr:`order_overlap`.  Tokens
+        are yielded once per slot, so a token occupying several slots is
+        yielded several times; callers that need unique tokens deduplicate by
+        identity.
 
         Yields
         ------
@@ -247,6 +325,8 @@ class Disperser(ABC):
         """
         for slot in self.CALIB_SLOTS:
             yield slot, getattr(self, slot)
+        for ov in getattr(self, 'order_overlap', ()):
+            yield f'{ov.scale.site_prefix}_{ov.order}', ov.scale
 
     @property
     def has_calibration_params(self) -> bool:
@@ -265,8 +345,49 @@ class Disperser(ABC):
         ``flux_scale``, and ``pix_offset`` are set to.
         """
         lines = [repr(self)]
+        if self.order_overlap:
+            lines.append('')
+            lines.append('  Order Overlap:')
+            lines.extend(f'    {ov!r}' for ov in self.order_overlap)
         lines.extend(format_calibration_sections([self]))
         return '\n'.join(lines)
+
+
+def _validate_order_overlap(
+    order_overlap: Sequence[OrderOverlap] | None,
+) -> tuple[OrderOverlap, ...]:
+    """Validate an ``order_overlap`` sequence and return it sorted by order.
+
+    Raises
+    ------
+    TypeError
+        If *order_overlap* is not a sequence of
+        :class:`~unite.instrument.overlap.OrderOverlap`.
+    ValueError
+        If an order appears more than once.
+    """
+    from unite.instrument.overlap import OrderOverlap
+
+    if order_overlap is None:
+        return ()
+    if isinstance(order_overlap, OrderOverlap) or not isinstance(
+        order_overlap, Sequence
+    ):
+        msg = (
+            'order_overlap must be a sequence of OrderOverlap, got '
+            f'{type(order_overlap).__name__}'
+        )
+        raise TypeError(msg)
+    for ov in order_overlap:
+        if not isinstance(ov, OrderOverlap):
+            msg = f'order_overlap entries must be OrderOverlap, got {type(ov).__name__}'
+            raise TypeError(msg)
+    orders = [ov.order for ov in order_overlap]
+    dupes = sorted({m for m in orders if orders.count(m) > 1})
+    if dupes:
+        msg = f'Duplicate order(s) in order_overlap: {dupes}'
+        raise ValueError(msg)
+    return tuple(sorted(order_overlap, key=lambda ov: ov.order))
 
 
 def format_calibration_sections(dispersers: Sequence[Disperser]) -> list[str]:
