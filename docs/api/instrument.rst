@@ -17,6 +17,14 @@ Instrument Configuration
    :undoc-members:
    :show-inheritance:
 
+Higher-Order Grating Overlap
+----------------------------
+
+.. automodule:: unite.instrument.overlap
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Generic Implementations
 -----------------------
 

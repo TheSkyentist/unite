@@ -210,10 +210,11 @@ for name, t in tables.items():
 | Column | Description |
 |--------|-------------|
 | `wavelength` | Observed-frame wavelength (trimmed to continuum regions) |
-| `model_total` | Total model (lines + continuum) |
+| `model_total` | Total model (lines + continuum + any higher-order overlap) |
 | `<line_label>` | Flux contribution of an emission line (positive); or flux *removed* by an absorber (negative) |
 | `od_<line_label>` | LSF-convolved optical depth profile `tau * phi(λ)` for each absorption line (dimensionless, ≥ 0) |
 | `<cont_region_label>` | Continuum contribution from a region |
+| `overlap_<m>` | Higher-order overlap contribution of diffraction order *m* (only for dispersers with `order_overlap`; see [Higher-Order Grating Overlap](instrument.md#higher-order-grating-overlap)). Line and continuum columns are first-order only. |
 | `observed_flux` | Observed flux from the input spectrum |
 | `observed_error` | Pipeline uncertainty array (unscaled) |
 | `scaled_error` | Error inflated by the per-spectrum `error_scale` factor |

@@ -146,6 +146,32 @@ dispersers:
         prior: {type: Uniform, low: 0.5, high: 2.0}
 ```
 
+A disperser with [higher-order overlap](instrument.md#higher-order-grating-overlap) gets an
+`order_overlap` list mirroring the constructor. Each `OrderScale` is hoisted into `calib_params`
+and referenced by name, so sharing round-trips; `column` is written only when it is not
+`throughput_ratio`. The ratio file is referenced by path (resolved against the working directory
+on load) and must exist when the configuration is loaded:
+
+```yaml
+dispersers:
+  calib_params:
+    order_scale_g140m:
+      type: OrderScale
+      prior: {type: TruncatedNormal, loc: 1.0, scale: 0.2, low: 0.5, high: 1.5}
+    # ... r_scale / flux_scale / pix_offset tokens ...
+  entries:
+    - type: G140M
+      name: G140M
+      r_source: point
+      r_scale: r_scale_G140M
+      flux_scale: flux_scale_G140M
+      pix_offset: pix_offset_G140M
+      order_overlap:
+        - order: 2
+          path: g140m_order2.fits
+          scale: order_scale_g140m
+```
+
 ---
 
 ## Combining Configurations
