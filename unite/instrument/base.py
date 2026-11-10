@@ -40,8 +40,9 @@ class RScale(Parameter):
 class FluxScale(Parameter):
     """Multiplicative flux normalisation between dispersers.
 
-    Nominal value is 1.  The model divides observed flux by ``flux_scale``,
-    allowing relative flux calibration across multiple gratings.
+    Nominal value is 1.  The model flux is multiplied by ``flux_scale`` to
+    predict the observed flux (``F_obs = flux_scale * F_model``), allowing
+    relative flux calibration across multiple gratings.
 
     Parameters
     ----------
