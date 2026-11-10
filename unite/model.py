@@ -26,6 +26,8 @@ from unite._utils import _get_conversion_factor
 from unite.continuum.compute import (
     eval_continuum,
     integrate_continuum,
+    interval_lsf_fwhm,
+    region_lsf_fwhm,
     static_region_masks,
 )
 from unite.continuum.config import ContinuumConfiguration
@@ -377,15 +379,12 @@ def unite_model(args: ModelArgs) -> None:
             per_interval = jnp.diff(cum_per_line, axis=1) / widths  # (n_lines, E-1)
             pixints = per_interval[:, keep_mask]  # (n_lines, npix)
 
-            # Per-region LSF FWHM (scalar per region) for polynomial-based
-            # continuum forms' analytic Gaussian-moment convolution.
-            if args.cont_config is not None and args.cont_center is not None:
-                cont_centers_obs = jnp.array(args.cont_center) * (1.0 + z_sys)
-                cont_lsf_per_region = cont_centers_obs / (
-                    disp.R(cont_centers_obs * inv_wl_scale) * r_scale
-                )
-            else:
-                cont_lsf_per_region = jnp.zeros(0)
+            # Per-region LSF (non-polynomial forms) and per-pixel LSF (polynomial
+            # family, whose analytic Gaussian-moment convolution uses the LSF of
+            # each pixel).  Shared with evaluate_model.
+            cont_lsf_per_region = region_lsf_fwhm(
+                args, disp, z_sys, inv_wl_scale, r_scale
+            )
             cont_per_interval = integrate_continuum(
                 edges,
                 args,
@@ -394,6 +393,7 @@ def unite_model(args: ModelArgs) -> None:
                 cont_lsf_per_region,
                 region_mask,
                 args.cont_group_matrix,
+                lsf_fwhm_per_interval=interval_lsf_fwhm(lsf_at_edges),
             )  # (n_groups, E-1)
             cont = cont_per_interval[:, keep_mask] * cont_scale_norm  # (G, npix)
 

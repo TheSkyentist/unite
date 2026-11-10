@@ -16,7 +16,13 @@ from astropy import units as u
 
 from unite._compose import compose_leave_one_out
 from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
-from unite.continuum.compute import _group_sum, eval_continuum_regions
+from unite.continuum.compute import (
+    _group_sum,
+    eval_continuum_regions,
+    integrate_continuum_regions,
+    interval_lsf_fwhm,
+    region_lsf_fwhm,
+)
 from unite.line.compute import (
     _build_cover_params,
     _build_line_params,
@@ -195,7 +201,8 @@ def evaluate_model(
         dlam_edges = disp.dlam_dpix(edges_disp_base) * wl_scale  # (E,)
         # Static continuum-region membership of each kept pixel (same mask
         # as the model, from the unshifted grid).
-        pix_region_mask = args.region_masks[i][:, spectrum.keep_mask]
+        full_region_mask = args.region_masks[i]  # (n_regions, E - 1)
+        pix_region_mask = full_region_mask[:, spectrum.keep_mask]
 
         line_scale = float(args.line_flux_scales[i])
         cont_scale = float(args.continuum_scales[i])
@@ -217,6 +224,7 @@ def evaluate_model(
             _efn=_eval_fn,
             _pc=_pcodes,
             _prm=pix_region_mask,
+            _full_rm=full_region_mask,
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
@@ -257,8 +265,6 @@ def evaluate_model(
             # Per-edge LSF (shared across lines, used by analytic mode).
             edges_disp = edges * _inv_wl_scale
             lsf_at_edges = edges / (_disp.R(edges_disp) * r_scale)
-            # LSF FWHM at pixel centres for continuum convolution mode.
-            cont_lsf_fwhm = wavelength / (_disp.R(wavelength * _inv_wl_scale) * r_scale)
 
             # Scaled line fluxes for this spectrum.
             scaled_flux = flux_per_line * _line_scale
@@ -275,16 +281,27 @@ def evaluate_model(
                 tau_profiles_arr = jnp.zeros((n_lines, wavelength.shape[0]))
 
             # --- Continuum (per-region for decomposition) ---
-            # For analytic: evaluate at pixel centres with LSF.
+            # For analytic: the same pixel-averaged evaluation as the likelihood
+            # (integrate_continuum_regions on the edges), so predictions are
+            # exactly the fitted model.
             # For convolution: evaluated on the fine grid inside the branch below.
             cont_total_scaled: jnp.ndarray = jnp.zeros(
                 (args.cont_group_matrix.shape[0], wavelength.shape[0])
             )
             cont_regions_scaled: list[jnp.ndarray] = []
             if args.integration_mode != 'convolution':
-                cont_regions = eval_continuum_regions(
-                    wavelength, args, params, z_sys, cont_lsf_fwhm, _prm
-                )
+                cont_regions = [
+                    r[_keep]
+                    for r in integrate_continuum_regions(
+                        edges,
+                        args,
+                        params,
+                        z_sys,
+                        region_lsf_fwhm(args, _disp, z_sys, _inv_wl_scale, r_scale),
+                        _full_rm,
+                        interval_lsf_fwhm(lsf_at_edges),
+                    )
+                ]
                 cont_total_scaled = (
                     _group_sum(cont_regions, args.cont_group_matrix, wavelength.shape)
                     * _cont_scale

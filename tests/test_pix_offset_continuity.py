@@ -163,13 +163,12 @@ def test_evaluate_model_matches_model_with_pix_offset(mode):
         p = {**base, pix_name: x}
         (pred,) = evaluate_model({k: np.atleast_1d(v) for k, v in p.items()}, args)
 
-        # Total matches the likelihood mean.  (Analytic evaluate_model samples
-        # the continuum at pixel midpoints rather than averaging it over the
-        # pixel, hence the loose tolerance.)
+        # Total matches the likelihood mean: both use the same pixel-averaged
+        # continuum (GH #27).
         t = handlers.trace(handlers.substitute(model_fn, data=p)).get_trace(args)
         loc = np.asarray(t['obs_s']['fn'].loc) * args.norm_factors[0]
         np.testing.assert_allclose(
-            pred.total[0], loc, rtol=0, atol=1e-6 * np.abs(loc).max()
+            pred.total[0], loc, rtol=0, atol=1e-10 * np.abs(loc).max()
         )
 
         # Per-region membership is the static one.  Only checkable in analytic

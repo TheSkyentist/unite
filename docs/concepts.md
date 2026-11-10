@@ -62,7 +62,7 @@ physically appropriate since the instrumental broadening is always present.
 - **Robust for undersampled data** — critical for NIRSpec PRISM where lines can be narrower
   than a single pixel
 - **Approximate for absorption lines** — each profile is integrated independently before the
-  nonlinear transmission `exp(-τ·φ)` is applied.  This computes `exp(-τ·∫φ)` rather than
+  nonlinear transmission `exp(-τ·φ)` is applied. This computes `exp(-τ·∫φ)` rather than
   `∫F·exp(-τ·φ)`, which is accurate when the absorber is well-resolved but introduces an
   approximation for unresolved or marginally resolved lines.
 
@@ -87,11 +87,13 @@ model_fn, args = builder.build(integration_mode='analytic')
 model_fn, args = builder.build(integration_mode='convolution', n_super=10)
 ```
 
-In analytic mode the continuum is evaluated at pixel centers (or analytically integrated
-for polynomial-based forms), since it varies slowly enough that sub-pixel variation is
-negligible.
+In analytic mode polynomial-based continua (`Linear`, `Polynomial`, `Chebyshev`,
+`Legendre`, `Bernstein`) are analytically integrated over each pixel and convolved with
+the LSF of that pixel. Other forms are evaluated at pixel centers and are not convolved,
+since they vary slowly enough that sub-pixel variation is negligible.
 
 (lsf-pre-convolution-of-absorption-profiles)=
+
 ### LSF Pre-Convolution of Absorption Profiles
 
 :::{warning}
@@ -134,7 +136,7 @@ Quadrature mode fixes only the pixel-integration approximation (analytic mode's
 
 The central design pattern in `unite` is the **token**. A token is a named Python object
 that represents a model parameter. Sharing a token between two lines means those lines share
-the *same* parameter in the model.
+the _same_ parameter in the model.
 
 ```python
 from unite import line, prior
@@ -175,7 +177,7 @@ prior.TruncatedNormal(loc, scale, low, high)   # Gaussian with hard bounds
 prior.Fixed(value)                             # not sampled; held constant
 ```
 
-Priors can be *dependent* on other tokens — for example, constraining a broad FWHM to always
+Priors can be _dependent_ on other tokens — for example, constraining a broad FWHM to always
 exceed a narrow FWHM by at least 150 km/s:
 
 ```python

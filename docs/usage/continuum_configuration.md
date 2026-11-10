@@ -1,9 +1,11 @@
 # Continuum Configuration
 
 {class}`~unite.continuum.ContinuumConfiguration` defines wavelength regions where the
-continuum is modeled, and attaches a functional form to each region. The continuum is
-evaluated at pixel centers (not integrated), since it varies slowly enough that sub-pixel
-variation is negligible. Continua are also not convolved with the LSF.
+continuum is modeled, and attaches a functional form to each region. In analytic mode,
+polynomial-based forms are integrated over each pixel and convolved with the Gaussian LSF;
+other forms are evaluated at pixel centers (not integrated or convolved), since they vary
+slowly enough that sub-pixel variation is negligible. Convolution mode applies the LSF to
+every form.
 
 ---
 

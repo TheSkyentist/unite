@@ -146,6 +146,60 @@ def _polyint_at(coeffs: Array, x: ArrayLike) -> Array:
     return jnp.polyval(anti, x)
 
 
+def _polyint_convolved_per_interval(
+    coeffs: Array, x: ArrayLike, lsf_fwhm_per_interval: ArrayLike
+) -> Array:
+    """Cumulative polynomial integral with one LSF per edge interval.
+
+    Pixel ``i`` (between ``x[i]`` and ``x[i+1]``) is integrated exactly with the
+    polynomial convolved by the Gaussian LSF *of that pixel*
+    (``lsf_fwhm_per_interval[i]``).  The returned length-``E`` array is the
+    running sum of those pixel integrals (starting at zero), so
+    ``jnp.diff`` recovers them exactly and the caller's ``diff / widths`` gives
+    the pixel average.  For a constant LSF the differences equal those of
+    ``_polyint_at(_gaussian_convolve_poly(coeffs, lsf), x)``.
+
+    Evaluating the LSF at the pixel (not at each edge) reproduces the
+    output-position convention of the numerical convolution
+    (``p * G_sigma(x)`` at ``x``) without the ``sigma * dsigma/dx`` term that a
+    per-edge cumulative scheme would add.
+
+    Parameters
+    ----------
+    coeffs : Array, shape ``(n+1,)``
+        Polynomial coefficients in descending order.
+    x : ArrayLike, shape ``(E,)``
+        Edge positions (same unit and origin as the polynomial variable).
+    lsf_fwhm_per_interval : ArrayLike, shape ``(E-1,)``
+        LSF FWHM for each interval between consecutive edges, in the unit of *x*.
+
+    Returns
+    -------
+    Array, shape ``(E,)``
+    """
+    x = jnp.asarray(x)
+    conv = _gaussian_convolve_poly(coeffs, lsf_fwhm_per_interval)  # (n+1, E-1)
+    n = coeffs.shape[0]
+    divisors = jnp.arange(n, 0, -1, dtype=conv.dtype)[:, None]
+    anti = jnp.concatenate([conv / divisors, jnp.zeros((1, conv.shape[1]))], axis=0)
+    pv = jax.vmap(jnp.polyval, in_axes=(1, 0))
+    pix = pv(anti, x[1:]) - pv(anti, x[:-1])
+    return jnp.concatenate([jnp.zeros(1, dtype=pix.dtype), jnp.cumsum(pix)])
+
+
+def _convolved_polyint(coeffs: Array, lsf_fwhm: ArrayLike, x: ArrayLike) -> Array:
+    """Cumulative integral of a polynomial convolved with a Gaussian LSF.
+
+    A scalar *lsf_fwhm* is one LSF for the whole region.  A 1-D *lsf_fwhm* of
+    length ``len(x) - 1`` is one LSF per edge interval (pixel); see
+    :func:`_polyint_convolved_per_interval`.  *lsf_fwhm* must be in the unit
+    of *x* (the polynomial variable).
+    """
+    if jnp.ndim(lsf_fwhm) == 0:
+        return _polyint_at(_gaussian_convolve_poly(coeffs, lsf_fwhm), x)
+    return _polyint_convolved_per_interval(coeffs, x, lsf_fwhm)
+
+
 def _cheb_to_mono_matrix(n: int) -> Array:
     """Build the (n x n) Chebyshev-to-monomial conversion matrix.
 
@@ -252,6 +306,10 @@ class ContinuumForm(ABC):
     Subclasses must implement :meth:`param_names`, :meth:`default_priors`,
     :meth:`evaluate`, :meth:`to_dict`, and :meth:`from_dict`.
     """
+
+    #: True if :meth:`integrate` accepts ``lsf_fwhm`` as a per-interval array
+    #: (length ``len(edges) - 1``) instead of a scalar per region.
+    supports_interval_lsf: bool = False
 
     @abstractmethod
     def param_names(self) -> tuple[str, ...]:
@@ -673,6 +731,8 @@ class Polynomial(ContinuumForm):
 
     """
 
+    supports_interval_lsf = True
+
     def __init__(self, degree: int = 1) -> None:
         if degree < 0:
             msg = f'Polynomial degree must be >= 0, got {degree}'
@@ -749,8 +809,7 @@ class Polynomial(ContinuumForm):
         mono = jnp.array(
             [params[f'c{i}'] for i in range(self._degree, 0, -1)] + [params['scale']]
         )
-        convolved = _gaussian_convolve_poly(mono, lsf_fwhm)
-        return _polyint_at(convolved, x)
+        return _convolved_polyint(mono, lsf_fwhm, x)
 
     @override
     def to_dict(self) -> dict:
@@ -826,6 +885,8 @@ class Chebyshev(ContinuumForm):
       Default prior: ``Fixed(region_center)``.
 
     """
+
+    supports_interval_lsf = True
 
     def __init__(self, order: int = 2, stretch: float = 1.0) -> None:
         if order < 0:
@@ -928,9 +989,8 @@ class Chebyshev(ContinuumForm):
         )
         mono = (self._cheb2mono @ cheb_coeffs)[::-1]
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
-        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         # Antiderivative in normalised coord; rescale to λ by dλ/du = scale_factor.
-        shape_anti = _polyint_at(convolved, x) * scale_factor
+        shape_anti = _convolved_polyint(mono, lsf_fwhm_scaled, x) * scale_factor
         shape_nw = chebval(x_nw, cheb_coeffs)
         return params['scale'] * shape_anti / shape_nw
 
@@ -987,6 +1047,8 @@ class Legendre(ContinuumForm):
       Default prior: ``Uniform(-10, 10)`` each.
 
     """
+
+    supports_interval_lsf = True
 
     def __init__(self, order: int = 2) -> None:
         if order < 0:
@@ -1067,9 +1129,8 @@ class Legendre(ContinuumForm):
         )
         mono = (self._leg2mono @ leg_coeffs)[::-1]  # ascending → descending
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
-        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         # Antiderivative in normalised coord; rescale to λ by dλ/du = scale_factor.
-        return _polyint_at(convolved, x) * scale_factor
+        return _convolved_polyint(mono, lsf_fwhm_scaled, x) * scale_factor
 
     @override
     def to_dict(self) -> dict:
@@ -1289,6 +1350,8 @@ class Bernstein(ContinuumForm):
 
     """
 
+    supports_interval_lsf = True
+
     def __init__(self, degree: int = 4, stretch: float = 1.0) -> None:
         from scipy.special import comb
 
@@ -1404,9 +1467,8 @@ class Bernstein(ContinuumForm):
         )
         mono = (self._bern2mono @ coeffs)[::-1]
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * scale_factor)
-        convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         # Antiderivative in t-coord; rescale to λ via dλ/dt = 2 * scale_factor.
-        shape_anti = _polyint_at(convolved, t) * (2.0 * scale_factor)
+        shape_anti = _convolved_polyint(mono, lsf_fwhm_scaled, t) * (2.0 * scale_factor)
         shape_nw = bernstein_eval(jnp.atleast_1d(t_nw), coeffs, self._binom)
         return params['scale'] * shape_anti / shape_nw
 
