@@ -35,7 +35,9 @@ Serialization
 :meth:`to_dict` hoists all unique calibration tokens to a top-level
 ``calib_params`` section keyed by token name.  Disperser entries reference
 tokens by name.  Shared tokens round-trip correctly — the same object is
-reconstructed for both entries.
+reconstructed for both entries.  A disperser with higher-order overlap gets an
+``order_overlap`` list of ``{order, path, scale[, column]}`` mappings, its
+:class:`~unite.instrument.base.OrderScale` tokens hoisted like the others.
 
 Examples
 --------
@@ -79,6 +81,7 @@ from unite.instrument.nirspec.disperser import (
     PRISM,
     NIRSpec,
 )
+from unite.instrument.overlap import RATIO_COLUMN, OrderOverlap
 from unite.instrument.sdss.disperser import SDSSDisperser
 from unite.prior import Fixed, Parameter, prior_from_dict
 
@@ -160,7 +163,32 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
         if slot in Disperser.CALIB_SLOTS:
             d[slot] = token.name
 
+    # Higher-order overlap: one mapping per order (key omitted when none).
+    if disperser.order_overlap:
+        d['order_overlap'] = [_overlap_to_dict(ov) for ov in disperser.order_overlap]
+
     return d
+
+
+def _overlap_to_dict(ov: OrderOverlap) -> dict:
+    """Serialize an :class:`OrderOverlap` (its scale referenced by name)."""
+    d: dict = {'order': ov.order, 'path': str(ov.path), 'scale': ov.scale.name}
+    if ov.column != RATIO_COLUMN:
+        d['column'] = ov.column
+    return d
+
+
+def _overlap_from_dict(d: dict, token_registry: dict[str, Parameter]) -> OrderOverlap:
+    """Reconstruct an :class:`OrderOverlap` from its serialized mapping."""
+    path = Path(d['path'])
+    if not path.exists():
+        msg = f'order_overlap file not found: {str(path)!r} (order {d['order']}).'
+        raise FileNotFoundError(msg)
+    scale = token_registry[d['scale']]
+    if not isinstance(scale, OrderScale):
+        msg = f'order_overlap scale {d['scale']!r} is not an OrderScale token.'
+        raise TypeError(msg)
+    return OrderOverlap(d['order'], path, column=d.get('column'), scale=scale)
 
 
 def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disperser:
@@ -192,6 +220,10 @@ def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disp
 
     for slot in Disperser.CALIB_SLOTS:
         kwargs[slot] = token_registry[d[slot]]
+    if d.get('order_overlap'):
+        kwargs['order_overlap'] = [
+            _overlap_from_dict(e, token_registry) for e in d['order_overlap']
+        ]
 
     return cls(**kwargs)
 
