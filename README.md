@@ -22,6 +22,7 @@ Originally designed for JWST/NIRSpec but extensible to any spectrograph.
 - **Emission and absorption lines**: flux-parametrized additive profiles and tau-parametrized multiplicative transmission `exp(-tau * phi)` with an optional covering fraction, with per-component depth ordering (`zorder`) so each absorber selectively attenuates only the sources behind it
 - **Flexible continuum models**: Linear, Polynomial, Chebyshev, Legendre, Bernstein, B-Spline, Power-Law, DLA Power-Law (UV power law with damped Lyman-alpha absorption and Lyman break), Blackbody, Modified Blackbody, Attenuated Blackbody, Template (user-supplied file) — auto-generated from line configurations
 - **Calibration tokens** (flux scale, resolution scale, pixel offset) with free or fixed priors, shared across spectra
+- **Higher-order grating overlap** (e.g. second-order light in NIRSpec G140M/F070LP): an optional per-disperser term from a tabulated throughput-ratio file, with a free or fixed order scale
 - **YAML serialization** for reproducible, human-editable configurations
 - **User-controlled sampler** — `ModelBuilder` returns `(model_fn, model_args)` for use with any NumPyro backend (NUTS, SVI, nested sampling, ...)
 - **Instrument support** for JWST/NIRSpec (all gratings + PRISM), SDSS, and any custom spectrograph via generic dispersers
