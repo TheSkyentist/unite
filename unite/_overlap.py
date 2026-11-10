@@ -200,17 +200,6 @@ def build_windows(
     return windows
 
 
-def has_active_pixels(
-    window: OverlapWindow, spectrum, canonical_unit, wl_scale
-) -> bool:
-    """Whether ``r_m > 0`` on any unshifted pixel midpoint of the window."""
-    edges = np.asarray(spectrum.edges, dtype=float) * wl_scale
-    mids = 0.5 * (edges[1:] + edges[:-1])[np.asarray(spectrum.keep_mask, dtype=bool)]
-    mids = mids[window.wavelength_slice]
-    r = np.asarray(window.overlap.evaluate(mids, canonical_unit))
-    return bool(np.any(r > 0))
-
-
 def with_convolution(
     window: OverlapWindow,
     spectrum,
@@ -397,3 +386,107 @@ def max_observed_lsf_fwhm(window: OverlapWindow, spectrum, wl_scale) -> float:
     photon_disp = mids / m  # disperser unit
     r = np.asarray(disp.R(jnp.asarray(photon_disp)))
     return float(np.max(photon_disp * wl_scale / r)) if mids.size else 0.0
+
+
+def build_warnings(
+    spectrum, windows: list[OverlapWindow], untrimmed, canonical_unit, wl_scale: float
+) -> list[str]:
+    """Diagnostic messages for the overlap of one trimmed spectrum.
+
+    Checks, per order of the spectrum's disperser:
+
+    * the order has no active pixel (``r_m > 0`` on no fitted pixel);
+    * its source window (the photon wavelengths ``λ / m`` of the active
+      pixels) has first-order data in some **untrimmed** spectrum but no
+      continuum region, or is only partly covered by the continuum regions;
+    * the photon wavelengths fall outside the disperser's calibrated range
+      (only where the disperser exposes one).
+
+    Parameters
+    ----------
+    spectrum : Spectrum
+        Trimmed spectrum.
+    windows : list of OverlapWindow
+        Its windows from :func:`build_windows`.
+    untrimmed : iterable of Spectrum
+        All spectra before trimming (first-order data coverage).
+    canonical_unit : astropy.units.UnitBase
+        Canonical wavelength unit.
+    wl_scale : float
+        Conversion from the spectrum's unit to *canonical_unit*.
+
+    Returns
+    -------
+    list of str
+        One message per problem found.
+    """
+    from unite._utils import _get_conversion_factor
+
+    disp = spectrum.disperser
+    msgs: list[str] = []
+    by_order = {w.order: w for w in windows}
+    edges = np.asarray(spectrum.edges, dtype=float) * wl_scale
+    mids_all = 0.5 * (edges[1:] + edges[:-1])
+    label = f'Spectrum {spectrum.name!r}'
+    for ov in disp.order_overlap:
+        m = ov.order
+        win = by_order.get(m)
+        if win is not None:
+            mids = mids_all[win.i0 : win.i1][win.keep]
+            active = np.asarray(ov.evaluate(mids, canonical_unit)) > 0
+        else:
+            mids, active = np.zeros(0), np.zeros(0, dtype=bool)
+        if not active.any():
+            msg = (
+                f'{label}: order {m} overlap has no active pixels '
+                '(r_m is zero on every fitted pixel).'
+            )
+            if not isinstance(ov.scale.prior, Fixed):
+                msg += (
+                    f' Its OrderScale {ov.scale.name!r} is then constrained only '
+                    'by its prior.'
+                )
+            msgs.append(msg)
+            continue
+
+        assert win is not None
+        photon = mids[active] / m  # canonical unit
+        lo, hi = float(photon.min()), float(photon.max())
+
+        # First-order data in the source window, from the untrimmed spectra.
+        has_data = False
+        for s in untrimmed:
+            conv = _get_conversion_factor(s.unit, canonical_unit)
+            wl = np.asarray(s.wavelength) * conv
+            if np.any((wl >= lo) & (wl <= hi)):
+                has_data = True
+                break
+        if has_data:
+            in_region = win.region_mask[:, win.keep][:, active].any(axis=0)
+            if not in_region.any():
+                msgs.append(
+                    f'{label}: the order {m} source window '
+                    f'[{lo:.6g}, {hi:.6g}] {canonical_unit} has first-order data '
+                    'but no continuum region; only lines contribute to the '
+                    'overlap there.'
+                )
+            elif not in_region.all():
+                msgs.append(
+                    f'{label}: a continuum region edge falls inside the order {m} '
+                    f'source window [{lo:.6g}, {hi:.6g}] {canonical_unit}; the '
+                    'overlap continuum switches off partway.'
+                )
+
+        # R evaluated at the photon wavelengths, outside its calibration.
+        cal = disp.calibrated_range
+        if cal is not None:
+            inv = 1.0 / _get_conversion_factor(disp.unit, canonical_unit)
+            p_lo, p_hi = lo * inv, hi * inv
+            if p_lo < cal[0] or p_hi > cal[1]:
+                msgs.append(
+                    f'{label}: order {m} photon wavelengths [{p_lo:.6g}, '
+                    f'{p_hi:.6g}] {disp.unit} extend outside the calibrated '
+                    f'range [{cal[0]:.6g}, {cal[1]:.6g}] of {type(disp).__name__}; '
+                    'its resolving power is extrapolated there.'
+                )
+    return msgs

@@ -896,6 +896,14 @@ class ModelBuilder:
             for s, conv in zip(trimmed_spectra, spec_to_canonical, strict=True)
         ]
 
+        for s, conv, wins in zip(
+            trimmed_spectra, spec_to_canonical, overlap_windows, strict=True
+        ):
+            for msg in _overlap.build_warnings(
+                s, wins, self._spectra, self._canonical_unit, conv
+            ):
+                warnings.warn(msg, UserWarning, stacklevel=2)
+
         # For convolution mode, compute the kernel half-width (in fine-grid
         # indices) from the maximum LSF sigma (including the order-m kernels
         # on the observed axis) and the minimum fine-grid spacing.
