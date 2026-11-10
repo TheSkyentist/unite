@@ -7,17 +7,19 @@ individual line and continuum-region contributions in **original flux units**.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from astropy import units as u
 
-from unite._compose import compose_leave_one_out
+from unite import _overlap
+from unite._compose import compose_from_profiles, compose_leave_one_out
 from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
 from unite.continuum.compute import (
     _group_sum,
+    eval_continuum,
     eval_continuum_regions,
     integrate_continuum_regions,
     interval_lsf_fwhm,
@@ -47,6 +49,13 @@ class SpectrumPrediction:
 
     For **absorption lines**, each entry in :attr:`lines` is the flux
     *removed* by that absorber (negative): ``total - total_without_j``.
+
+    :attr:`lines` and :attr:`continuum_regions` describe the first-order
+    spectrum only.  When the disperser has higher-order overlap, the light of
+    each order *m* (lines, absorbers and continuum together, a line's image
+    included) is in :attr:`overlap`, so that
+    ``sum(lines) + sum(continuum_regions) + sum(overlap.values()) == total``.
+    All entries include ``FluxScale`` (and the overlap its ``OrderScale``).
     """
 
     #: Pixel-center wavelengths in the disperser's unit. Shape ``(n_pixels,)``.
@@ -68,6 +77,10 @@ class SpectrumPrediction:
     #: Keyed by line label; empty dict for emission-only models.
     #: Shape ``(n_samples, n_pixels)`` each.
     tau_profiles: dict[str, np.ndarray]
+    #: Higher-order overlap contribution per diffraction order *m*,
+    #: ``FluxScale * OrderScale_m * r_m(λ) * F(λ / m)``.  Empty for spectra
+    #: without overlap.  Shape ``(n_samples, n_pixels)`` each.
+    overlap: dict[int, np.ndarray] = field(default_factory=dict)
 
 
 def _evaluate_in_chunks(fn, context, n_samples: int, batch_size: int):
@@ -206,6 +219,7 @@ def evaluate_model(
 
         line_scale = float(args.line_flux_scales[i])
         cont_scale = float(args.continuum_scales[i])
+        windows = args.overlap_windows[i] if args.overlap_windows else []
 
         # Keyword-only defaults bind the per-iteration values at definition
         # time, avoiding late-binding closure issues (ruff B023) while
@@ -225,6 +239,7 @@ def evaluate_model(
             _pc=_pcodes,
             _prm=pix_region_mask,
             _full_rm=full_region_mask,
+            _wins=windows,
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
@@ -383,10 +398,55 @@ def evaluate_model(
                 )(deltas_fine)  # (n_lines, n_pixels * n_super)
                 deltas_pix = deltas_conv.reshape(-1, n_pixels, n_super).mean(axis=2)
 
+                def _source_fine(wav, frm):
+                    phi_m = _efn(wav, centers, zero_lsf, p0, p1, p2, _pc)
+                    cont_m = eval_continuum(
+                        wav, args, params, z_sys, 0.0, frm, args.cont_group_matrix
+                    )
+                    return compose_from_profiles(
+                        phi_m,
+                        scaled_flux,
+                        tau_per_line,
+                        cm.is_tau,
+                        cm.applies_matrix,
+                        args.cont_applies,
+                        cont_m * _cont_scale,
+                        has_tau=has_tau,
+                        cover_per_line=cover_per_line,
+                    )
+
+                overlaps = []
+                for win in _wins:
+                    term = _overlap.convolved_term(
+                        win,
+                        x_flat,
+                        n_super=n_super,
+                        half_width=half_width,
+                        disp=_disp,
+                        r_scale=r_scale,
+                        inv_wl_scale=_inv_wl_scale,
+                        canonical_unit=args.canonical_unit,
+                        source_fine=_source_fine,
+                    )
+                    overlaps.append(
+                        jnp.zeros(n_pixels)
+                        .at[win.q0 : win.q1]
+                        .set(params[win.scale_name] * term)
+                    )
+                for ov in overlaps:
+                    total_pix = total_pix + ov
+
                 total = flux_scale_val * total_pix
                 line_contribs = flux_scale_val * deltas_pix
+                overlaps = [flux_scale_val * ov for ov in overlaps]
 
-                return total, line_contribs, cont_regions_scaled, tau_profiles_arr
+                return (
+                    total,
+                    line_contribs,
+                    cont_regions_scaled,
+                    tau_profiles_arr,
+                    overlaps,
+                )
             else:
                 # Analytic: cumulative-at-edges per line, then diff + mask
                 # → per-pixel-averaged profile.
@@ -407,25 +467,66 @@ def evaluate_model(
                     cover_per_line=cover_per_line,
                 )
 
-            # Apply flux_scale to total and per-line contributions.
+                def _compose(pix, cont_g):
+                    return compose_from_profiles(
+                        pix,
+                        scaled_flux,
+                        tau_per_line,
+                        cm.is_tau,
+                        cm.applies_matrix,
+                        args.cont_applies,
+                        cont_g * _cont_scale,
+                        has_tau=has_tau,
+                        cover_per_line=cover_per_line,
+                    )
+
+                overlaps = []
+                for win in _wins:
+                    source = _overlap.analytic_source(
+                        win,
+                        edges,
+                        disp=_disp,
+                        r_scale=r_scale,
+                        inv_wl_scale=_inv_wl_scale,
+                        args=args,
+                        context=params,
+                        z_sys=z_sys,
+                        integrate_lines_fn=_ifn,
+                        line_params=(centers, p0, p1, p2, _pc),
+                        compose=_compose,
+                    )
+                    ratio = _overlap.ratio_at_pixels(win, edges, args.canonical_unit)
+                    overlaps.append(
+                        jnp.zeros(wavelength.shape[0])
+                        .at[win.wavelength_slice]
+                        .set(params[win.scale_name] * ratio * source)
+                    )
+                for ov in overlaps:
+                    total = total + ov
+
+            # Apply flux_scale to total, per-line and overlap contributions.
             total = flux_scale_val * total
             line_contribs = flux_scale_val * line_contribs
+            overlaps = [flux_scale_val * ov for ov in overlaps]
 
-            return total, line_contribs, cont_regions_scaled, tau_profiles_arr
+            return total, line_contribs, cont_regions_scaled, tau_profiles_arr, overlaps
 
         # Build JIT'd vmapped evaluator once per spectrum; reuse on subsequent calls.
         if args._evaluators[i] is None:
             args._evaluators[i] = jax.jit(jax.vmap(_single))
         if batch_size is None:
-            total_arr, line_arr, cont_arr, tau_arr = args._evaluators[i](context)
+            total_arr, line_arr, cont_arr, tau_arr, ov_arr = args._evaluators[i](
+                context
+            )
         else:
-            total_arr, line_arr, cont_arr, tau_arr = _evaluate_in_chunks(
+            total_arr, line_arr, cont_arr, tau_arr, ov_arr = _evaluate_in_chunks(
                 args._evaluators[i], context, n_samples, min(batch_size, n_samples)
             )
         # total_arr:  (n_samples, n_pix)
         # line_arr:   (n_samples, n_lines, n_pix)
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
         # tau_arr:    (n_samples, n_lines, n_pix)
+        # ov_arr:     list of (n_samples, n_pix), one per overlap window
 
         # Transfer line and tau arrays to host once, then use zero-copy NumPy
         # views for per-line slicing.  Individual np.asarray(jax_arr[:, j, :])
@@ -457,6 +558,9 @@ def evaluate_model(
                 lines=lines_dict,
                 continuum_regions=cont_dict,
                 tau_profiles=tau_dict,
+                overlap={
+                    w.order: np.asarray(a) for w, a in zip(windows, ov_arr, strict=True)
+                },
             )
         )
 
