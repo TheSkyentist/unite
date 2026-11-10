@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 from astropy import units as u
 from jax.typing import ArrayLike
@@ -15,7 +15,18 @@ from unite.prior import Fixed, Parameter, Prior
 # ---------------------------------------------------------------------------
 
 
-class RScale(Parameter):
+class CalibParam(Parameter):
+    """Base class of the calibration tokens carried by a :class:`Disperser`.
+
+    Subclasses set :attr:`site_prefix`, the type prefix of the numpyro site
+    name (e.g. ``'r_scale'`` gives sites named ``'r_scale_<label>'``).
+    """
+
+    #: Type prefix of the numpyro site name.
+    site_prefix: str = ''
+
+
+class RScale(CalibParam):
     """Multiplicative scale on the disperser resolving power *R*.
 
     Nominal value is 1 (no correction).  The model applies
@@ -31,13 +42,16 @@ class RScale(Parameter):
         nominal).
     """
 
+    #: Type prefix of the numpyro site name (``'r_scale_<label>'``).
+    site_prefix: str = 'r_scale'
+
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Fixed(1.0)
         super().__init__(name=name, prior=prior)
 
 
-class FluxScale(Parameter):
+class FluxScale(CalibParam):
     """Multiplicative flux normalisation between dispersers.
 
     Nominal value is 1.  The model flux is multiplied by ``flux_scale`` to
@@ -54,13 +68,16 @@ class FluxScale(Parameter):
         nominal).
     """
 
+    #: Type prefix of the numpyro site name (``'flux_scale_<label>'``).
+    site_prefix: str = 'flux_scale'
+
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
             prior = Fixed(1.0)
         super().__init__(name=name, prior=prior)
 
 
-class PixOffset(Parameter):
+class PixOffset(CalibParam):
     """Pixel displacement of the spectrum on the detector relative to the wavelength calibration.
 
     Nominal value is 0 (no displacement).  A positive value indicates the
@@ -81,6 +98,9 @@ class PixOffset(Parameter):
     prior : Prior, optional
         Prior on the pixel offset.  Defaults to ``Fixed(0.0)`` (no displacement).
     """
+
+    #: Type prefix of the numpyro site name (``'pix_offset_<label>'``).
+    site_prefix: str = 'pix_offset'
 
     def __init__(self, name: str | None = None, *, prior: Prior | None = None) -> None:
         if prior is None:
@@ -175,13 +195,9 @@ class Disperser(ABC):
         # Apply the type prefix to any token that has a user-supplied label but
         # no site name yet.  Fully anonymous tokens (label=None, name=None) are
         # named later by InstrumentConfig, which has visibility over sharing.
-        for slot, tok in [
-            ('r_scale', self.r_scale),
-            ('flux_scale', self.flux_scale),
-            ('pix_offset', self.pix_offset),
-        ]:
+        for _, tok in self.calibration_tokens():
             if tok._name is None and tok.label is not None:
-                tok.name = f'{slot}_{tok.label}'
+                tok.name = f'{tok.site_prefix}_{tok.label}'
 
     @abstractmethod
     def R(self, wavelength: ArrayLike) -> ArrayLike:
@@ -213,12 +229,30 @@ class Disperser(ABC):
             Dispersion *dλ/dpix* evaluated at each wavelength.
         """
 
+    #: Fixed calibration slots, in order.  Each is an attribute holding a token.
+    CALIB_SLOTS: tuple[str, ...] = ('r_scale', 'flux_scale', 'pix_offset')
+
+    def calibration_tokens(self) -> Iterator[tuple[str, CalibParam]]:
+        """Yield every calibration token on this disperser as ``(slot, token)``.
+
+        ``slot`` is the fixed slot name (``'r_scale'``, ``'flux_scale'``,
+        ``'pix_offset'``).  Tokens are yielded once per slot, so a token
+        occupying several slots is yielded several times; callers that need
+        unique tokens deduplicate by identity.
+
+        Yields
+        ------
+        tuple of (str, CalibParam)
+            The slot label and the token in it.
+        """
+        for slot in self.CALIB_SLOTS:
+            yield slot, getattr(self, slot)
+
     @property
     def has_calibration_params(self) -> bool:
         """``True`` if any calibration token has a non-``Fixed`` (sampled) prior."""
         return any(
-            not isinstance(tok.prior, Fixed)
-            for tok in (self.r_scale, self.flux_scale, self.pix_offset)
+            not isinstance(tok.prior, Fixed) for _, tok in self.calibration_tokens()
         )
 
     def __str__(self) -> str:
@@ -238,10 +272,10 @@ class Disperser(ABC):
 def format_calibration_sections(dispersers: Sequence[Disperser]) -> list[str]:
     """Format shared calibration-token sections for a multi-line ``__repr__``.
 
-    Deduplicates ``r_scale``/``flux_scale``/``pix_offset`` tokens by identity
-    across *dispersers* — a token shared by several dispersers (or several
-    spectra pointing at the same disperser) is listed once — and renders each
-    attribute as an indented ``name  prior`` block.
+    Deduplicates the calibration tokens (:meth:`Disperser.calibration_tokens`)
+    by identity across *dispersers* — a token shared by several dispersers (or
+    several spectra pointing at the same disperser) is listed once — and
+    renders each token type as an indented ``name  prior`` block.
 
     Parameters
     ----------
@@ -255,28 +289,21 @@ def format_calibration_sections(dispersers: Sequence[Disperser]) -> list[str]:
         Lines to append to a ``__repr__``, each section preceded by a blank
         line. Empty if no disperser carries a calibration token.
     """
-    calib_params: dict[str, list[tuple[str, Parameter]]] = {
-        'r_scale': [],
-        'flux_scale': [],
-        'pix_offset': [],
-    }
-    seen_ids: dict[str, set[int]] = {
-        'r_scale': set(),
-        'flux_scale': set(),
-        'pix_offset': set(),
-    }
+    # Grouped by site prefix (one section per token type), deduplicated by
+    # token identity within each group, in first-seen order.
+    calib_params: dict[str, list[tuple[str, CalibParam]]] = {}
+    seen_ids: set[int] = set()
     seen_dispersers: set[int] = set()
     for d in dispersers:
         if id(d) in seen_dispersers:
             continue
         seen_dispersers.add(id(d))
-        for attr in ('r_scale', 'flux_scale', 'pix_offset'):
-            token = getattr(d, attr)
-            if token is not None:
-                token_id = id(token)
-                if token_id not in seen_ids[attr]:
-                    seen_ids[attr].add(token_id)
-                    calib_params[attr].append((token.display_name, token))
+        for _, token in d.calibration_tokens():
+            if id(token) in seen_ids:
+                continue
+            seen_ids.add(id(token))
+            group = calib_params.setdefault(token.site_prefix, [])
+            group.append((token.display_name, token))
 
     lines: list[str] = []
     for attr, params in calib_params.items():

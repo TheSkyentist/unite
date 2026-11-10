@@ -614,7 +614,7 @@ class ModelBuilder:
             disp = spectrum.disperser
             if id(disp) not in seen_dispersers:
                 seen_dispersers.add(id(disp))
-                for tok in (disp.r_scale, disp.flux_scale, disp.pix_offset):
+                for _, tok in disp.calibration_tokens():
                     if id(tok) not in seen_tok_ids:
                         tok_name = tok.name
                         seen_tok_ids.add(id(tok))
