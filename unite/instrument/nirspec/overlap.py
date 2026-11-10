@@ -41,6 +41,17 @@ sides with :math:`f_\lambda = f_\nu c / \lambda^2` gives
 :func:`order_overlap_from_msaexp` returns exactly these :math:`r_m(\lambda)`
 as functions of the observed wavelength in µm, zero wherever either
 sensitivity is untabulated or non-positive.
+
+Scope
+-----
+Only the parsing of the msaexp table is specific to NIRSpec: the factor
+:math:`m^{-2}` follows from the :math:`f_\nu` to :math:`f_\lambda`
+conversion alone, and :class:`SensitivityRatio` accepts any tabulated ratio.
+For another instrument, derive :math:`S_m` from a blue spectrophotometric
+standard observed in the same configuration.  NIRSpec needs no atmospheric
+term; for ground-based spectra see the Notes of
+:class:`~unite.instrument.base.Disperser`, which also list the instruments
+to which this description of the overlap does and does not apply.
 """
 
 from __future__ import annotations
@@ -172,6 +183,12 @@ def order_overlap_from_msaexp(
     ValueError
         If an order is smaller than 2, or (with ``strict=True``) a requested
         order has no positive ratio anywhere.
+
+    Notes
+    -----
+    The tables are not bundled with ``unite``.  The returned ratios are
+    fixed: the uncertainty on the msaexp sensitivity curves is not
+    propagated into the model.
 
     Examples
     --------

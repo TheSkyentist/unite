@@ -153,9 +153,53 @@ class Disperser(ABC):
         ``F_1(λ)``, where ``F_1(λ / m)`` is pixel-integrated and
         LSF-convolved at the order-*m* resolution ``R_m(λ / m) =
         m R(λ / m)``, i.e. with ``R`` at the photon wavelength (see
-        :doc:`/usage/instrument`).  ``None`` (default) disables the term.
+        Notes).  ``None`` (default) disables the term.
         Runtime-only: not serialised by
         :class:`~unite.instrument.config.InstrumentConfig`.
+
+    Notes
+    -----
+    **Scope of** ``order_overlap``.  The term describes order-*m* light of
+    the *same source* landing on its own first-order spectrum, in a spectrum
+    that the pipeline flux-calibrated with the first-order sensitivity only.
+    This occurs for single-order gratings and grisms that cover more than
+    an octave behind their order-sorting filter (cut-on ``λ_c``), at
+    ``λ > m λ_c``: NIRSpec G140M/H with F070LP and G235M/H with F170LP in
+    extended extractions, the MUSE extended mode, and low-resolution optical
+    long-slit or multi-object set-ups.  It does not describe:
+
+    - cross-dispersed echelles, where the orders are separated spatially;
+    - spectrographs whose arms each cover less than an octave (e.g. SDSS,
+      DESI), and prisms, which have no higher orders;
+    - slitless spectroscopy, where the contamination comes from *other*
+      sources;
+    - light of another spectrum (or its higher orders) falling onto this
+      one.
+
+    Leave ``order_overlap`` unset in those cases.
+
+    **Model.**  The full first-order model (lines, absorbers and continuum)
+    is evaluated at ``λ / m`` in both integration modes.
+
+    - The continuum at ``λ / m`` is only non-zero inside a configured
+      continuum region, so the continuum configuration must cover both the
+      contaminated range and the range it is contaminated by.  Lines that
+      are covered only through a higher-order image are still dropped by
+      the coverage filtering of :meth:`~unite.spectrum.Spectra.prepare`.
+    - Light of wavelength ``λ / m`` forms the same image on the detector
+      (in pixels) in every order, while the dispersion of order *m* is *m*
+      times larger, hence ``R_m(λ / m) = m R(λ / m)``.  This holds for any
+      grating or grism, not only NIRSpec.
+    - ``r_scale``, ``flux_scale`` and ``pix_offset`` apply to the overlap
+      term exactly as to the first-order term.
+    - The ratios are deterministic: no parameter describes the uncertainty
+      on the throughput calibration.
+
+    **Atmosphere.**  Ground-based pipelines correct the telluric and
+    extinction transmission ``T`` at the observed wavelength ``λ``, whereas
+    the order-*m* photons were absorbed at ``λ / m``.  The effective ratio
+    is then ``r_m(λ) T(λ / m) / T(λ)``, a factor that the caller must
+    include in ``r_m``.  It is absent for space-based spectra.
     """
 
     def __init__(
