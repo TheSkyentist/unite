@@ -28,7 +28,6 @@ htmlcov/
 
 # Benchmark and profiling artifacts
 .benchmarks/
-.codspeed/
 artifacts/
 traces/
 

@@ -4,9 +4,11 @@ Run locally with::
 
     pixi run bench
 
-Or in instrumentation mode (CodSpeed)::
+Record a run and compare against it later (stored privately in
+``.benchmarks/``)::
 
-    pixi run -e bench-ci bench-codspeed
+    pixi run bench-save
+    pixi run bench-compare
 
 See ``benchmarks/README.md`` for the full story.
 """

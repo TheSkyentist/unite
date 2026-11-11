@@ -60,7 +60,6 @@ bench = [
     "pytest-benchmark>=5.2.0, <6",
     "pyinstrument>=5.0.0, <6",
 ]
-bench-ci = ["unite[test]", "pytest-codspeed>=3.2.0, <4"]
 dev = ["unite[test,docs,bench,explore]", "ruff>=0.11.9", "pre-commit"]
 build = ["build>=1.4.0, <2"]
 
@@ -108,21 +107,18 @@ test = "pytest -n auto"
 test-cov = "pytest -n auto --cov=unite --cov-report=term-missing --cov-report=xml:coverage.xml"
 
 [tool.pixi.feature.bench.tasks]
-# Local wall-time benchmarking (pytest-benchmark).
+# Local wall-time benchmarking (pytest-benchmark).  Runs are stored privately
+# under .benchmarks/<machine>/ (gitignored), named by commit; see
+# benchmarks/README.md.
 bench = "pytest benchmarks/ --benchmark-only"
-bench-save = "pytest benchmarks/ --benchmark-only --benchmark-save=baseline"
-bench-compare = "pytest benchmarks/ --benchmark-only --benchmark-compare=baseline"
+# Record a fast-set run, named <number>_<commit>_<date>[_uncommitted-changes].
+bench-save = "pytest benchmarks/ --benchmark-only -m 'not slow' --benchmark-autosave"
+# Run the fast set and compare against the latest saved run.  To pick an older
+# one:  pixi run bench-compare --benchmark-compare=0002
+bench-compare = "pytest benchmarks/ --benchmark-only -m 'not slow' --benchmark-compare"
 # Standalone JAX profiling (Perfetto trace + optional memory profile).
 profile = "python profiling/profile_fit.py"
 profile-mem = "python profiling/profile_fit.py --memory"
-
-[tool.pixi.feature.bench-ci.dependencies]
-# pytest-codspeed's Valgrind wrapper is not compiled for Python 3.14+ yet.
-python = ">=3.12,<3.14"
-
-[tool.pixi.feature.bench-ci.tasks]
-# Instruction-count benchmarking via pytest-codspeed (used by CI).
-bench-codspeed = "pytest benchmarks/ --codspeed"
 
 [tool.pixi.feature.test-py312.dependencies]
 python = ">=3.12,<3.13"
@@ -162,7 +158,6 @@ test-py315 = { features = ["test", "test-py315"], solve-group = "py315" }
 test-lowest = { features = ["test-lowest"], solve-group = "lowest" }
 docs = { features = ["docs", "explore"], solve-group = "docs" }
 bench = { features = ["bench"], solve-group = "default" }
-bench-ci = { features = ["bench-ci"], solve-group = "bench-ci" }
 
 # ---------------------------------------------------------------------------
 # ty
@@ -245,7 +240,7 @@ filterwarnings = [
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "benchmark: marks tests as benchmarks (also recognised by pytest-codspeed)",
+    "benchmark: marks tests as benchmarks",
 ]
 
 # ---------------------------------------------------------------------------

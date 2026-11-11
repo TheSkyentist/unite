@@ -17,17 +17,22 @@ pixi run bench                              # all benchmarks
 pixi run -e bench pytest benchmarks/ --benchmark-only -m "not slow"  # fast only
 ```
 
-### A/B comparing branches (e.g. for design decisions)
+### Recording runs and comparing backwards
+
+Results are stored privately in `.benchmarks/<machine>/` (gitignored), so history is per machine and per Python.
 
 ```bash
-# On main
-pixi run bench-save                          # saves baseline under .benchmarks/
-
-# On feature branch
-pixi run bench-compare                       # diff vs baseline, exits non-zero on >10% regression
+pixi run bench-save                          # fast set -> .benchmarks/<machine>/0004_<commit>_<date>.json
+pixi run bench-compare                       # fast set, compared to the latest saved run
+pixi run bench-compare --benchmark-compare=0002              # ...or to an older run
+pixi run bench-compare --benchmark-compare-fail=median:25%   # exit non-zero on a big regression
+pixi run -e bench pytest-benchmark compare 0002 0004         # two saved runs, no re-run
 ```
 
-`bench-save` and `bench-compare` use `pytest-benchmark`'s built-in JSON storage. To compare two arbitrary saved runs, see `pytest-benchmark compare --help`.
+- The file name carries the commit hash, plus `_uncommitted-changes` if the tree was dirty. Dependencies are pinned per commit by `pixi.lock`, so the commit identifies the environment.
+- Benchmarks are matched by name; ones missing on either side are shown as new or dropped, not compared.
+- A single run is noisy. Keep the machine quiet and plugged in, and treat differences under ~10% as nothing until a repeat agrees. If a result is surprising, re-run the baseline on the same machine.
+- Changing a benchmark's workload without renaming it makes old results incomparable; rename it when you do.
 
 ### Interactive profiling
 
@@ -39,13 +44,9 @@ pixi run -e bench python profiling/profile_fit.py --config multi --pyinstrument
 
 Open the trace from `traces/` at <https://ui.perfetto.dev> for a flame graph of XLA ops and host-side Python.
 
-## How CI works
+## CI
 
-`.github/workflows/bench.yml` runs on every PR to `main`. It uses **pytest-codspeed** (instruction-count benchmarking via Cachegrind) so the noisy GitHub Actions runners don't pollute measurements. CodSpeed posts a PR comment with per-benchmark deltas — informational only, never blocks the merge.
-
-**Onboarding**: the repo must be added to your CodSpeed organisation at <https://codspeed.io> for the action to post results. The token comes from `secrets.CODSPEED_TOKEN`; for public OSS repos this is set automatically. Before onboarding, the action will still run but uploads will no-op.
-
-`@pytest.mark.slow` benchmarks are excluded from CI (`-m "not slow"`) since compile-time and short-MCMC benchmarks aren't useful as regression signals.
+There is none for benchmarks; they are run locally before merging (see above).
 
 ## Authoring guidelines
 
@@ -77,7 +78,7 @@ JAX recompiles on shape or dtype changes. If a benchmark accidentally feeds diff
 
 ### Naming
 
-Functions starting with `test_` are auto-collected. Use the `benchmark` fixture (provided by both `pytest-benchmark` and `pytest-codspeed`) — files don't need to know which plugin is active.
+Functions starting with `test_` are auto-collected. Use the `benchmark` fixture (from `pytest-benchmark`).
 
 ### Slow vs fast
 
@@ -87,11 +88,11 @@ Mark anything taking >0.5s with `@pytest.mark.slow`:
 - short MCMC benches
 - any future end-to-end fit benchmark
 
-Slow benches still run locally with `pixi run bench`; they're filtered out in CI.
+Slow benches still run locally with `pixi run bench`; `bench-save` and `bench-compare` skip them.
 
 ## Adding a benchmark
 
 1. Add a function `test_<name>` to the relevant `bench_*.py` (or create a new file). It must take `benchmark` and optionally the existing fixtures (`minimal_bench`, `single_grating_bench`, `multi_grating_bench`, `rng_key`).
 2. JIT-compile the target, warm it, then `benchmark(lambda: block(fn(...)))`.
 3. Locally: `pixi run bench -- benchmarks/bench_<file>.py::test_<name>` to verify it runs.
-4. On PR: CodSpeed will start tracking it once merged to `main`.
+4. `pixi run bench-save` to include it in the recorded history.

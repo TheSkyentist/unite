@@ -61,29 +61,22 @@ def _clear():
     jax.clear_caches()
 
 
-def _pedantic_or_skip(benchmark, fn):
-    """Use ``benchmark.pedantic`` if available; otherwise skip.
-
-    pytest-codspeed does not implement the pedantic API, so under codspeed we
-    skip cold-cache compile benches — they're intended for local A/B work,
-    not CI regression tracking anyway (already excluded via ``-m "not slow"``).
-    """
-    if not hasattr(benchmark, 'pedantic'):
-        pytest.skip('Compile-time benches require pytest-benchmark.pedantic')
+def _pedantic(benchmark, fn):
+    """Time ``fn`` cold: clear every JAX cache before each of 3 rounds."""
     benchmark.pedantic(fn, setup=_clear, rounds=3, iterations=1)
 
 
 @pytest.mark.slow
 def test_compile_minimal(benchmark):
     """Cold-cache compile time for the minimal model."""
-    _pedantic_or_skip(benchmark, _compile_once_minimal)
+    _pedantic(benchmark, _compile_once_minimal)
 
 
 @pytest.mark.slow
 def test_compile_single_grating(benchmark):
-    _pedantic_or_skip(benchmark, _compile_once_single_grating)
+    _pedantic(benchmark, _compile_once_single_grating)
 
 
 @pytest.mark.slow
 def test_compile_multi_grating(benchmark):
-    _pedantic_or_skip(benchmark, _compile_once_multi_grating)
+    _pedantic(benchmark, _compile_once_multi_grating)

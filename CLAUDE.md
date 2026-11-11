@@ -144,7 +144,7 @@ Performance suite lives in `benchmarks/` (a Python package, separate from `tests
 
 - `bench_kernels.py` — microbenchmarks for inner JAX primitives. Includes parametrized per-`Profile` `integrate`/`evaluate` benchmarks (auto-covers every registered `Profile` subclass via `PROFILE_CLASSES` in `_helpers.py`).
 - `bench_endtoend.py` — `log_density` and `value_and_grad` of the full numpyro model on three canonical configs (`minimal`, `single_grating`, `multi_grating`), plus parametrized variants over both `integration_mode` values and an absorber-only A/B against pure-emission single-grating. Short MCMC runs are included as `@pytest.mark.slow`.
-- `bench_compile.py` — cold-cache JIT trace + lowering time, measured via `benchmark.pedantic` + `jax.clear_caches()` between rounds. All `@pytest.mark.slow`. Skipped under pytest-codspeed (which lacks `.pedantic`).
+- `bench_compile.py` — cold-cache JIT trace + lowering time, measured via `benchmark.pedantic` + `jax.clear_caches()` between rounds. All `@pytest.mark.slow`.
 
 Shared scaffolding:
 
@@ -162,7 +162,7 @@ pixi run profile            # write a Perfetto trace to traces/
 pixi run profile-mem        # also dump device memory pprof
 ```
 
-CI runs `pixi run -e bench-ci pytest benchmarks/ --codspeed -m "not slow"` via `bench.yml` (pytest-codspeed in instrumentation mode). The repo must be onboarded at <https://codspeed.io> for results to post; the workflow itself runs regardless.
+Benchmarks are **local only** (no CI): `bench-save` records a fast-set run under `.benchmarks/<machine>/` (gitignored; the file name carries the commit hash and `_uncommitted-changes` if the tree was dirty), and `bench-compare` runs the fast set against the latest saved run (or `--benchmark-compare=NNNN` for an older one). Benchmarks are matched by name, so a branch that adds one just shows it as new. Dependency versions are pinned per commit by `pixi.lock`, so a commit hash identifies the environment.
 
 ### Adding a benchmark
 
@@ -174,13 +174,12 @@ CI runs `pixi run -e bench-ci pytest benchmarks/ --codspeed -m "not slow"` via `
 
 ## CI/CD
 
-Five GitHub Actions workflows, all targeting `main`:
+Four GitHub Actions workflows, all targeting `main`:
 
 | Workflow          | Trigger                                      | Purpose                                                                             |
 | ----------------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `ci.yml`          | push/PR to `main`                            | format check, lint, tests on Python 3.12–3.14; coverage uploaded to Codecov on 3.14 |
 | `docs.yml`        | PR to `main` + manual                        | builds Sphinx docs (including executing all tutorials)                              |
-| `bench.yml`       | PR to `main` + manual                        | runs the benchmark suite under CodSpeed; informational PR comments, never blocks    |
 | `autorelease.yml` | push to `main` when `pyproject.toml` changes | creates a GitHub Release for the new version tag                                    |
 | `publish.yml`     | GitHub Release published                     | builds sdist + wheel, publishes to PyPI via trusted publishing                      |
 
