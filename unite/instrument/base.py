@@ -329,16 +329,6 @@ class Disperser(ABC):
             yield f'{ov.scale.site_prefix}_{ov.order}', ov.scale
 
     @property
-    def calibrated_range(self) -> tuple[float, float] | None:
-        """Wavelength range ``(low, high)`` over which :meth:`R` is calibrated.
-
-        In :attr:`unit`.  ``None`` (default) when the disperser does not
-        expose one.  Used to warn when the higher-order overlap evaluates
-        ``R`` at photon wavelengths outside it.
-        """
-        return None
-
-    @property
     def has_calibration_params(self) -> bool:
         """``True`` if any calibration token has a non-``Fixed`` (sampled) prior."""
         return any(

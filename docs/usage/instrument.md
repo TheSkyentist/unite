@@ -318,9 +318,7 @@ configured continuum regions. {meth}`~unite.model.ModelBuilder.build` warns when
 - an order has no active pixel among the fitted pixels (noting when a free `OrderScale` is then
   constrained only by its prior);
 - the photon wavelengths of an order (its *source window*) have first-order data but no
-  continuum region, or a region edge falls inside the window;
-- the photon wavelengths fall outside a disperser's calibrated *R* range (where the disperser
-  exposes one, see {attr}`~unite.instrument.base.Disperser.calibrated_range`).
+  continuum region, or a region edge falls inside the window.
 
 **Outputs.** {class}`~unite.compute.SpectrumPrediction` gains `overlap` (a dict keyed by order,
 including `FluxScale` and `OrderScale`), and the spectra tables an `overlap_{m}` column per order.

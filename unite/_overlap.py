@@ -404,9 +404,7 @@ def build_warnings(
     * the order has no active pixel (``r_m > 0`` on no fitted pixel);
     * its source window (the photon wavelengths ``λ / m`` of the active
       pixels) has first-order data in some **untrimmed** spectrum but no
-      continuum region, or is only partly covered by the continuum regions;
-    * the photon wavelengths fall outside the disperser's calibrated range
-      (only where the disperser exposes one).
+      continuum region, or is only partly covered by the continuum regions.
 
     Parameters
     ----------
@@ -481,18 +479,5 @@ def build_warnings(
                     f'{label}: a continuum region edge falls inside the order {m} '
                     f'source window [{lo:.6g}, {hi:.6g}] {canonical_unit}; the '
                     'overlap continuum switches off partway.'
-                )
-
-        # R evaluated at the photon wavelengths, outside its calibration.
-        cal = disp.calibrated_range
-        if cal is not None:
-            inv = 1.0 / _get_conversion_factor(disp.unit, canonical_unit)
-            p_lo, p_hi = lo * inv, hi * inv
-            if p_lo < cal[0] or p_hi > cal[1]:
-                msgs.append(
-                    f'{label}: order {m} photon wavelengths [{p_lo:.6g}, '
-                    f'{p_hi:.6g}] {disp.unit} extend outside the calibrated '
-                    f'range [{cal[0]:.6g}, {cal[1]:.6g}] of {type(disp).__name__}; '
-                    'its resolving power is extrapolated there.'
                 )
     return msgs

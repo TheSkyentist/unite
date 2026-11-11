@@ -917,19 +917,3 @@ class TestBuildWarnings:
         with warnings.catch_warnings():
             warnings.simplefilter('error')
             _build(d, regions=regions, spectra_list=[spec])
-
-    def test_r_extrapolation(self, ratio_dir):
-        class Calibrated(GenericDisperser):
-            @property
-            def calibrated_range(self):
-                return (0.9, 2.0)
-
-        d = Calibrated(
-            R_func=lambda w: jnp.full_like(jnp.asarray(w, dtype=float), 1000.0),
-            dlam_dpix_func=lambda w: w / 1000.0,
-            unit=u.um,
-            name='g140m',
-            order_overlap=[OrderOverlap(2, ratio_dir / 'r2.ecsv')],
-        )
-        with pytest.warns(UserWarning, match='extrapolated'):
-            _build(d)

@@ -104,11 +104,6 @@ class DESIDisperser(Disperser):
             order_overlap=order_overlap,
         )
 
-    @property
-    def calibrated_range(self) -> tuple[float, float]:
-        """Nominal wavelength range of the arm (Angstrom)."""
-        return _ARM_WAVE_RANGE[self.arm]
-
     def R(self, wavelength: ArrayLike) -> ArrayLike:
         """Return the resolving power at the given wavelengths (Angstrom).
 
