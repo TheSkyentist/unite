@@ -26,15 +26,22 @@ the model against the data of each spectrum as you move them.
 
 ## Running it
 
-The explorer needs `marimo`, `plotly` and `anywidget`. In the project's Pixi setup:
+The explorer needs `marimo`, `plotly` and `anywidget`. The simplest way to get them is
+the `explore` extra:
 
 ```bash
-pixi run -e explore explore
+pip install "unite[explore]"
 ```
 
-which opens the notebook in the marimo editor. It is a plain Python file, so you can also
-[download it from GitHub](https://github.com/TheSkyentist/unite/blob/main/examples/explorer.py),
-install those three packages in your own environment, and run `marimo edit explorer.py`.
+Or install those three packages yourself. In the project's Pixi setup:
+
+```bash
+pixi run -e docs explore
+```
+
+opens the notebook in the marimo editor. The notebook is a plain Python file, so you can
+also [download it from GitHub](https://github.com/TheSkyentist/unite/blob/main/examples/explorer.py)
+and run `marimo edit explorer.py` in an environment with either of the above.
 
 ## Using your own data
 
