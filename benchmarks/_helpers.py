@@ -96,10 +96,17 @@ def make_spectrum(
     name: str,
     R: float = 3000.0,
     seed: int = 42,
+    **disperser_kwargs,
 ) -> Spectrum:
-    """Build a synthetic ``Spectrum`` on a uniform wavelength grid (Å)."""
+    """Build a synthetic ``Spectrum`` on a uniform wavelength grid (Å).
+
+    Extra keyword arguments (e.g. ``pix_offset``, ``order_overlap``) are
+    passed to the :class:`~unite.instrument.generic.SimpleDisperser`.
+    """
     wavelength = np.linspace(wl_min, wl_max, n_pixels) * u.AA
-    disperser = SimpleDisperser(wavelength=wavelength, R=R, name=f'{name}_disp')
+    disperser = SimpleDisperser(
+        wavelength=wavelength, R=R, name=f'{name}_disp', **disperser_kwargs
+    )
     dx = np.gradient(wavelength)
     low = wavelength - 0.5 * dx
     high = wavelength + 0.5 * dx
@@ -367,6 +374,67 @@ def cfg_multi_grating():
         ]
     )
     return lc, cc
+
+
+def cfg_overlap():
+    """7 narrow lines + one linear continuum region over 3000-8000 Å.
+
+    For the higher-order overlap benchmarks: with the ratio of
+    :func:`write_overlap_ratio`, second-order light from 3000-4000 Å
+    (continuum and [OII] 3727) lands on 6000-8000 Å, on top of the first-order
+    H-alpha complex.
+    """
+    lc = line.LineConfiguration()
+    z_narrow = line.Redshift(prior=prior.Uniform(-0.005, 0.005))
+    fwhm_narrow = line.FWHM(prior=prior.Uniform(100.0, 500.0))
+    for name, centre in [
+        ('OII_3727', 3727.0),
+        ('H_beta', 4861.0),
+        ('OIII_4959', 4959.0),
+        ('OIII_5007', 5007.0),
+        ('NII_6548', 6548.0),
+        ('H_alpha', 6563.0),
+        ('NII_6584', 6584.0),
+    ]:
+        lc.add_line(
+            name,
+            center=centre * u.AA,
+            redshift=z_narrow,
+            fwhm_gauss=fwhm_narrow,
+            flux=line.Flux(prior=prior.Uniform(0.0, 200.0)),
+        )
+    cc = ContinuumConfiguration(
+        [ContinuumRegion(3000.0 * u.AA, 8000.0 * u.AA, Linear())]
+    )
+    return lc, cc
+
+
+def write_overlap_ratio(path) -> None:
+    """Write a second-order ``throughput_ratio`` file: 0 below 6050 Å, ~0.05 above."""
+    from astropy.table import Table
+
+    wl = np.linspace(5900.0, 8100.0, 221)
+    ratio = 0.05 / (1.0 + np.exp(-(wl - 6100.0) / 30.0))
+    ratio[wl < 6050.0] = 0.0
+    Table({'wavelength': wl * u.AA, 'throughput_ratio': ratio}).write(
+        path, overwrite=True
+    )
+
+
+def make_overlap_spectrum(name: str, ratio_path=None) -> Spectrum:
+    """2000-pixel 3000-8000 Å spectrum (R = 1000) with a bounded ``PixOffset``.
+
+    With *ratio_path* the disperser carries a second-order overlap with a free
+    ``OrderScale``; without it the spectrum is otherwise identical, so the
+    pair isolates the cost of the overlap term.
+    """
+    from unite.instrument import OrderOverlap, OrderScale, PixOffset
+
+    kwargs = {'pix_offset': PixOffset(prior=prior.TruncatedNormal(0.0, 0.2, -0.5, 0.5))}
+    if ratio_path is not None:
+        scale = OrderScale(prior=prior.TruncatedNormal(1.0, 0.2, 0.5, 1.5))
+        kwargs['order_overlap'] = [OrderOverlap(2, ratio_path, scale=scale)]
+    return make_spectrum(3000, 8000, 2000, name, R=1000.0, **kwargs)
 
 
 # ----------------------------------------------------------------------

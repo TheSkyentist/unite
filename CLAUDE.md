@@ -149,11 +149,12 @@ Performance suite lives in `benchmarks/` (a Python package, separate from `tests
 - `bench_kernels.py` — microbenchmarks for inner JAX primitives. Includes parametrized per-`Profile` `integrate`/`evaluate` benchmarks (auto-covers every registered `Profile` subclass via `PROFILE_CLASSES` in `_helpers.py`).
 - `bench_endtoend.py` — `log_density` and `value_and_grad` of the full numpyro model on three canonical configs (`minimal`, `single_grating`, `multi_grating`), plus parametrized variants over both `integration_mode` values and an absorber-only A/B against pure-emission single-grating. Short MCMC runs are included as `@pytest.mark.slow`.
 - `bench_compile.py` — cold-cache JIT trace + lowering time, measured via `benchmark.pedantic` + `jax.clear_caches()` between rounds. All `@pytest.mark.slow`.
+- `bench_overlap.py` — higher-order grating overlap: `log_density`, value+grad and `evaluate_model` on the `overlap_by_mode` fixture (`[analytic|convolution]-[off|on]`; each on/off pair differs only by the second-order term, so their ratio is its cost), plus a slow cold-cache compile benchmark.
 
 Shared scaffolding:
 
-- `benchmarks/_helpers.py` — `Bench` container, `block()`, synthetic-spectrum factory, three canonical `cfg_*` builders (`cfg_minimal`, `cfg_single_grating`, `cfg_single_grating_with_absorber`, `cfg_multi_grating`), `PROFILE_CLASSES`, `default_param_for(name)`.
-- `benchmarks/conftest.py` — session-scoped fixtures (`minimal_bench`, `single_grating_bench`, `single_grating_absorber_bench`, `multi_grating_bench`) and a parametrized `single_grating_by_mode` fixture covering all three integration modes.
+- `benchmarks/_helpers.py` — `Bench` container, `block()`, synthetic-spectrum factory, three canonical `cfg_*` builders (`cfg_minimal`, `cfg_single_grating`, `cfg_single_grating_with_absorber`, `cfg_multi_grating`), `cfg_overlap` with `write_overlap_ratio`/`make_overlap_spectrum` (3000–8000 Å, 2000 pixels, optional second-order overlap), `PROFILE_CLASSES`, `default_param_for(name)`.
+- `benchmarks/conftest.py` — session-scoped fixtures (`minimal_bench`, `single_grating_bench`, `single_grating_absorber_bench`, `multi_grating_bench`), a parametrized `single_grating_by_mode` fixture covering all three integration modes, and `overlap_by_mode` (integration mode × overlap off/on).
 - `profiling/profile_fit.py` — standalone CLI: runs a fit under `jax.profiler.trace` (Perfetto trace), with `--memory` for a device-memory pprof and `--pyinstrument` for a Python sampling profile.
 
 ### Running
