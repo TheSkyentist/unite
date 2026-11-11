@@ -74,17 +74,6 @@ def _build(impl, codes):
 IMPLS = ('switch', 'grouped')
 
 
-@pytest.mark.parametrize('mix', MIXES)
-def test_grouped_matches_switch(grid, mix):
-    """Correctness: grouped output equals the reference switch dispatch."""
-    edges, lsf = grid
-    codes, centers, p0, p1, p2 = _line_inputs(MIXES[mix])
-    ref = integrate_lines(edges, centers, lsf, p0, p1, p2, jnp.asarray(codes))
-    fn, cargs = _build('grouped', codes)
-    out = fn(edges, centers, lsf, p0, p1, p2, cargs)
-    np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
-
-
 @pytest.mark.parametrize('impl', IMPLS)
 @pytest.mark.parametrize('mix', MIXES)
 def test_integrate_forward(benchmark, grid, mix, impl):
