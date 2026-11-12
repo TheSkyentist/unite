@@ -1525,6 +1525,23 @@ class TestParamUnits:
         apply_cs, _phys_unit = pu['scale']
         assert apply_cs is True
 
+    @pytest.mark.parametrize(
+        'form',
+        [BSpline([1.0] * u.um, degree=3), Bernstein(degree=3), Chebyshev(2, 0.1)],
+    )
+    def test_shape_coefficients_dimensionless(self, form):
+        """Normalised-shape coefficients are ratios, not flux densities.
+
+        ``scale * S(u) / S(u_nw)`` fixes the first coefficient at 1, so only
+        ``scale`` carries (and is multiplied by) the continuum scale.
+        """
+        pu = form.param_units(_FLUX_UNIT, _WL_UNIT)
+        assert pu['scale'] == (True, _FLUX_UNIT)
+        coeffs = [n for n in form.param_names() if n not in ('scale', 'norm_wav')]
+        assert coeffs
+        for name in coeffs:
+            assert pu[name] == (False, None)
+
     def test_linear_angle_dimensionless(self):
         pu = Linear().param_units(_FLUX_UNIT, _WL_UNIT)
         _, angle_unit = pu['angle']

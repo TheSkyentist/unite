@@ -933,10 +933,12 @@ class Chebyshev(ContinuumForm):
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
-        # x is normalised to [-1, 1], so all coefficients have unit flux_unit.
+        # Only ``scale`` carries flux units.  The coefficients are dimensionless
+        # shape ratios (first coefficient fixed at 1; the function is
+        # ``scale * shape / shape_nw``), so they are not scaled by the continuum.
         d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
         for i in range(1, self._order + 1):
-            d[f'c{i}'] = (True, flux_unit)
+            d[f'c{i}'] = (False, None)
         d['norm_wav'] = (False, wl_unit)
         return d
 
@@ -1230,10 +1232,13 @@ class BSpline(ContinuumForm):
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
-        # B-spline coefficients share the same unit as the function value.
+        # Only ``scale`` carries flux units.  The coefficients are dimensionless
+        # shape ratios: the function is ``scale * S(u) / S(u_nw)`` with the
+        # first coefficient fixed at 1, so they must not be multiplied by
+        # the continuum scale.
         d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
         for i in range(1, self._n_basis):
-            d[f'coeff_{i}'] = (True, flux_unit)
+            d[f'coeff_{i}'] = (False, None)
         d['norm_wav'] = (False, wl_unit)
         return d
 
@@ -1403,10 +1408,12 @@ class Bernstein(ContinuumForm):
     def param_units(
         self, flux_unit: u.UnitBase, wl_unit: u.UnitBase
     ) -> dict[str, tuple[bool, u.UnitBase | None]]:
-        # Bernstein coefficients share the same unit as the function value.
+        # Only ``scale`` carries flux units.  The coefficients are dimensionless
+        # shape ratios (first coefficient fixed at 1; the function is
+        # ``scale * shape / shape_nw``), so they are not scaled by the continuum.
         d: dict[str, tuple[bool, u.UnitBase | None]] = {'scale': (True, flux_unit)}
         for i in range(1, self._degree + 1):
-            d[f'coeff_{i}'] = (True, flux_unit)
+            d[f'coeff_{i}'] = (False, None)
         d['norm_wav'] = (False, wl_unit)
         return d
 
