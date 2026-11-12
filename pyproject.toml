@@ -6,7 +6,7 @@ authors = [
     { name = "Raphael Erik Hviding", email = "raphael.hviding@gmail.com" },
 ]
 requires-python = ">= 3.12"
-version = "3.9.4"
+version = "3.9.5"
 dependencies = [
     "jax>=0.10.2",
     "numpy>=2.0",
@@ -43,11 +43,7 @@ docs = [
     "sphinx-gallery>=0.19.0, <1",
     "furo>=2025.12.19,<2026",
 ]
-explore = [
-    "marimo>=0.25,<1",
-    "plotly>=6,<7",
-    "anywidget>=0.9,<1",
-]
+explore = ["marimo>=0.25,<1", "plotly>=6,<7", "anywidget>=0.9,<1"]
 test-lowest = [
     "unite[test]",
     "jax==0.10.2",
