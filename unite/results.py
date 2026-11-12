@@ -624,6 +624,30 @@ def _compute_percentiles(
     return np.percentile(arr, percentiles_arr * 100, axis=0)
 
 
+def _interp_per_sample(x: np.ndarray, values: np.ndarray, at: np.ndarray):
+    """Linearly interpolate each sample's row of *values* at its own point.
+
+    Parameters
+    ----------
+    x : ndarray, shape ``(n_pix,)``
+        Increasing grid.
+    values : ndarray, shape ``(n_samples, n_pix)``
+        Values on the grid for each sample.
+    at : ndarray, shape ``(n_samples,)``
+        Evaluation point for each sample (clipped to the grid).
+
+    Returns
+    -------
+    ndarray, shape ``(n_samples,)``
+    """
+    x = np.asarray(x, dtype=float)
+    hi = np.clip(np.searchsorted(x, at), 1, len(x) - 1)
+    lo = hi - 1
+    t = np.clip((at - x[lo]) / (x[hi] - x[lo]), 0.0, 1.0)
+    rows = np.arange(values.shape[0])
+    return values[rows, lo] * (1.0 - t) + values[rows, hi] * t
+
+
 def _compute_rew_columns(
     samples: dict[str, np.ndarray],
     args: ModelArgs,
@@ -646,9 +670,13 @@ def _compute_rew_columns(
 
         REW = ∫ delta_j / C_center_j  dλ / (1 + z)
 
-    where ``delta_j`` is the flux removed by the absorber
-    (``total * (1 - 1/T_j)``, negative).  The integral is evaluated via the
-    trapezoidal rule on the finest spectrum grid that covers the line.
+    where ``delta_j`` is the flux removed by the absorber (negative) and
+    ``C_center_j`` the total continuum at the line centre, both taken from the
+    *same* :class:`~unite.compute.SpectrumPrediction`, so units and the
+    disperser's ``FluxScale`` cancel.  The integral is evaluated via the
+    trapezoidal rule on the finest spectrum grid that covers the line (ties go
+    to the lowest spectrum index).  Up to pixel sampling and resolution, the
+    result does not depend on which covering spectrum is used.
 
     Parameters
     ----------
@@ -788,12 +816,19 @@ def _compute_rew_columns(
                 continue
             delta_flux = pred.lines[label]  # (n_samples, n_pix), negative
 
-            # Total continuum at line center, summing all covering regions.
-            cont_center = _cont_at_point(obs_wl_j) * cont_scale  # (n_samples,)
+            # Total continuum at the line centre, from the same prediction as
+            # ``delta_flux``: it carries that spectrum's flux unit, continuum
+            # scale and FluxScale, so the ratio is self-consistent.
+            wl_grid = pred.wavelength * args.spec_to_canonical[best_spec_idx]
+            cont_total = sum(pred.continuum_regions.values())
+            if isinstance(cont_total, int):  # no continuum regions in the prediction
+                continue
+            cont_center = _interp_per_sample(wl_grid, cont_total, obs_wl_j)
+            if np.all(cont_center == 0.0):
+                continue  # no continuum region covers this line
             cont_center = np.where(np.abs(cont_center) > 1e-30, cont_center, 1e-30)
 
             # Trapezoid integration: REW = ∫ (delta / C_center) dλ / (1+z).
-            wl_grid = pred.wavelength * args.spec_to_canonical[best_spec_idx]
             integrand = delta_flux / cont_center[:, None]  # (n_samples, n_pix)
             rew_obs = np.trapezoid(integrand, x=wl_grid, axis=1)  # (n_samples,)
             rew = rew_obs / (1.0 + z_total)

@@ -737,6 +737,117 @@ class TestREWAccuracy:
 
 
 # ---------------------------------------------------------------------------
+# Absorber REW against an analytic oracle, with multiple spectra
+# ---------------------------------------------------------------------------
+
+_ABS_Z = 3.3
+_ABS_REST = 8500.0  # Angstrom
+_ABS_FWHM_KMS = 300.0
+_ABS_TAU = 1.0
+_UNIT_17 = u.Unit('1e-17 erg / (s cm2 um)')
+_UNIT_16 = u.Unit('1e-16 erg / (s cm2 um)')
+
+
+def _abs_spectrum(name, npix, unit, flux_scale):
+    """Resolved (R=1e5) spectrum around the redshifted absorber."""
+    from unite.instrument import FluxScale
+
+    centre_um = _ABS_REST * (1 + _ABS_Z) * 1e-4
+    wavelength = np.linspace(centre_um - 0.06, centre_um + 0.06, npix) * u.um
+    disperser = SimpleDisperser(
+        wavelength=wavelength,
+        R=1e5,
+        name=name,
+        flux_scale=FluxScale(prior=prior.Fixed(flux_scale)),
+    )
+    half = 0.5 * np.gradient(wavelength)
+    return Spectrum(
+        low=wavelength - half,
+        high=wavelength + half,
+        flux=np.full(npix, 5.0) * unit,
+        error=np.ones(npix) * unit,
+        disperser=disperser,
+        name=name,
+    )
+
+
+def _abs_rew_args(form, finest_first, finest_flux_scale):
+    """Absorber-only model on two spectra with different flux units.
+
+    The finest spectrum carries ``finest_flux_scale`` and a different flux
+    unit from the other one.  ``finest_first`` selects whether it is spectrum 0.
+    """
+    from unite.continuum import BSpline
+    from unite.line.config import Tau
+    from unite.line.library import Gaussian
+
+    fine = _abs_spectrum('fine', 600, _UNIT_16, finest_flux_scale)
+    coarse = _abs_spectrum('coarse', 300, _UNIT_17, 1.0)
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'A',
+        _ABS_REST * u.AA,
+        profile=Gaussian(),
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(_ABS_FWHM_KMS)),
+        tau=Tau(prior=prior.Fixed(_ABS_TAU)),
+    )
+    cont_form = (
+        BSpline(knots=[8450, 8500, 8550] * u.AA) if form == 'bspline' else Linear()
+    )
+    cc = ContinuumConfiguration.from_lines(
+        lc.centers, width=30_000 * u.km / u.s, form=cont_form
+    )
+    for region in cc:
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        if form == 'bspline':
+            for i in range(1, region.form.n_basis):
+                region.params[f'coeff_{i}'] = ContShape(prior=prior.Fixed(1.0))
+        else:
+            region.params['angle'] = ContShape(prior=prior.Fixed(0.0))
+    spectra = Spectra(
+        [fine, coarse] if finest_first else [coarse, fine], redshift=_ABS_Z
+    )
+    spectra.prepare(lc, cc)
+    spectra.line_scale = 5e-17 * u.erg / (u.s * u.cm**2)
+    spectra.continuum_scale = 50e-17 * u.erg / (u.s * u.cm**2 * u.um)
+    _, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+    # The regression only bites if the spectra really are in different units.
+    assert args.spectra[0].flux_unit != args.spectra[1].flux_unit
+    return args
+
+
+def _abs_rew_oracle():
+    """Closed-form rest REW (Angstrom) of a resolved Gaussian absorber."""
+    from scipy.integrate import quad
+
+    lam0 = _ABS_REST * (1 + _ABS_Z)
+    fwhm = lam0 * _ABS_FWHM_KMS / 299792.458
+    k = 4 * np.log(2) / fwhm**2
+    integral, _ = quad(
+        lambda x: np.expm1(-_ABS_TAU * np.exp(-k * x * x)), -20 * fwhm, 20 * fwhm
+    )
+    return integral / (1 + _ABS_Z)
+
+
+class TestAbsorberREWMultiSpectrum:
+    """Absorber REW must not depend on spectrum order, units or ``FluxScale``."""
+
+    @pytest.mark.parametrize('form', ['linear', 'bspline'])
+    @pytest.mark.parametrize('finest_first', [True, False])
+    @pytest.mark.parametrize('finest_flux_scale', [1.0, 0.85])
+    def test_matches_analytic_rew(self, form, finest_first, finest_flux_scale):
+        from unite.results import _compute_rew_columns
+
+        args = _abs_rew_args(form, finest_first, finest_flux_scale)
+        rew = _compute_rew_columns({}, args)['rew_A']
+        rew_aa = (np.asarray(rew) * args.canonical_unit).to(u.AA).value
+        np.testing.assert_allclose(rew_aa, _abs_rew_oracle(), rtol=2e-2)
+
+
+# ---------------------------------------------------------------------------
 # Optical depth profile columns in spectra tables
 # ---------------------------------------------------------------------------
 
