@@ -313,9 +313,12 @@ evaluated only over the pixels where $r_m$ can be non-zero, widened by a margin 
 bounds of the `PixOffset` prior (the full spectrum when the prior is unbounded).
 
 **Coverage.** Lines and continuum regions at $\lambda/m$ enter the overlap only if coverage
-filtering keeps them (they must be covered at first order by some spectrum); nothing is kept
-solely for the overlap. In particular, the continuum at $\lambda/m$ is zero outside the
-configured continuum regions. {meth}`~unite.model.ModelBuilder.build` warns when
+filtering keeps them. By default ({meth}`~unite.spectrum.Spectra.prepare` with
+`keep_overlap_images=True`) an item is also kept when its order-$m$ image (observed wavelength
+times $m$) lands on a spectrum inside the support of that disperser's ratio table, even with no
+first-order coverage; lines kept only this way trigger a warning, since they are constrained
+only by the overlap. Pass `keep_overlap_images=False` to require first-order coverage. In
+particular, the continuum at $\lambda/m$ is zero outside the configured continuum regions. {meth}`~unite.model.ModelBuilder.build` warns when
 
 - an order has no active pixel among the fitted pixels (noting when a free `OrderScale` is then
   constrained only by its prior);

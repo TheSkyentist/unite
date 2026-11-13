@@ -910,12 +910,14 @@ class TestBuildWarnings:
 
     def test_source_window_without_first_order_data_is_silent(self, ratio_dir):
         # Spectrum starts at 1.0 um: photons at 0.65-0.9 um have no data and
-        # no region; nothing to warn about.
+        # no region; nothing to warn about at build time (``prepare`` does warn
+        # that the line is kept only through its overlap image).
         regions = {'nir': (8204.0, 20000.0)}
         d = _g140m(ratio_dir / 'r2.ecsv')
         spec = _make_toy(d, wl_range=(1.0, 1.8))
         with warnings.catch_warnings():
             warnings.simplefilter('error')
+            warnings.filterwarnings('ignore', message='.*higher-order image')
             _build(d, regions=regions, spectra_list=[spec])
 
 
@@ -954,3 +956,49 @@ class TestMsaexpOrderRatio:
             msaexp_order_ratio(self._table(), 1)
         with pytest.raises(ValueError, match='sensitivity_3'):
             msaexp_order_ratio(self._table(), 3)
+
+
+class TestOverlapImageCoverage:
+    """``Spectra.prepare`` keeps lines whose higher-order image is covered."""
+
+    def _spectra(self, disperser):
+        # Covers 1.4-1.8 um only: the line is at 0.80 um, its 2nd-order image at 1.60.
+        return Spectra([_make_toy(disperser, wl_range=(1.4, 1.8))], redshift=Z_SYS)
+
+    def test_kept_with_warning(self, ratio_dir):
+        spectra = self._spectra(_g140m(ratio_dir / 'r2.ecsv'))
+        with pytest.warns(UserWarning, match='higher-order image'):
+            lines, cont = spectra.prepare(
+                _line_config(), _cont_config(), drop_empty_regions=False
+            )
+        assert len(lines) == 1
+        assert cont is not None
+
+    def test_opt_out_drops(self, ratio_dir):
+        spectra = self._spectra(_g140m(ratio_dir / 'r2.ecsv'))
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            lines, _ = spectra.prepare(
+                _line_config(), keep_overlap_images=False, drop_empty_regions=False
+            )
+        assert len(lines) == 0
+
+    def test_no_overlap_drops_silently(self):
+        spectra = self._spectra(nirspec.G140M())
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            lines, _ = spectra.prepare(_line_config(), drop_empty_regions=False)
+        assert len(lines) == 0
+
+    def test_image_outside_ratio_support_dropped(self, ratio_dir):
+        # 'far' is non-zero only above 3 um, away from the 1.60 um image.
+        spectra = self._spectra(_g140m(ratio_dir / 'far.ecsv'))
+        lines, _ = spectra.prepare(_line_config(), drop_empty_regions=False)
+        assert len(lines) == 0
+
+    def test_first_order_coverage_is_silent(self, ratio_dir):
+        spectra = Spectra([_make_toy(_g140m(ratio_dir / 'r2.ecsv'))], redshift=Z_SYS)
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            lines, _ = spectra.prepare(_line_config(), drop_empty_regions=False)
+        assert len(lines) == 1
