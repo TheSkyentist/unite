@@ -41,6 +41,8 @@ NIRSpec Dispersers
    :undoc-members:
    :show-inheritance:
 
+.. autofunction:: unite.instrument.nirspec.msaexp_order_ratio
+
 SDSS Disperser
 --------------
 

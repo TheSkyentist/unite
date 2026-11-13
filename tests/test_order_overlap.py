@@ -917,3 +917,40 @@ class TestBuildWarnings:
         with warnings.catch_warnings():
             warnings.simplefilter('error')
             _build(d, regions=regions, spectra_list=[spec])
+
+
+class TestMsaexpOrderRatio:
+    """``msaexp_order_ratio`` converts sensitivities to the f_lambda ratio."""
+
+    @staticmethod
+    def _table():
+        wl = np.linspace(1.0, 4.0, 301)
+        return Table(
+            {
+                'wavelength': wl,
+                'sensitivity': np.full_like(wl, 2.0),
+                'sensitivity_2': np.where(wl < 1.2, 0.0, 1.0),
+            }
+        )
+
+    def test_values_and_zero_outside(self, tmp_path):
+        from unite.instrument.nirspec import msaexp_order_ratio
+
+        out = msaexp_order_ratio(self._table(), 2, path=tmp_path / 'r.fits')
+        wl_ph = np.linspace(1.0, 4.0, 301)
+        assert np.allclose(out['wavelength'].value, 2 * wl_ph)
+        r = np.asarray(out['throughput_ratio'])
+        # S_2 = 0 blueward of 1.2 um; S_1 undefined redward of 4 um observed
+        assert np.all(r[wl_ph < 1.2] == 0.0)
+        assert np.all(r[wl_ph > 2.0 + 1e-9] == 0.0)
+        mid = (wl_ph >= 1.2) & (wl_ph <= 2.0)
+        assert np.allclose(r[mid], 1.0 / (4 * 2.0))
+        assert (tmp_path / 'r.fits').exists()
+
+    def test_bad_input(self):
+        from unite.instrument.nirspec import msaexp_order_ratio
+
+        with pytest.raises(ValueError, match='order'):
+            msaexp_order_ratio(self._table(), 1)
+        with pytest.raises(ValueError, match='sensitivity_3'):
+            msaexp_order_ratio(self._table(), 3)

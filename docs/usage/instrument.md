@@ -293,7 +293,9 @@ g140m = nirspec.G140M(
 The ratio is in the **f_lambda convention** and relative to the nominal first-order throughput
 (before `FluxScale`). Outside the tabulated range the contribution is exactly zero. You are
 responsible for producing the file; msaexp-style sensitivity curves $S_m$ (per unit $f_\nu$,
-against photon wavelength) convert as $r_m(\lambda) = S_m(\lambda/m) / (m^2 S_1(\lambda))$.
+against photon wavelength) convert as $r_m(\lambda) = S_m(\lambda/m) / (m^2 S_1(\lambda))$,
+which {func}`unite.instrument.nirspec.msaexp_order_ratio` does for you (e.g.
+`msaexp_order_ratio('g140m_f070lp', 2, path='g140m_order2.fits')`).
 For ground-based data, fold the telluric/extinction factor $T(\lambda/m)/T(\lambda)$ into the
 ratio.
 

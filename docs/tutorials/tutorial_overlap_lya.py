@@ -31,7 +31,6 @@ from pathlib import Path
 import astropy.units as u
 import numpy as np
 from astropy.table import Table
-from astropy.utils.data import download_file
 from matplotlib import pyplot
 
 from unite import continuum, instrument, line, model, prior, results, spectrum
@@ -63,36 +62,14 @@ lya_obs = {m: (m * lya_rest * (1 + zspec)).to(u.um) for m in orders}
 #
 # The factor :math:`m^2` converts to the :math:`f_\lambda` convention: the
 # order-*m* image is dispersed *m* times as much, and the source flux density
-# is taken per unit photon wavelength, another factor of *m*.
+# is taken per unit photon wavelength, another factor of *m*.  The conversion is
+# done by :func:`unite.instrument.nirspec.msaexp_order_ratio`.
 
 workdir = Path(tempfile.mkdtemp())
-sensitivity = Table.read(
-    download_file(
-        'https://raw.githubusercontent.com/gbrammer/msaexp/main/msaexp/data/'
-        'extended_sensitivity/msaexp_sensitivity_g140m_f070lp_001.fits',
-        cache=True,
-    )
-)
-
-
-def order_ratio(m):
-    """Write r_m for G140M/F070LP to a file and return its path."""
-    wl = np.asarray(sensitivity['wavelength'], dtype=float)  # photon wavelength, µm
-    s_1 = np.nan_to_num(np.asarray(sensitivity['sensitivity'], dtype=float))
-    s_m = np.nan_to_num(np.asarray(sensitivity[f'sensitivity_{m}'], dtype=float))
-
-    wl_obs = m * wl  # where the order-m photons land
-    s1_obs = np.interp(wl_obs, wl, s_1, left=0.0, right=0.0)
-    ratio = np.zeros_like(wl_obs)
-    ok = (s1_obs > 0) & (s_m > 0)
-    ratio[ok] = s_m[ok] / (m**2 * s1_obs[ok])
-
-    path = workdir / f'g140m_f070lp_order{m}.fits'
-    Table({'wavelength': wl_obs * u.um, 'throughput_ratio': ratio}).write(path)
-    return path
-
-
-ratio_files = {m: order_ratio(m) for m in (2, 3)}
+ratio_files = {}
+for m in (2, 3):
+    ratio_files[m] = workdir / f'g140m_f070lp_order{m}.fits'
+    nirspec.msaexp_order_ratio('g140m_f070lp', m, path=ratio_files[m])
 
 # %%
 # The two ratios, with the three Ly\ :math:`\alpha` images marked.

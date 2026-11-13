@@ -36,7 +36,6 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro
 from astropy.table import Table
-from astropy.utils.data import download_file
 from matplotlib import pyplot, ticker
 from numpyro import infer
 
@@ -75,33 +74,11 @@ pyplot.style.use('unite.mplstyle')
 # observed wavelength is diluted by 2, and the source flux density is taken
 # per unit photon wavelength, another factor of 2.
 
-MSAEXP_URL = (
-    'https://raw.githubusercontent.com/gbrammer/msaexp/main/msaexp/data/'
-    'extended_sensitivity/msaexp_sensitivity_{}_001.fits'
-)
 workdir = Path(tempfile.mkdtemp())
-
-
-def second_order_ratio(grating_filter):
-    """Write r_2 for one grating/filter pair to a file and return its path."""
-    table = Table.read(download_file(MSAEXP_URL.format(grating_filter), cache=True))
-    wl = np.asarray(table['wavelength'], dtype=float)  # photon wavelength, µm
-    s_1 = np.nan_to_num(np.asarray(table['sensitivity'], dtype=float))
-    s_2 = np.nan_to_num(np.asarray(table['sensitivity_2'], dtype=float))
-
-    wl_obs = 2 * wl  # where the second-order photons land
-    s1_obs = np.interp(wl_obs, wl, s_1, left=0.0, right=0.0)
-    ratio = np.zeros_like(wl_obs)
-    ok = (s1_obs > 0) & (s_2 > 0)
-    ratio[ok] = s_2[ok] / (4 * s1_obs[ok])
-
-    path = workdir / f'{grating_filter}_order2.fits'
-    Table({'wavelength': wl_obs * u.um, 'throughput_ratio': ratio}).write(path)
-    return path
-
-
-g140m_ratio = second_order_ratio('g140m_f070lp')
-g235m_ratio = second_order_ratio('g235m_f170lp')
+g140m_ratio = workdir / 'g140m_f070lp_order2.fits'
+g235m_ratio = workdir / 'g235m_f170lp_order2.fits'
+nirspec.msaexp_order_ratio('g140m_f070lp', 2, path=g140m_ratio)
+nirspec.msaexp_order_ratio('g235m_f170lp', 2, path=g235m_ratio)
 
 # %%
 # ``OrderOverlap`` reads a table with a wavelength column (with a length unit)
