@@ -40,6 +40,8 @@ auto_tutorials/tutorial_nirspec
 auto_tutorials/tutorial_generic
 auto_tutorials/tutorial_freeze
 auto_tutorials/tutorial_config
+auto_tutorials/tutorial_overlap_broadline
+auto_tutorials/tutorial_overlap_lya
 tutorials/explorer
 sg_execution_times
 ```
