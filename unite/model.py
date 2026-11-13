@@ -521,7 +521,7 @@ def _validate_init_values(
         distribution = prior.to_dist(known)
         assert distribution is not None  # Fixed priors handled above
         support = distribution.support
-        low, high = float(support.lower_bound), float(support.upper_bound)  # ty: ignore[unresolved-attribute]
+        low, high = float(support.lower_bound), float(support.upper_bound)  # ty: ignore[missing-attribute]
         if not low < prior.init < high:
             msg = (
                 f'init={prior.init!r} for parameter {pname!r} lies outside its '

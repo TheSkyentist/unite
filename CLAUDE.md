@@ -24,7 +24,7 @@ pixi run test-lowest  # Test against lowest compatible dependency versions
 pixi run docs         # Build Sphinx documentation
 pixi run docs-clean   # Build docs from scratch (clean build directory first)
 pixi run build        # Build sdist + wheel
-pixi run type-check   # Run basedpyright for type checking
+pixi run type-check   # Run ty for type checking
 ```
 
 To run a single test file or specific test:
@@ -127,7 +127,7 @@ pixi run -e test-py312 test -- tests/test_instrument_nirspec.py::test_function_n
 - **Parameter site names**: The `name` argument on tokens is a human-readable label. The numpyro site name is the label with a type-specific prefix prepended at model-build time (e.g. `z_` for redshifts, `flux_` for fluxes, `tau_` for optical depths).
 - **Flux vs tau parametrization**: Lines parametrized by `Flux` are additive profiles scaled by integrated flux (can be positive or negative — negative flux is useful for placing non-detection constraints). Lines parametrized by `Tau` (dimensionless optical depth) produce multiplicative transmission `T = exp(-tau * phi)` applied to emission/continuum. Any profile shape can be used with either parametrization — the distinction is made by passing `tau=Tau()` to `add_line` (defaults to `Flux()` if neither is specified; passing both raises `TypeError`). Tau is never mixed with `flux_scale` — they flow through separate matrices (`flux_matrix` vs `tau_matrix`). A covering fraction is folded into an effective per-absorber optical depth `-log(1 - cf*(1 - exp(-tau*phi)))` (`_compose._effective_depth`), so absorbers still compose by summing depths (independent screens).
 - **Tests**: `pytest` with `xfail_strict=True` and warnings treated as errors. Coverage tracks branches.
-- **Formatting, Linting, and Type Checking**: We use ruff for formatting and linting as well as basedpyright type checking. These are all part of our CI tests with Pixi tasks.
+- **Formatting, Linting, and Type Checking**: We use ruff for formatting and linting as well as ty (Astral) for type checking. These are all part of our CI tests with Pixi tasks.
 - **`absorption.py`**: Top-level standalone module (not yet part of the package) implementing JAX-jittable Balmer absorption (`balmer_transmission`, `full_balmer_transmission`) via Voigt profiles using the Humlicek W4 Faddeeva approximation. Used for post-fit HI absorption diagnostics.
 
 ## Documentation

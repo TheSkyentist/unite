@@ -106,8 +106,8 @@ def pix_offset_margin(prior: Prior) -> int | None:
             if distribution is None:
                 return None
             support = distribution.support
-            lo = float(support.lower_bound)  # ty: ignore[unresolved-attribute]
-            hi = float(support.upper_bound)  # ty: ignore[unresolved-attribute]
+            lo = float(support.lower_bound)  # ty: ignore[missing-attribute]
+            hi = float(support.upper_bound)  # ty: ignore[missing-attribute]
         except _BOUND_ERRORS:
             return None
         if not (math.isfinite(lo) and math.isfinite(hi)):
