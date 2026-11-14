@@ -347,7 +347,10 @@ def make_spectra_tables(
         When ``return_hdul=True``: an :class:`~astropy.io.fits.HDUList` with
         HDU 0 empty and one :class:`~astropy.io.fits.BinTableHDU` per spectrum.
         In both cases columns carry physical units where ``flux_unit`` was set
-        on the spectrum.
+        on the spectrum.  Spectra whose disperser has higher-order overlap get
+        one ``overlap_{m}`` column per order *m* (see
+        :attr:`~unite.compute.SpectrumPrediction.overlap`); the line and
+        continuum columns are first-order only.
     """
     if predictions is None:
         predictions = evaluate_model(samples, args, batch_size=batch_size)
@@ -400,6 +403,11 @@ def make_spectra_tables(
                 t[f'od_{name}'] = _compute_percentiles(
                     arr[:, pixel_mask], percentiles
                 ).T
+            for order, arr in pred.overlap.items():
+                t[f'overlap_{order}'] = u.Quantity(
+                    _compute_percentiles(arr[:, pixel_mask], percentiles).T,
+                    unit=spec_flux_unit,
+                )
         else:
             # (n_samples, n_pixels) → trim → transpose to (n_pixels, n_samples)
             t['model_total'] = u.Quantity(
@@ -411,6 +419,10 @@ def make_spectra_tables(
                 t[name] = u.Quantity(arr[:, pixel_mask].T, unit=spec_flux_unit)
             for name, arr in pred.tau_profiles.items():
                 t[f'od_{name}'] = arr[:, pixel_mask].T
+            for order, arr in pred.overlap.items():
+                t[f'overlap_{order}'] = u.Quantity(
+                    arr[:, pixel_mask].T, unit=spec_flux_unit
+                )
 
         # Add observed data columns.
         t['observed_flux'] = u.Quantity(

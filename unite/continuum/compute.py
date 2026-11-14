@@ -289,10 +289,12 @@ def interval_lsf_fwhm(lsf_at_edges):
     return 0.5 * (lsf_at_edges[1:] + lsf_at_edges[:-1])
 
 
-def region_lsf_fwhm(args, disp, z_sys, inv_wl_scale, r_scale):
+def region_lsf_fwhm(args, disp, z_sys, inv_wl_scale, r_scale, order: int = 1):
     """LSF FWHM at each continuum region centre (observed frame).
 
-    Used for continuum forms that take one LSF per region.
+    Used for continuum forms that take one LSF per region.  For a higher
+    diffraction order *m* (``order > 1``) the region centre is the photon
+    wavelength and the FWHM is ``λ_c / (m R(λ_c))`` (``R_m = m R``).
 
     Parameters
     ----------
@@ -306,6 +308,8 @@ def region_lsf_fwhm(args, disp, z_sys, inv_wl_scale, r_scale):
         Conversion from canonical wavelength to the disperser's unit.
     r_scale : float or jnp.ndarray
         Resolving-power scale.
+    order : int, optional
+        Diffraction order (default 1).
 
     Returns
     -------
@@ -315,7 +319,7 @@ def region_lsf_fwhm(args, disp, z_sys, inv_wl_scale, r_scale):
     if args.cont_config is None or args.cont_center is None:
         return jnp.zeros(0)
     centers_obs = jnp.array(args.cont_center) * (1.0 + z_sys)
-    return centers_obs / (disp.R(centers_obs * inv_wl_scale) * r_scale)
+    return centers_obs / (order * disp.R(centers_obs * inv_wl_scale) * r_scale)
 
 
 def integrate_continuum(

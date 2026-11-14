@@ -21,11 +21,14 @@ Unit("Angstrom")
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import jax.numpy as jnp
 from astropy import units as u
 from jax.typing import ArrayLike
 
 from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.overlap import OrderOverlap
 
 _ARM_WAVE_RANGE: dict[str, tuple[float, float]] = {
     'B': (3600.0, 5800.0),
@@ -60,9 +63,15 @@ class DESIDisperser(Disperser):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the pixel shift.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
     """
 
     ARMS: tuple[str, ...] = ('B', 'R', 'Z')
+
+    #: Each DESI arm covers less than an octave: no higher-order overlap.
+    supports_order_overlap: bool = False
 
     def __init__(
         self,
@@ -71,6 +80,7 @@ class DESIDisperser(Disperser):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         arm_upper = arm.upper()
         if arm_upper not in self.ARMS:
@@ -91,6 +101,7 @@ class DESIDisperser(Disperser):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def R(self, wavelength: ArrayLike) -> ArrayLike:

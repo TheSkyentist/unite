@@ -35,7 +35,9 @@ Serialization
 :meth:`to_dict` hoists all unique calibration tokens to a top-level
 ``calib_params`` section keyed by token name.  Disperser entries reference
 tokens by name.  Shared tokens round-trip correctly — the same object is
-reconstructed for both entries.
+reconstructed for both entries.  A disperser with higher-order overlap gets an
+``order_overlap`` list of ``{order, path, scale[, column]}`` mappings, its
+:class:`~unite.instrument.base.OrderScale` tokens hoisted like the others.
 
 Examples
 --------
@@ -64,6 +66,7 @@ from unite._utils import _alpha_name
 from unite.instrument.base import (
     Disperser,
     FluxScale,
+    OrderScale,
     PixOffset,
     RScale,
     format_calibration_sections,
@@ -78,6 +81,7 @@ from unite.instrument.nirspec.disperser import (
     PRISM,
     NIRSpec,
 )
+from unite.instrument.overlap import RATIO_COLUMN, OrderOverlap
 from unite.instrument.sdss.disperser import SDSSDisperser
 from unite.prior import Fixed, Parameter, prior_from_dict
 
@@ -100,6 +104,7 @@ _CALIB_REGISTRY: dict[str, type[Parameter]] = {
     'RScale': RScale,
     'FluxScale': FluxScale,
     'PixOffset': PixOffset,
+    'OrderScale': OrderScale,
 }
 
 # ---------------------------------------------------------------------------
@@ -153,11 +158,37 @@ def _disperser_to_entry(disperser: Disperser) -> dict:
         d['grating'] = disperser.grating
         d['r_source'] = disperser.r_source
 
-    # CalibParam references by token name.
-    for attr in ('r_scale', 'flux_scale', 'pix_offset'):
-        d[attr] = getattr(disperser, attr).name
+    # CalibParam references by token name (fixed slots only).
+    for slot, token in disperser.calibration_tokens():
+        if slot in Disperser.CALIB_SLOTS:
+            d[slot] = token.name
+
+    # Higher-order overlap: one mapping per order (key omitted when none).
+    if disperser.order_overlap:
+        d['order_overlap'] = [_overlap_to_dict(ov) for ov in disperser.order_overlap]
 
     return d
+
+
+def _overlap_to_dict(ov: OrderOverlap) -> dict:
+    """Serialize an :class:`OrderOverlap` (its scale referenced by name)."""
+    d: dict = {'order': ov.order, 'path': str(ov.path), 'scale': ov.scale.name}
+    if ov.column != RATIO_COLUMN:
+        d['column'] = ov.column
+    return d
+
+
+def _overlap_from_dict(d: dict, token_registry: dict[str, Parameter]) -> OrderOverlap:
+    """Reconstruct an :class:`OrderOverlap` from its serialized mapping."""
+    path = Path(d['path'])
+    if not path.exists():
+        msg = f'order_overlap file not found: {str(path)!r} (order {d['order']}).'
+        raise FileNotFoundError(msg)
+    scale = token_registry[d['scale']]
+    if not isinstance(scale, OrderScale):
+        msg = f'order_overlap scale {d['scale']!r} is not an OrderScale token.'
+        raise TypeError(msg)
+    return OrderOverlap(d['order'], path, column=d.get('column'), scale=scale)
 
 
 def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disperser:
@@ -187,8 +218,12 @@ def _disperser_from_entry(d: dict, token_registry: dict[str, Parameter]) -> Disp
     elif 'r_source' in d:
         kwargs['r_source'] = d['r_source']
 
-    for attr in ('r_scale', 'flux_scale', 'pix_offset'):
-        kwargs[attr] = token_registry[d[attr]]
+    for slot in Disperser.CALIB_SLOTS:
+        kwargs[slot] = token_registry[d[slot]]
+    if d.get('order_overlap'):
+        kwargs['order_overlap'] = [
+            _overlap_from_dict(e, token_registry) for e in d['order_overlap']
+        ]
 
     return cls(**kwargs)
 
@@ -259,47 +294,50 @@ class InstrumentConfig:
         :class:`~unite.instrument.base.Disperser`.  This method handles the
         remaining anonymous tokens (``label=None``, ``name=None``):
 
-        * **Unshared** token on a single named disperser → ``'{prefix}_{disperser.name}'``
-          (e.g. ``FluxScale()`` on ``G235H`` → ``'fs_G235H'``).
-        * **Shared** token across multiple dispersers, or disperser with no name
-          → alphabetic counter: ``'r_a'``, ``'r_b'``, …
+        * **Unshared** token (one slot on a single named disperser) →
+          ``'{prefix}_{disperser.name}{qualifier}'``, where the qualifier is
+          the part of the slot label after the prefix (empty for the fixed
+          slots), e.g. ``FluxScale()`` on ``G235H`` → ``'flux_scale_G235H'``.
+        * **Shared** token (several slots or dispersers), or disperser with no
+          name → alphabetic counter per prefix: ``'r_scale_a'``,
+          ``'r_scale_b'``, …
 
-        A shared anonymous token (same instance on multiple dispersers) is
-        encountered once and receives exactly one name.
+        Slots are enumerated with
+        :meth:`~unite.instrument.base.Disperser.calibration_tokens`.  A shared
+        anonymous token is encountered once and receives exactly one name.
         """
-        _slots = ('r_scale', 'flux_scale', 'pix_offset')
-
-        # Pre-compute which dispersers each anonymous token appears on.
-        tok_dispersers: dict[int, list] = {}
+        # Count the slots each anonymous token occupies (over all dispersers).
+        tok_slots: dict[int, int] = {}
         for d in self._dispersers:
-            for slot in _slots:
-                tok = getattr(d, slot)
+            for _, tok in d.calibration_tokens():
                 if tok._name is None:
-                    tok_dispersers.setdefault(id(tok), []).append(d)
+                    tok_slots[id(tok)] = tok_slots.get(id(tok), 0) + 1
 
-        counters: dict[str, int] = {}  # slot → next alpha index
+        counters: dict[str, int] = {}  # site prefix → next alpha index
         seen: set[int] = set()  # id(tok) already named
 
         for d in self._dispersers:
-            for slot in _slots:
-                tok = getattr(d, slot)
+            for slot, tok in d.calibration_tokens():
                 if tok._name is not None or id(tok) in seen:
                     continue
                 seen.add(id(tok))
-                dispersers_with_tok = tok_dispersers.get(id(tok), [])
+                prefix = tok.site_prefix
                 if tok.label is not None:
                     # User-supplied label takes priority (name already set by base.py).
                     pass
-                elif len(dispersers_with_tok) == 1 and d.name:
-                    # Unshared token on a single named disperser: use its name.
-                    tok.name = f'{slot}_{d.name}'
-                    tok.label = d.name
+                elif tok_slots.get(id(tok), 0) == 1 and d.name:
+                    # Unshared token on a single named disperser: use its name,
+                    # plus any slot qualifier beyond the prefix (e.g. the order).
+                    suffix = slot[len(prefix) :]
+                    tok.name = f'{prefix}_{d.name}{suffix}'
+                    tok.label = f'{d.name}{suffix}'
                 else:
-                    # Shared across multiple dispersers or unnamed disperser: alpha.
-                    idx = counters.get(slot, 0)
-                    counters[slot] = idx + 1
+                    # Shared across several slots/dispersers, or unnamed
+                    # disperser: alphabetic counter per prefix.
+                    idx = counters.get(prefix, 0)
+                    counters[prefix] = idx + 1
                     label = _alpha_name(idx)
-                    tok.name = f'{slot}_{label}'
+                    tok.name = f'{prefix}_{label}'
                     tok.label = label
 
     # -- validation ----------------------------------------------------------
@@ -360,8 +398,7 @@ class InstrumentConfig:
         # Collect all unique tokens (preserving insertion order).
         seen_ids: dict[int, Parameter] = {}
         for d in self._dispersers:
-            for attr in ('r_scale', 'flux_scale', 'pix_offset'):
-                token = getattr(d, attr)
+            for _, token in d.calibration_tokens():
                 if id(token) not in seen_ids:
                     seen_ids[id(token)] = token
 

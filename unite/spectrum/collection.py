@@ -122,6 +122,24 @@ class SpectrumScaleDiagnostic:
 # ---------------------------------------------------------------------------
 
 
+def _covers_overlap_image(spectrum: Spectrum, low: float, high: float) -> bool:
+    """Whether a higher-order image of the observed window lands on *spectrum*.
+
+    The order-*m* image of ``[low, high]`` is ``[m * low, m * high]``; it counts
+    when it overlaps the spectrum's pixels within the support of the order's
+    throughput ratio.  *low* and *high* are in the disperser's unit.
+    """
+    for ov in getattr(spectrum.disperser, 'order_overlap', ()):
+        bounds = ov.support_bounds(spectrum.unit)
+        if bounds is None:
+            continue
+        lo = max(ov.order * low, bounds[0])
+        hi = min(ov.order * high, bounds[1])
+        if lo < hi and spectrum.covers(lo, hi):
+            return True
+    return False
+
+
 class Spectra:
     """Collection of spectra with coverage filtering.
 
@@ -517,6 +535,7 @@ class Spectra:
         *,
         linedet_width: u.Quantity = 1000.0 * u.km / u.s,
         drop_empty_regions: bool = True,
+        keep_overlap_images: bool = True,
     ) -> tuple[LineConfiguration, ContinuumConfiguration | None]:
         """Filter configs for coverage and optionally drop empty continuum regions.
 
@@ -537,6 +556,10 @@ class Spectra:
         drop_empty_regions : bool
             If ``True`` (default), drop continuum regions that do not contain
             any filtered line (in rest frame).
+        keep_overlap_images : bool
+            If ``True`` (default), a line or continuum region also counts as
+            covered when its higher-order image lands on a spectrum whose
+            disperser has ``order_overlap``.  See :meth:`filter_config`.
 
         Returns
         -------
@@ -546,7 +569,10 @@ class Spectra:
         from unite.continuum.config import ContinuumConfiguration
 
         filtered_lines, filtered_cont = self.filter_config(
-            line_config, continuum_config, linedet_width=linedet_width
+            line_config,
+            continuum_config,
+            linedet_width=linedet_width,
+            keep_overlap_images=keep_overlap_images,
         )
 
         if drop_empty_regions and filtered_cont is not None and len(filtered_lines) > 0:
@@ -600,6 +626,7 @@ class Spectra:
         continuum_config: ContinuumConfiguration | None = None,
         *,
         linedet_width: u.Quantity = 1000.0 * u.km / u.s,
+        keep_overlap_images: bool = True,
     ) -> tuple[LineConfiguration, ContinuumConfiguration | None]:
         """Drop lines and continuum regions not covered by any spectrum.
 
@@ -617,6 +644,15 @@ class Spectra:
         linedet_width : astropy.units.Quantity
             Detection width.  Must have velocity units.
             Default ``1000 km/s``.
+        keep_overlap_images : bool
+            If ``True`` (default), a line or continuum region whose first-order
+            position is not covered is still kept when its order-*m* image
+            (observed wavelength times *m*) falls on a spectrum's pixels and
+            inside the support of that disperser's
+            :class:`~unite.instrument.OrderOverlap` ratio.  A
+            :class:`UserWarning` lists lines kept only this way, since they have
+            no first-order data.  Has no effect without ``order_overlap``;
+            ``False`` considers first-order positions only.
 
         Returns
         -------
@@ -631,18 +667,34 @@ class Spectra:
 
         # --- filter lines ---
         mask = []
+        overlap_only = []
         for wavelength in line_config.wavelengths:
             # wavelength is a Quantity; convert to each spectrum's disperser unit
             lam_obs = wavelength * (1.0 + z)
-            covered = any(
-                s.covers(
-                    float(lam_obs.to(s.unit).value) * (1.0 - eps),
-                    float(lam_obs.to(s.unit).value) * (1.0 + eps),
-                )
-                for s in self._spectra
-            )
-            mask.append(covered)
+            first, image = False, False
+            for s in self._spectra:
+                lam = float(lam_obs.to(s.unit).value)
+                lo, hi = lam * (1.0 - eps), lam * (1.0 + eps)
+                if s.covers(lo, hi):
+                    first = True
+                    break
+                if keep_overlap_images and _covers_overlap_image(s, lo, hi):
+                    image = True
+            mask.append(first or image)
+            if image and not first:
+                overlap_only.append(wavelength)
         filtered_lines = line_config._filter(mask)
+        if overlap_only:
+            names = ', '.join(f'{w:.6g}' for w in overlap_only)
+            warnings.warn(
+                f'{len(overlap_only)} line(s) kept only because a higher-order '
+                f'image falls on a spectrum, with no first-order coverage '
+                f'(rest wavelengths: {names}). Their constraints come solely '
+                'from the order overlap; pass keep_overlap_images=False to '
+                'drop them.',
+                UserWarning,
+                stacklevel=2,
+            )
 
         # --- filter continuum regions ---
         if continuum_config is not None:
@@ -655,7 +707,10 @@ class Spectra:
                     conv = _get_conversion_factor(region.unit, s.unit)
                     obs_low = region.low * conv * (1.0 + z)
                     obs_high = region.high * conv * (1.0 + z)
-                    if s.covers(obs_low, obs_high):
+                    if s.covers(obs_low, obs_high) or (
+                        keep_overlap_images
+                        and _covers_overlap_image(s, obs_low, obs_high)
+                    ):
                         region_covered = True
                         break
                 if region_covered:

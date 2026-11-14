@@ -14,12 +14,24 @@ Calibration tokens and configuration::
 
     from unite.instrument import RScale, FluxScale, PixOffset, InstrumentConfig
 
+Higher-order grating overlap::
+
+    from unite.instrument import OrderOverlap, OrderScale
+
 Spectrum classes and loaders live in :mod:`unite.spectrum`::
 
     from unite.spectrum import Spectrum, Spectra, from_arrays, from_DJA, from_sdss_fits
 """
 
-from unite.instrument.base import FluxScale, PixOffset, RScale
+from unite.instrument.base import FluxScale, OrderScale, PixOffset, RScale
 from unite.instrument.config import InstrumentConfig
+from unite.instrument.overlap import OrderOverlap
 
-__all__ = ['FluxScale', 'InstrumentConfig', 'PixOffset', 'RScale']
+__all__ = [
+    'FluxScale',
+    'InstrumentConfig',
+    'OrderOverlap',
+    'OrderScale',
+    'PixOffset',
+    'RScale',
+]

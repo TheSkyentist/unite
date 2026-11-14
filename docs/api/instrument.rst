@@ -17,6 +17,14 @@ Instrument Configuration
    :undoc-members:
    :show-inheritance:
 
+Higher-Order Grating Overlap
+----------------------------
+
+.. automodule:: unite.instrument.overlap
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Generic Implementations
 -----------------------
 
@@ -32,6 +40,8 @@ NIRSpec Dispersers
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. autofunction:: unite.instrument.nirspec.msaexp_order_ratio
 
 SDSS Disperser
 --------------

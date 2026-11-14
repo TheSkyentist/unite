@@ -26,6 +26,7 @@ For a given instrument the user can optionally attach calibration tokens with as
 - {class}`~unite.instrument.RScale`: Resolution scaling factor (e.g. R_eff = R_nominal x RScale)
 - {class}`~unite.instrument.FluxScale`: Flux scaling factor (e.g. F_eff = F_model x FluxScale)
 - {class}`~unite.instrument.PixOffset`: Detector pixel displacement (e.g. λ_eff = λ_model − (dλ/dpix)(λ_model) x PixOffset)
+- {class}`~unite.instrument.OrderScale`: Scale on a higher-order throughput ratio (see [Higher-Order Grating Overlap](#higher-order-grating-overlap))
 
 These absorb calibration offsets and uncertainties between instruments.
 
@@ -90,6 +91,7 @@ Each calibration token accepts an optional semantic label as its first argument.
 - `RScale('shared')` → site name `'r_scale_shared'` (prefix: `r_scale_`)
 - `FluxScale('shared')` → site name `'flux_scale_shared'` (prefix: `flux_scale_`)
 - `PixOffset('shared')` → site name `'pix_offset_shared'` (prefix: `pix_offset_`)
+- `OrderScale('shared')` → site name `'order_scale_shared'` (prefix: `order_scale_`)
 
 Pass **only the semantic label**, not the full prefixed name. For unshared tokens on a single named
 disperser, the disperser name is used automatically (e.g., `RScale()` on `'G235H'` →
@@ -251,6 +253,90 @@ def my_dlam(wavelength):
 
 disperser = generic.GenericDisperser(R_func=my_R, dlam_dpix_func=my_dlam, unit=u.AA, name='custom')
 ```
+
+---
+
+### Higher-Order Grating Overlap
+
+A grating that covers more than an octave behind its order-sorting filter also receives
+**order-*m* light** ($m \ge 2$) of the same source on top of the first-order spectrum: photons of
+wavelength $\lambda/m$ land on the pixel whose first-order wavelength is $\lambda$. Examples are
+NIRSpec G140M/H with F070LP redward of ~1.3 µm, the MUSE extended mode, and optical
+long-slit/MOS set-ups behind an order-sorting filter. The overlap term is opt-in:
+
+$$
+F_\mathrm{obs}(\lambda) = \text{FluxScale} \times \Big[ F(\lambda)
+  + \sum_m \text{OrderScale}_m \, r_m(\lambda) \, F(\lambda/m) \Big]
+$$
+
+where $F$ is the full source model (lines, absorbers, continuum) and $r_m$ is a tabulated
+order-*m* to first-order throughput ratio.
+
+```python
+from unite.instrument import OrderOverlap, OrderScale
+
+s2 = OrderScale(prior=prior.TruncatedNormal(1.0, 0.2, 0.5, 1.5))
+g140m = nirspec.G140M(
+    order_overlap=[OrderOverlap(2, 'g140m_order2.fits', scale=s2)],
+)
+```
+
+**The ratio file.** {class}`~unite.instrument.OrderOverlap` reads any file supported by
+{meth}`astropy.table.Table.read`, with
+
+- one wavelength column, identified by its **length unit** and read as the **observed**
+  wavelength (the pixel the light lands on, not the photon wavelength), strictly increasing;
+- a **dimensionless** ratio column named `throughput_ratio` (or pass `column=`; a file with a
+  single non-wavelength column needs neither). Columns with flux or sensitivity units are
+  rejected.
+
+The ratio is in the **f_lambda convention** and relative to the nominal first-order throughput
+(before `FluxScale`). Outside the tabulated range the contribution is exactly zero. You are
+responsible for producing the file; msaexp-style sensitivity curves $S_m$ (per unit $f_\nu$,
+against photon wavelength) convert as $r_m(\lambda) = S_m(\lambda/m) / (m^2 S_1(\lambda))$,
+which {func}`unite.instrument.nirspec.msaexp_order_ratio` does for you (e.g.
+`msaexp_order_ratio('g140m_f070lp', 2, path='g140m_order2.fits')`).
+For ground-based data, fold the telluric/extinction factor $T(\lambda/m)/T(\lambda)$ into the
+ratio.
+
+**OrderScale.** Each overlap carries an {class}`~unite.instrument.OrderScale` token (default
+`Fixed(1.0)`) multiplying $r_m$, representing the uncertainty of the calibration curve. Naming
+follows the other calibration tokens: an unlabelled token on `G140M` for order 2 is
+`order_scale_G140M_2`, `OrderScale('g140m')` is `order_scale_g140m`, and one instance shared by
+several orders or dispersers is a single parameter (named `order_scale_a`, … when unlabelled).
+
+**Resolution and wavelength calibration.** The order-*m* image has resolving power
+$R_m(\lambda/m) = m\,R(\lambda/m)$ at the photon wavelength, in both integration modes; `RScale`
+scales $R$ as for first order. `PixOffset` is a displacement in pixels, the same in every order:
+the order-*m* photon grid is the offset-corrected pixel grid divided by *m*. Each order is
+evaluated only over the pixels where $r_m$ can be non-zero, widened by a margin derived from the
+bounds of the `PixOffset` prior (the full spectrum when the prior is unbounded).
+
+**Coverage.** Lines and continuum regions at $\lambda/m$ enter the overlap only if coverage
+filtering keeps them. By default ({meth}`~unite.spectrum.Spectra.prepare` with
+`keep_overlap_images=True`) an item is also kept when its order-$m$ image (observed wavelength
+times $m$) lands on a spectrum inside the support of that disperser's ratio table, even with no
+first-order coverage; lines kept only this way trigger a warning, since they are constrained
+only by the overlap. Pass `keep_overlap_images=False` to require first-order coverage. In
+particular, the continuum at $\lambda/m$ is zero outside the configured continuum regions. {meth}`~unite.model.ModelBuilder.build` warns when
+
+- an order has no active pixel among the fitted pixels (noting when a free `OrderScale` is then
+  constrained only by its prior);
+- the photon wavelengths of an order (its *source window*) have first-order data but no
+  continuum region, or a region edge falls inside the window.
+
+**Outputs.** {class}`~unite.compute.SpectrumPrediction` gains `overlap` (a dict keyed by order,
+including `FluxScale` and `OrderScale`), and the spectra tables an `overlap_{m}` column per order.
+Line and continuum entries remain first-order only; a line's order-*m* image is part of
+`overlap[m]`. {func}`~unite.compute.evaluate_intrinsic` excludes the overlap, like every other
+instrument effect.
+
+:::{note}
+Prisms have no higher orders, and sub-octave multi-arm spectrographs (DESI, SDSS) no overlap:
+`PRISM`, `DESIDisperser` and `SDSSDisperser` warn if given `order_overlap` (but accept it).
+Cross-dispersed echelles and slitless grisms, where contamination comes from other orders on
+other spectra or other sources, are not described by this term.
+:::
 
 ---
 

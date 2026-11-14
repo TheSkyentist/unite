@@ -2235,7 +2235,7 @@ _A_LYA: float = 6.2649e8  # Einstein A coefficient, s^-1
 _F_LYA: float = 0.41641  # absorption oscillator strength
 # Cross-section amplitude (cm^2 s^-1)
 _K_LYA: float = (
-    (_F_LYA * const.e.si**2 / (4 * np.sqrt(np.pi) * const.eps0 * const.m_e * const.c))  # ty: ignore[unresolved-attribute]
+    (_F_LYA * const.e.si**2 / (4 * np.sqrt(np.pi) * const.eps0 * const.m_e * const.c))  # ty: ignore[missing-attribute]
     .to(u.cm**2 / u.s)
     .value
 )

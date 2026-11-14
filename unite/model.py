@@ -20,6 +20,7 @@ import numpyro
 from astropy import units as u
 from numpyro import distributions as dist
 
+from unite import _overlap
 from unite._compose import compose_from_profiles
 from unite._lsf import _FWHM_TO_SIGMA
 from unite._utils import _get_conversion_factor
@@ -132,6 +133,10 @@ class ModelArgs:
     #: :func:`~unite.continuum.compute.static_region_masks`) so that the
     #: likelihood is continuous in ``PixOffset``.
     region_masks: list[np.ndarray] = field(default_factory=list, repr=False)
+    #: Per-spectrum static higher-order overlap windows (one per active
+    #: order of the spectrum's disperser), built at build time; see
+    #: :class:`unite._overlap.OverlapWindow`.  Empty lists without overlap.
+    overlap_windows: list[list[Any]] = field(default_factory=list, repr=False)
     #: Per-spectrum JIT'd vmapped evaluators, built lazily by :func:`~unite.compute.evaluate_model`.
     #: Cached so that repeated calls with the same :class:`ModelArgs` skip Python-level retracing.
     _evaluators: list[Any] | None = field(default=None, compare=False, repr=False)
@@ -283,6 +288,9 @@ def unite_model(args: ModelArgs) -> None:
         # Static region membership (from the unshifted grid, set at build time)
         # keeps the likelihood continuous in pix_offset.
         region_mask = args.region_masks[i]  # (n_regions, E-1)
+        overlap_windows = (
+            args.overlap_windows[i] if args.overlap_windows else []
+        )  # static, one per active order
 
         # Scaled line fluxes and continuum for this spectrum.
         scaled_flux = flux_per_line * lfs / norm
@@ -365,6 +373,24 @@ def unite_model(args: ModelArgs) -> None:
                 x_flat, model_fine_intrinsic, sigma_fine, half_width
             )
             model_pix = model_fine_conv.reshape(n_pixels, n_super).mean(axis=1)
+
+            # Higher-order overlap: r_m(x) F(x / m) on each order's window,
+            # convolved with the order-m LSF on the observed axis.
+            for win in overlap_windows:
+                term = _overlap.convolved_term(
+                    win,
+                    x_flat,
+                    n_super=n_super,
+                    half_width=half_width,
+                    disp=disp,
+                    r_scale=r_scale,
+                    inv_wl_scale=inv_wl_scale,
+                    canonical_unit=args.canonical_unit,
+                    source_fine=lambda w, frm, _ce=_conv_eval: _ce(w, _frm=frm),
+                )
+                model_pix = model_pix.at[win.q0 : win.q1].add(
+                    context[win.scale_name] * term
+                )
             model = flux_scale * model_pix
         else:
             # Analytic: each profile's cumulative-at-edges array, then diff
@@ -395,19 +421,51 @@ def unite_model(args: ModelArgs) -> None:
                 args.cont_group_matrix,
                 lsf_fwhm_per_interval=interval_lsf_fwhm(lsf_at_edges),
             )  # (n_groups, E-1)
-            cont = cont_per_interval[:, keep_mask] * cont_scale_norm  # (G, npix)
 
-            model = flux_scale * compose_from_profiles(
-                pixints,
-                scaled_flux,
-                tau_per_line,
-                cm.is_tau,
-                cm.applies_matrix,
-                args.cont_applies,
-                cont,
-                has_tau=has_tau,
-                cover_per_line=cover_per_line,
-            )
+            def _compose(
+                pix,
+                cont_g,
+                *,
+                _sf=scaled_flux,
+                _csn=cont_scale_norm,
+                _cover=cover_per_line,
+            ):
+                return compose_from_profiles(
+                    pix,
+                    _sf,
+                    tau_per_line,
+                    cm.is_tau,
+                    cm.applies_matrix,
+                    args.cont_applies,
+                    cont_g * _csn,
+                    has_tau=has_tau,
+                    cover_per_line=_cover,
+                )
+
+            model_pix = _compose(pixints, cont_per_interval[:, keep_mask])
+
+            # Higher-order overlap: OrderScale_m * r_m(λ) * F(λ / m), with F
+            # pixel-averaged over the photon edges (edges / m) at the
+            # order-m resolution, on each order's static window.
+            for win in overlap_windows:
+                source = _overlap.analytic_source(
+                    win,
+                    edges,
+                    disp=disp,
+                    r_scale=r_scale,
+                    inv_wl_scale=inv_wl_scale,
+                    args=args,
+                    context=context,
+                    z_sys=z_sys,
+                    integrate_lines_fn=_int_fn,
+                    line_params=(centers, p0, p1, p2, _pcodes),
+                    compose=_compose,
+                )
+                ratio = _overlap.ratio_at_pixels(win, edges, args.canonical_unit)
+                model_pix = model_pix.at[win.wavelength_slice].add(
+                    context[win.scale_name] * ratio * source
+                )
+            model = flux_scale * model_pix
         obs_name = f'obs_{spectrum.name}' if spectrum.name else f'obs_{i}'
         numpyro.sample(
             obs_name,
@@ -463,7 +521,7 @@ def _validate_init_values(
         distribution = prior.to_dist(known)
         assert distribution is not None  # Fixed priors handled above
         support = distribution.support
-        low, high = float(support.lower_bound), float(support.upper_bound)  # ty: ignore[unresolved-attribute]
+        low, high = float(support.lower_bound), float(support.upper_bound)  # ty: ignore[missing-attribute]
         if not low < prior.init < high:
             msg = (
                 f'init={prior.init!r} for parameter {pname!r} lies outside its '
@@ -614,7 +672,7 @@ class ModelBuilder:
             disp = spectrum.disperser
             if id(disp) not in seen_dispersers:
                 seen_dispersers.add(id(disp))
-                for tok in (disp.r_scale, disp.flux_scale, disp.pix_offset):
+                for _, tok in disp.calibration_tokens():
                     if id(tok) not in seen_tok_ids:
                         tok_name = tok.name
                         seen_tok_ids.add(id(tok))
@@ -758,30 +816,6 @@ class ModelBuilder:
         else:
             trimmed_spectra = list(self._spectra)
 
-        # For convolution mode, compute the kernel half-width (in fine-grid indices)
-        # from the maximum LSF sigma and minimum fine-grid spacing across all spectra.
-        if integration_mode == 'convolution':
-            if conv_half_width is None:
-                max_lsf_fwhm = 0.0
-                min_dlam = float('inf')
-                for s in trimmed_spectra:
-                    wl_scale = _get_conversion_factor(s.unit, self._canonical_unit)
-                    pix_mid_disp = (s.low + s.high) / 2.0
-                    r_arr = jnp.asarray(s.disperser.R(pix_mid_disp))
-                    lsf = jnp.asarray(pix_mid_disp * wl_scale) / r_arr
-                    max_lsf_fwhm = max(max_lsf_fwhm, float(jnp.max(lsf)))
-                    pix_widths = (s.high - s.low) * wl_scale
-                    min_dlam = min(min_dlam, float(jnp.min(pix_widths)))
-                max_sigma = max_lsf_fwhm * _FWHM_TO_SIGMA
-                conv_half_width = max(
-                    1, math.ceil(_LSF_TRUNCATION_SIGMA * max_sigma * n_super / min_dlam)
-                )
-            n_super_val: int | None = n_super
-            conv_half_width_val: int | None = conv_half_width
-        else:
-            n_super_val = None
-            conv_half_width_val = None
-
         # Per-spectrum wavelength conversion factors.
         spec_to_canonical = [
             _get_conversion_factor(s.unit, self._canonical_unit)
@@ -848,6 +882,76 @@ class ModelBuilder:
             for s, conv in zip(trimmed_spectra, spec_to_canonical, strict=True)
         ]
 
+        # Higher-order overlap: static per-order windows (analytic layout).
+        overlap_windows = [
+            _overlap.build_windows(
+                s,
+                self._canonical_unit,
+                conv,
+                lambda ov: ov.scale.name,
+                cont_low,
+                cont_high,
+                redshift,
+            )
+            for s, conv in zip(trimmed_spectra, spec_to_canonical, strict=True)
+        ]
+
+        for s, conv, wins in zip(
+            trimmed_spectra, spec_to_canonical, overlap_windows, strict=True
+        ):
+            for msg in _overlap.build_warnings(
+                s, wins, self._spectra, self._canonical_unit, conv
+            ):
+                warnings.warn(msg, UserWarning, stacklevel=2)
+
+        # For convolution mode, compute the kernel half-width (in fine-grid
+        # indices) from the maximum LSF sigma (including the order-m kernels
+        # on the observed axis) and the minimum fine-grid spacing.
+        if integration_mode == 'convolution':
+            if conv_half_width is None:
+                max_lsf_fwhm = 0.0
+                min_dlam = float('inf')
+                for s, wins in zip(trimmed_spectra, overlap_windows, strict=True):
+                    wl_scale = _get_conversion_factor(s.unit, self._canonical_unit)
+                    pix_mid_disp = (s.low + s.high) / 2.0
+                    r_arr = jnp.asarray(s.disperser.R(pix_mid_disp))
+                    lsf = jnp.asarray(pix_mid_disp * wl_scale) / r_arr
+                    max_lsf_fwhm = max(max_lsf_fwhm, float(jnp.max(lsf)))
+                    for win in wins:
+                        max_lsf_fwhm = max(
+                            max_lsf_fwhm,
+                            _overlap.max_observed_lsf_fwhm(win, s, wl_scale),
+                        )
+                    pix_widths = (s.high - s.low) * wl_scale
+                    min_dlam = min(min_dlam, float(jnp.min(pix_widths)))
+                max_sigma = max_lsf_fwhm * _FWHM_TO_SIGMA
+                conv_half_width = max(
+                    1, math.ceil(_LSF_TRUNCATION_SIGMA * max_sigma * n_super / min_dlam)
+                )
+            n_super_val: int | None = n_super
+            conv_half_width_val: int | None = conv_half_width
+            overlap_windows = [
+                [
+                    _overlap.with_convolution(
+                        w,
+                        s,
+                        conv,
+                        cont_low,
+                        cont_high,
+                        redshift,
+                        n_super,
+                        conv_half_width,
+                    )
+                    for w in wins
+                ]
+                for s, conv, wins in zip(
+                    trimmed_spectra, spec_to_canonical, overlap_windows, strict=True
+                )
+            ]
+        else:
+            n_super_val = None
+            conv_half_width_val = None
+
         line_labels = _make_line_labels(self._line_config)
         continuum_labels = (
             _make_continuum_labels(self._cont_config)
@@ -911,6 +1015,7 @@ class ModelBuilder:
             n_super=n_super_val,
             conv_half_width=conv_half_width_val,
             region_masks=region_masks,
+            overlap_windows=overlap_windows,
             _profile_codes_local=self._matrices.profile_codes,
             _integrate_fn=int_fn,
             _evaluate_fn=eval_fn,

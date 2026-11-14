@@ -11,7 +11,7 @@ The :class:`~unite.spectrum.Spectrum` class lives in :mod:`unite.spectrum`.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import jax.numpy as jnp
 from astropy import units as u
@@ -20,6 +20,7 @@ from jax.typing import ArrayLike
 
 from unite._utils import C_KMS, _ensure_velocity, _ensure_wavelength
 from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.overlap import OrderOverlap
 
 # ---------------------------------------------------------------------------
 # Generic dispersers
@@ -50,6 +51,9 @@ class GenericDisperser(Disperser):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the pixel shift.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -74,6 +78,7 @@ class GenericDisperser(Disperser):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             unit,
@@ -81,6 +86,7 @@ class GenericDisperser(Disperser):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
         self._R_func = R_func
         self._dlam_dpix_func = dlam_dpix_func
@@ -130,6 +136,9 @@ class SimpleDisperser(Disperser):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the pixel shift.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Raises
     ------
@@ -155,6 +164,7 @@ class SimpleDisperser(Disperser):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         wavelength = _ensure_wavelength(wavelength, 'wavelength', ndim=1)
         super().__init__(
@@ -163,6 +173,7 @@ class SimpleDisperser(Disperser):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
         n_specified = sum(x is not None for x in (R, dlam, dvel))

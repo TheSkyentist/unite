@@ -25,6 +25,7 @@ token kwargs.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from importlib import resources
 from typing import Literal
 
@@ -33,6 +34,7 @@ from astropy import units as u
 from astropy.io import fits
 
 from unite.instrument.base import Disperser, FluxScale, PixOffset, RScale
+from unite.instrument.overlap import OrderOverlap
 
 # ---------------------------------------------------------------------------
 # Valid grating names
@@ -136,6 +138,9 @@ class NIRSpec(Disperser):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Notes
     -----
@@ -166,6 +171,7 @@ class NIRSpec(Disperser):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         grating = grating.lower()
         if grating not in _NIRSPEC_GRATINGS:
@@ -183,12 +189,17 @@ class NIRSpec(Disperser):
             msg = f"Unknown r_source {_r_source_str!r}. Must be 'uniform'(ly-illuminated), or 'point'(-source)."
             raise ValueError(msg)
 
+        if grating == 'prism':
+            # NIRSpec('prism') behaves like PRISM: no higher orders.
+            self.supports_order_overlap = False
+
         super().__init__(
             unit=u.um,
             name=name or grating.upper(),
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
         self.grating: str = grating
@@ -255,6 +266,9 @@ class PRISM(NIRSpec):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -262,6 +276,9 @@ class PRISM(NIRSpec):
     >>> d.grating
     'prism'
     """
+
+    #: A prism has no higher diffraction orders.
+    supports_order_overlap: bool = False
 
     def __init__(
         self,
@@ -271,6 +288,7 @@ class PRISM(NIRSpec):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             'prism',
@@ -279,6 +297,7 @@ class PRISM(NIRSpec):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def __repr__(self) -> str:
@@ -305,6 +324,9 @@ class G140M(NIRSpec):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -321,6 +343,7 @@ class G140M(NIRSpec):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             'g140m',
@@ -329,6 +352,7 @@ class G140M(NIRSpec):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def __repr__(self) -> str:
@@ -355,6 +379,9 @@ class G140H(NIRSpec):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -371,6 +398,7 @@ class G140H(NIRSpec):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             'g140h',
@@ -379,6 +407,7 @@ class G140H(NIRSpec):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def __repr__(self) -> str:
@@ -405,6 +434,9 @@ class G235M(NIRSpec):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -421,6 +453,7 @@ class G235M(NIRSpec):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             'g235m',
@@ -429,6 +462,7 @@ class G235M(NIRSpec):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def __repr__(self) -> str:
@@ -455,6 +489,9 @@ class G235H(NIRSpec):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -471,6 +508,7 @@ class G235H(NIRSpec):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             'g235h',
@@ -479,6 +517,7 @@ class G235H(NIRSpec):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def __repr__(self) -> str:
@@ -505,6 +544,9 @@ class G395M(NIRSpec):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -521,6 +563,7 @@ class G395M(NIRSpec):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             'g395m',
@@ -529,6 +572,7 @@ class G395M(NIRSpec):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def __repr__(self) -> str:
@@ -555,6 +599,9 @@ class G395H(NIRSpec):
         Token for the flux normalisation.
     pix_offset : PixOffset, optional
         Token for the detector pixel displacement.
+    order_overlap : sequence of OrderOverlap, optional
+        Higher-order grating overlap; see
+        :class:`~unite.instrument.base.Disperser`.
 
     Examples
     --------
@@ -571,6 +618,7 @@ class G395H(NIRSpec):
         r_scale: RScale | None = None,
         flux_scale: FluxScale | None = None,
         pix_offset: PixOffset | None = None,
+        order_overlap: Sequence[OrderOverlap] | None = None,
     ) -> None:
         super().__init__(
             'g395h',
@@ -579,6 +627,7 @@ class G395H(NIRSpec):
             r_scale=r_scale,
             flux_scale=flux_scale,
             pix_offset=pix_offset,
+            order_overlap=order_overlap,
         )
 
     def __repr__(self) -> str:
