@@ -8,12 +8,14 @@ function that can be passed to any numpyro inference algorithm (NUTS, SVI, etc.)
 
 from __future__ import annotations
 
+import contextlib
 import math
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpyro
@@ -22,7 +24,7 @@ from numpyro import distributions as dist
 
 from unite import _overlap
 from unite._compose import compose_from_profiles
-from unite._lsf import _FWHM_TO_SIGMA
+from unite._lsf import _FWHM_TO_SIGMA, _convolve_to_pixels
 from unite._utils import _get_conversion_factor
 from unite.continuum.compute import (
     eval_continuum,
@@ -140,6 +142,10 @@ class ModelArgs:
     #: Per-spectrum JIT'd vmapped evaluators, built lazily by :func:`~unite.compute.evaluate_model`.
     #: Cached so that repeated calls with the same :class:`ModelArgs` skip Python-level retracing.
     _evaluators: list[Any] | None = field(default=None, compare=False, repr=False)
+    #: Constant pixel-averaged LSF kernels (convolution mode, fixed ``RScale``
+    #: and ``PixOffset``), keyed by ``(spectrum index, order)``; filled lazily
+    #: by :func:`unite._lsf._convolve_to_pixels`.
+    _conv_kernels: dict = field(default_factory=dict, compare=False, repr=False)
     #: Per-line profile codes passed (and ignored) by the grouped dispatch
     #: functions below, which bake the profile grouping in at build time.
     _profile_codes_local: Any | None = field(default=None, compare=False, repr=False)
@@ -186,6 +192,44 @@ class ModelArgs:
     def __bool__(self) -> bool:
         """Return True if the model has at least one spectrum."""
         return len(self.spectra) > 0
+
+
+# ------------------------------------------------------------------
+# Static calibration
+# ------------------------------------------------------------------
+
+
+def _static_calibration(disp) -> tuple[float, float] | None:
+    """Return ``(r_scale, pix_offset)`` when both are fixed literals.
+
+    With a literal ``Fixed`` prior on both tokens (the default) the pixel
+    grid and the LSF of a spectrum do not depend on any sampled parameter, so
+    everything derived from them alone can be computed once at trace time
+    rather than on every model evaluation.
+
+    Parameters
+    ----------
+    disp : Disperser
+        Disperser of the spectrum.
+
+    Returns
+    -------
+    tuple of float or None
+        The two fixed values, or ``None`` if either is sampled or depends on
+        another parameter.
+    """
+    values = []
+    for token in (disp.r_scale, disp.pix_offset):
+        prior = token.prior
+        if not isinstance(prior, Fixed) or prior.dependencies():
+            return None
+        values.append(float(prior.resolved_value({})))
+    return values[0], values[1]
+
+
+def _trace_time_eval(static: bool):
+    """Context evaluating concrete JAX operations at trace time when *static*."""
+    return jax.ensure_compile_time_eval() if static else contextlib.nullcontext()
 
 
 # ------------------------------------------------------------------
@@ -278,12 +322,19 @@ def unite_model(args: ModelArgs) -> None:
         r_scale = context[disp.r_scale.name]
         flux_scale = context[disp.flux_scale.name]
         pix_offset = context[disp.pix_offset.name]
+        # With fixed RScale and PixOffset the grid and LSF are constants:
+        # evaluate them once at trace time instead of on every call.
+        static_cal = _static_calibration(disp)
+        is_static = static_cal is not None
+        if static_cal is not None:
+            r_scale, pix_offset = static_cal
 
         # Edge topology (canonical wavelength unit) — shared by all lines.
-        edges = spectrum.edges * wl_scale  # (E,)
         keep_mask = spectrum.keep_mask  # (E-1,)
-        edges = edges - (pix_offset * disp.dlam_dpix(spectrum.edges) * wl_scale)
-        widths = jnp.diff(edges)  # (E-1,)
+        with _trace_time_eval(is_static):
+            edges = spectrum.edges * wl_scale  # (E,)
+            edges = edges - (pix_offset * disp.dlam_dpix(spectrum.edges) * wl_scale)
+            widths = jnp.diff(edges)  # (E-1,)
 
         # Static region membership (from the unshifted grid, set at build time)
         # keeps the likelihood continuous in pix_offset.
@@ -302,17 +353,15 @@ def unite_model(args: ModelArgs) -> None:
             # on a uniform fine sub-pixel grid, convolve with the wavelength-
             # dependent Gaussian LSF, then pixel-average.  This correctly computes
             # LSF ⊗ [F · exp(-τ · φ_intrinsic)] rather than F · exp(-τ · LSF ⊗ φ).
-            from unite._lsf import _lsf_convolve
-
             n_super = args.n_super
             half_width = args.conv_half_width
             assert n_super is not None
             assert half_width is not None
 
             # Per-pixel low/high — needed only by convolution.
-            low = edges[:-1][keep_mask]
-            high = edges[1:][keep_mask]
-            n_pixels = low.shape[0]
+            with _trace_time_eval(is_static):
+                low = edges[:-1][keep_mask]
+                high = edges[1:][keep_mask]
             # Static region membership expanded to the fine grid (n_super
             # consecutive points per kept pixel, matching x_fine.T.ravel()).
             fine_region_mask = np.repeat(
@@ -322,11 +371,12 @@ def unite_model(args: ModelArgs) -> None:
             # Fine grid: n_super uniform points per pixel, midpoints of sub-bins.
             # Transposed to wavelength order: all sub-bins of pixel 0, then pixel 1, etc.
             # Shape: (n_pixels * n_super,).
-            offsets = (jnp.arange(n_super) + 0.5) / n_super  # (n_super,)
-            x_fine = (
-                low[None, :] + offsets[:, None] * (high - low)[None, :]
-            )  # (n_super, n_pixels)
-            x_flat = x_fine.T.ravel()  # (n_pixels * n_super,) in wavelength order
+            with _trace_time_eval(is_static):
+                offsets = (jnp.arange(n_super) + 0.5) / n_super  # (n_super,)
+                x_fine = (
+                    low[None, :] + offsets[:, None] * (high - low)[None, :]
+                )  # (n_super, n_pixels)
+                x_flat = x_fine.T.ravel()  # (n_pixels * n_super,), wavelength order
 
             # Evaluate intrinsic model (lsf_fwhm=0) on fine grid.
             # _combine_fwhm(0, fwhm) = fwhm, so intrinsic profiles are used.
@@ -364,15 +414,22 @@ def unite_model(args: ModelArgs) -> None:
             model_fine_intrinsic = _conv_eval(x_flat)  # (n_pixels * n_super,)
 
             # LSF sigma at each fine-grid point.
-            sigma_fine = (
-                x_flat / (disp.R(x_flat * inv_wl_scale) * r_scale) * _FWHM_TO_SIGMA
-            )
+            with _trace_time_eval(is_static):
+                sigma_fine = (
+                    x_flat / (disp.R(x_flat * inv_wl_scale) * r_scale) * _FWHM_TO_SIGMA
+                )
 
-            # Convolve on the fine grid, then pixel-average.
-            model_fine_conv = _lsf_convolve(
-                x_flat, model_fine_intrinsic, sigma_fine, half_width
+            # Convolve on the fine grid and pixel-average (a constant
+            # pixel-averaged kernel when the calibration is static).
+            model_pix = _convolve_to_pixels(
+                x_flat,
+                model_fine_intrinsic,
+                sigma_fine,
+                half_width,
+                n_super,
+                cache=args._conv_kernels,
+                key=(i, 1),
             )
-            model_pix = model_fine_conv.reshape(n_pixels, n_super).mean(axis=1)
 
             # Higher-order overlap: r_m(x) F(x / m) on each order's window,
             # convolved with the order-m LSF on the observed axis.
@@ -387,6 +444,9 @@ def unite_model(args: ModelArgs) -> None:
                     inv_wl_scale=inv_wl_scale,
                     canonical_unit=args.canonical_unit,
                     source_fine=lambda w, frm, _ce=_conv_eval: _ce(w, _frm=frm),
+                    static=is_static,
+                    cache=args._conv_kernels,
+                    key=(i, win.order),
                 )
                 model_pix = model_pix.at[win.q0 : win.q1].add(
                     context[win.scale_name] * term
@@ -397,13 +457,18 @@ def unite_model(args: ModelArgs) -> None:
             # → per-interval integral → mask off inter-pixel-gap entries →
             # divide by widths → pixel-averaged profile.
             # Per-edge LSF (length E, shared across all lines of this spectrum).
-            lsf_at_edges = edges / (disp.R(edges * inv_wl_scale) * r_scale)
+            with _trace_time_eval(is_static):
+                lsf_at_edges = edges / (disp.R(edges * inv_wl_scale) * r_scale)
 
             cum_per_line = _int_fn(
                 edges, centers, lsf_at_edges, p0, p1, p2, _pcodes
             )  # (n_lines, E)
             per_interval = jnp.diff(cum_per_line, axis=1) / widths  # (n_lines, E-1)
-            pixints = per_interval[:, keep_mask]  # (n_lines, npix)
+            # A gap-free spectrum keeps every interval: skip the gather.
+            gap_free = bool(np.asarray(keep_mask).all())
+            pixints = (
+                per_interval if gap_free else per_interval[:, keep_mask]
+            )  # (n_lines, npix)
 
             # Per-region LSF (non-polynomial forms) and per-pixel LSF (polynomial
             # family, whose analytic Gaussian-moment convolution uses the LSF of
@@ -442,7 +507,10 @@ def unite_model(args: ModelArgs) -> None:
                     cover_per_line=_cover,
                 )
 
-            model_pix = _compose(pixints, cont_per_interval[:, keep_mask])
+            model_pix = _compose(
+                pixints,
+                cont_per_interval if gap_free else cont_per_interval[:, keep_mask],
+            )
 
             # Higher-order overlap: OrderScale_m * r_m(λ) * F(λ / m), with F
             # pixel-averaged over the photon edges (edges / m) at the

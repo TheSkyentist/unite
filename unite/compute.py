@@ -16,7 +16,7 @@ from astropy import units as u
 
 from unite import _overlap
 from unite._compose import compose_from_profiles, compose_leave_one_out
-from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
+from unite._lsf import _FWHM_TO_SIGMA, _convolve_stacks_to_pixels
 from unite.continuum.compute import (
     _group_sum,
     eval_continuum,
@@ -32,7 +32,7 @@ from unite.line.compute import (
     evaluate_lines,
     integrate_lines,
 )
-from unite.model import ModelArgs
+from unite.model import ModelArgs, _static_calibration, _trace_time_eval
 from unite.prior import Fixed
 
 
@@ -191,6 +191,8 @@ def evaluate_model(
     _eval_fn = args._evaluate_fn if args._evaluate_fn is not None else evaluate_lines
 
     context, n_samples = _build_context(samples, args)
+    # Static indices of the tau-parametrized lines.
+    tau_idx = np.flatnonzero(np.asarray(cm.is_tau))
 
     # --- Per-spectrum evaluation (vectorised over samples) ---
     # Lazily build and JIT-compile per-spectrum vmapped evaluators on first call.
@@ -220,6 +222,9 @@ def evaluate_model(
         line_scale = float(args.line_flux_scales[i])
         cont_scale = float(args.continuum_scales[i])
         windows = args.overlap_windows[i] if args.overlap_windows else []
+        # Fixed RScale/PixOffset: the grid, LSF and convolution kernel are
+        # constants shared by every draw (see the model function).
+        static_cal = _static_calibration(disp)
 
         # Keyword-only defaults bind the per-iteration values at definition
         # time, avoiding late-binding closure issues (ruff B023) while
@@ -240,6 +245,8 @@ def evaluate_model(
             _prm=pix_region_mask,
             _full_rm=full_region_mask,
             _wins=windows,
+            _static=static_cal,
+            _i=i,
         ):
             """Evaluate one posterior sample. ``params`` is a dict of 0-D arrays."""
             # --- Line parameters ---
@@ -265,21 +272,25 @@ def evaluate_model(
             r_scale = params[_disp.r_scale.name]
             flux_scale_val = params[_disp.flux_scale.name]
             pix_offset = params[_disp.pix_offset.name]
+            is_static = _static is not None
+            if _static is not None:
+                r_scale, pix_offset = _static
 
-            # --- Edge topology (apply sub-pixel offset) ---
-            edges = _edges - pix_offset * _dlam_edges
-            widths = jnp.diff(edges)
-            # Per-pixel low/high for diagnostics and convolution mode.
-            low = edges[:-1][_keep]
-            high = edges[1:][_keep]
-            wavelength = 0.5 * (low + high)
+            with _trace_time_eval(is_static):
+                # --- Edge topology (apply sub-pixel offset) ---
+                edges = _edges - pix_offset * _dlam_edges
+                widths = jnp.diff(edges)
+                # Per-pixel low/high for diagnostics and convolution mode.
+                low = edges[:-1][_keep]
+                high = edges[1:][_keep]
+                wavelength = 0.5 * (low + high)
+                # Per-edge LSF (shared across lines, used by analytic mode).
+                edges_disp = edges * _inv_wl_scale
+                lsf_at_edges = edges / (_disp.R(edges_disp) * r_scale)
 
             # --- LSF ---
             # Per-line LSF (used for tau diagnostic at midpoints).
             lsf_fwhm = centers / (_disp.R(centers * _inv_wl_scale) * r_scale)
-            # Per-edge LSF (shared across lines, used by analytic mode).
-            edges_disp = edges * _inv_wl_scale
-            lsf_at_edges = edges / (_disp.R(edges_disp) * r_scale)
 
             # Scaled line fluxes for this spectrum.
             scaled_flux = flux_per_line * _line_scale
@@ -287,13 +298,13 @@ def evaluate_model(
             # --- Optical depth profiles at pixel midpoints (mode-independent) ---
             # For emission-only models has_tau is a Python False at trace time, so
             # the entire evaluate_lines call is compiled out of the XLA program.
+            # Only the tau lines are returned (rows in ``tau_idx`` order), so
+            # no all-zero rows are carried for emission lines.
             if has_tau:
                 phi_mid = _efn(wavelength, centers, lsf_fwhm, p0, p1, p2, _pc)
-                tau_profiles_arr = jnp.where(
-                    cm.is_tau[:, None], tau_per_line[:, None] * phi_mid, 0.0
-                )
+                tau_profiles_arr = tau_per_line[tau_idx, None] * phi_mid[tau_idx]
             else:
-                tau_profiles_arr = jnp.zeros((n_lines, wavelength.shape[0]))
+                tau_profiles_arr = jnp.zeros((0, wavelength.shape[0]))
 
             # --- Continuum (per-region for decomposition) ---
             # For analytic: the same pixel-averaged evaluation as the likelihood
@@ -340,35 +351,27 @@ def evaluate_model(
 
                 # Fine grid in wavelength order: all sub-bins of pixel 0, then pixel 1, etc.
                 # Shape: (n_pixels * n_super,).
-                offsets = (jnp.arange(n_super) + 0.5) / n_super
-                x_fine = (
-                    low[None, :] + offsets[:, None] * (high - low)[None, :]
-                )  # (n_super, n_pixels)
-                x_flat = x_fine.T.ravel()  # (n_pixels * n_super,) in wavelength order
+                with _trace_time_eval(is_static):
+                    offsets = (jnp.arange(n_super) + 0.5) / n_super
+                    x_fine = (
+                        low[None, :] + offsets[:, None] * (high - low)[None, :]
+                    )  # (n_super, n_pixels)
+                    x_flat = x_fine.T.ravel()  # (n_pixels * n_super,)
+                    # LSF sigma at each fine-grid point.
+                    sigma_fine = (
+                        x_flat
+                        / (_disp.R(x_flat * _inv_wl_scale) * r_scale)
+                        * _FWHM_TO_SIGMA
+                    )
 
                 # Intrinsic profiles (lsf_fwhm=0) on fine grid.
                 zero_lsf = jnp.zeros_like(centers)
                 phi_fine = _efn(x_flat, centers, zero_lsf, p0, p1, p2, _pc)
 
-                # LSF sigma at each fine-grid point.
-                sigma_fine = (
-                    x_flat
-                    / (_disp.R(x_flat * _inv_wl_scale) * r_scale)
-                    * _FWHM_TO_SIGMA
-                )
-
-                # Per-region continuum on fine grid (lsf_fwhm=0): convolve on fine
-                # grid then pixel-average.
+                # Per-region continuum on fine grid (lsf_fwhm=0).
                 cont_regions_fine = eval_continuum_regions(
                     x_flat, args, params, z_sys, 0.0, np.repeat(_prm, n_super, axis=1)
                 )
-                cont_regions_scaled = [
-                    _lsf_convolve(x_flat, r * _cont_scale, sigma_fine, half_width)
-                    .reshape(n_pixels, n_super)
-                    .mean(axis=1)
-                    * flux_scale_val
-                    for r in cont_regions_fine
-                ]
 
                 # Total continuum on fine grid for model composition.
                 cont_fine_scaled = (
@@ -389,14 +392,26 @@ def evaluate_model(
                     cover_per_line=cover_per_line,
                 )
 
-                # Convolve on fine grid, then pixel-average.
-                total_conv = _lsf_convolve(x_flat, total_fine, sigma_fine, half_width)
-                total_pix = total_conv.reshape(n_pixels, n_super).mean(axis=1)
-
-                deltas_conv = jax.vmap(
-                    lambda d: _lsf_convolve(x_flat, d, sigma_fine, half_width)
-                )(deltas_fine)  # (n_lines, n_pixels * n_super)
-                deltas_pix = deltas_conv.reshape(-1, n_pixels, n_super).mean(axis=2)
+                # Convolution is linear and every component shares the kernel,
+                # so the total, the per-line deltas and the continuum regions
+                # are convolved and pixel-averaged together with one kernel.
+                stacks = [total_fine[None, :], deltas_fine]
+                if cont_regions_fine:
+                    stacks.append(jnp.stack(cont_regions_fine) * _cont_scale)
+                pix = _convolve_stacks_to_pixels(
+                    x_flat,
+                    stacks,
+                    sigma_fine,
+                    half_width,
+                    n_super,
+                    cache=args._conv_kernels,
+                    key=(_i, 1),
+                )
+                total_pix = pix[0][0]
+                deltas_pix = pix[1]  # (n_lines, n_pixels)
+                cont_regions_scaled = [
+                    pix[2][k] * flux_scale_val for k in range(len(cont_regions_fine))
+                ]
 
                 def _source_fine(wav, frm):
                     phi_m = _efn(wav, centers, zero_lsf, p0, p1, p2, _pc)
@@ -427,6 +442,9 @@ def evaluate_model(
                         inv_wl_scale=_inv_wl_scale,
                         canonical_unit=args.canonical_unit,
                         source_fine=_source_fine,
+                        static=is_static,
+                        cache=args._conv_kernels,
+                        key=(_i, win.order),
                     )
                     overlaps.append(
                         jnp.zeros(n_pixels)
@@ -525,7 +543,7 @@ def evaluate_model(
         # total_arr:  (n_samples, n_pix)
         # line_arr:   (n_samples, n_lines, n_pix)
         # cont_arr:   list of (n_samples, n_pix), one per continuum region
-        # tau_arr:    (n_samples, n_lines, n_pix)
+        # tau_arr:    (n_samples, n_tau, n_pix), tau lines only
         # ov_arr:     list of (n_samples, n_pix), one per overlap window
 
         # Transfer line and tau arrays to host once, then use zero-copy NumPy
@@ -540,16 +558,10 @@ def evaluate_model(
             for k in range(len(args.cont_config)):
                 cont_dict[args.continuum_labels[k]] = np.asarray(cont_arr[k])
 
-        is_abs = np.asarray(cm.is_tau)
-        if has_tau:
-            tau_arr_np = np.asarray(tau_arr)
-            tau_dict: dict[str, np.ndarray] = {
-                args.line_labels[j]: tau_arr_np[:, j, :]
-                for j in range(n_lines)
-                if is_abs[j]
-            }
-        else:
-            tau_dict = {}
+        tau_arr_np = np.asarray(tau_arr)
+        tau_dict: dict[str, np.ndarray] = {
+            args.line_labels[j]: tau_arr_np[:, t, :] for t, j in enumerate(tau_idx)
+        }
 
         results.append(
             SpectrumPrediction(

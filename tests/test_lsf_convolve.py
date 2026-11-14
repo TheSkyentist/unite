@@ -7,8 +7,17 @@ import math
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
-from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
+from unite._lsf import (
+    _FWHM_TO_SIGMA,
+    _apply_pixel_kernel,
+    _convolve_stacks_to_pixels,
+    _convolve_to_pixels,
+    _lsf_convolve,
+    _lsf_convolve_components,
+    _pixel_kernel,
+)
 
 
 def _uniform_grid(n: int, lo: float = 0.0, hi: float = 1.0) -> jnp.ndarray:
@@ -181,3 +190,155 @@ class TestFwhmToSigma:
         sigma = fwhm * _FWHM_TO_SIGMA
         fwhm_back = sigma * 2.0 * math.sqrt(2.0 * math.log(2.0))
         assert abs(fwhm_back - fwhm) < 1e-12
+
+
+def _pixel_grid(n_pixels: int, n_super: int):
+    """Non-uniform pixels with a wavelength-dependent LSF."""
+    edges = np.cumsum(np.linspace(0.8, 1.6, n_pixels + 1))
+    low, high = edges[:-1], edges[1:]
+    offsets = (np.arange(n_super) + 0.5) / n_super
+    x = (low[:, None] + offsets[None, :] * (high - low)[:, None]).ravel()
+    sigma = 0.9 + 0.004 * x
+    return jnp.asarray(x), jnp.asarray(sigma)
+
+
+def _reference(x, model, sigma, half_width, n_super):
+    return _lsf_convolve(x, model, sigma, half_width).reshape(-1, n_super).mean(axis=1)
+
+
+class TestPixelKernel:
+    """The pixel-averaged kernel reproduces convolve-then-average."""
+
+    @pytest.mark.parametrize(
+        ('n_pixels', 'n_super', 'half_width'),
+        [(60, 10, 37), (60, 4, 9), (5, 10, 80), (40, 1, 6), (1, 6, 4)],
+    )
+    def test_matches_convolve_then_average(self, n_pixels, n_super, half_width):
+        x, sigma = _pixel_grid(n_pixels, n_super)
+        model = jnp.sin(x / 3.0) + 0.01 * x + 2.0
+        weights = _pixel_kernel(x, sigma, half_width, n_super)
+        got = _apply_pixel_kernel(weights, model, half_width)
+        want = _reference(x, model, sigma, half_width, n_super)
+        np.testing.assert_allclose(got, want, rtol=1e-12)
+
+    def test_component_axes(self):
+        n_super, half_width = 10, 25
+        x, sigma = _pixel_grid(30, n_super)
+        models = jnp.stack([jnp.sin(x / (k + 2.0)) for k in range(6)]).reshape(2, 3, -1)
+        weights = _pixel_kernel(x, sigma, half_width, n_super)
+        got = _apply_pixel_kernel(weights, models, half_width)
+        assert got.shape == (2, 3, 30)
+        for a in range(2):
+            for b in range(3):
+                want = _reference(x, models[a, b], sigma, half_width, n_super)
+                np.testing.assert_allclose(got[a, b], want, rtol=1e-12)
+
+    def test_components_loop_matches(self):
+        half_width = 25
+        x, sigma = _pixel_grid(30, 10)
+        models = jnp.stack([jnp.sin(x / (k + 2.0)) + k for k in range(4)])
+        got = _lsf_convolve_components(x, models, sigma, half_width)
+        for k in range(4):
+            want = _lsf_convolve(x, models[k], sigma, half_width)
+            np.testing.assert_allclose(got[k], want, rtol=1e-12)
+
+
+class TestConvolveToPixels:
+    """Every route of _convolve_to_pixels gives the same pixel averages."""
+
+    n_super = 10
+    half_width = 25
+
+    def _setup(self):
+        x, sigma = _pixel_grid(30, self.n_super)
+        models = jnp.stack([jnp.sin(x / (k + 2.0)) + k for k in range(3)])
+        want = jnp.stack(
+            [_reference(x, m, sigma, self.half_width, self.n_super) for m in models]
+        )
+        return x, sigma, models, want
+
+    def test_constant_kernel_is_cached(self):
+        x, sigma, models, want = self._setup()
+        cache: dict = {}
+        fn = jax.jit(
+            lambda m: _convolve_to_pixels(
+                np.asarray(x),
+                m,
+                np.asarray(sigma),
+                self.half_width,
+                self.n_super,
+                cache=cache,
+                key='k',
+            )
+        )
+        np.testing.assert_allclose(fn(models[0]), want[0], rtol=1e-12)
+        np.testing.assert_allclose(fn(models), want, rtol=1e-12)
+        assert list(cache) == ['k']
+        weights = cache['k'][1]
+        assert isinstance(weights, np.ndarray)
+        # Same grid: the stored kernel is reused, not rebuilt.
+        _convolve_to_pixels(
+            np.asarray(x),
+            models[0],
+            np.asarray(sigma),
+            self.half_width,
+            self.n_super,
+            cache=cache,
+            key='k',
+        )
+        assert cache['k'][1] is weights
+
+    def test_cached_kernel_not_reused_for_other_lsf(self):
+        x, sigma, models, _ = self._setup()
+        cache: dict = {}
+        args = (self.half_width, self.n_super)
+        _convolve_to_pixels(
+            np.asarray(x), models[0], np.asarray(sigma), *args, cache=cache, key='k'
+        )
+        got = _convolve_to_pixels(
+            np.asarray(x), models[0], np.asarray(2 * sigma), *args, cache=cache, key='k'
+        )
+        want = _reference(x, models[0], 2 * sigma, *args)
+        np.testing.assert_allclose(got, want, rtol=1e-12)
+
+    def test_traced_kernel(self):
+        x, sigma, models, want = self._setup()
+        fn = jax.jit(
+            lambda x, m, s: _convolve_to_pixels(x, m, s, self.half_width, self.n_super)
+        )
+        np.testing.assert_allclose(fn(x, models[0], sigma), want[0], rtol=1e-12)
+        np.testing.assert_allclose(fn(x, models, sigma), want, rtol=1e-12)
+
+    @pytest.mark.parametrize('traced', [False, True])
+    def test_list_of_stacks(self, traced):
+        x, sigma, models, want = self._setup()
+
+        def run(x, s, m):
+            return _convolve_stacks_to_pixels(
+                x, [m[:1], m[1:]], s, self.half_width, self.n_super
+            )
+
+        if traced:
+            first, rest = jax.jit(run)(x, sigma, models)
+        else:
+            first, rest = run(np.asarray(x), np.asarray(sigma), models)
+        np.testing.assert_allclose(first, want[:1], rtol=1e-12)
+        np.testing.assert_allclose(rest, want[1:], rtol=1e-12)
+
+    def test_gradient_matches(self):
+        x, sigma, models, _ = self._setup()
+        weights = jnp.cos(jnp.arange(30) * 0.4)
+
+        def constant(m):
+            out = _convolve_to_pixels(
+                np.asarray(x), m, np.asarray(sigma), self.half_width, self.n_super
+            )
+            return jnp.sum(out * weights)
+
+        def reference(m):
+            out = _reference(x, m, sigma, self.half_width, self.n_super)
+            return jnp.sum(out * weights)
+
+        got = jax.grad(constant)(models[1])
+        want = jax.grad(reference)(models[1])
+        np.testing.assert_allclose(got, want, rtol=1e-10, atol=1e-14)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.core import Tracer
 
 
 def _effective_depth(tau_per_line, absorption_phi, cover_per_line):
@@ -46,6 +47,74 @@ def _effective_depth(tau_per_line, absorption_phi, cover_per_line):
     full = cover_per_line[:, None] >= 1.0
     cf_safe = jnp.where(full, 0.0, cover_per_line[:, None])
     return jnp.where(full, x, -jnp.log1p(cf_safe * jnp.expm1(-x)))
+
+
+def _attenuation_classes(is_tau, applies_matrix, cont_applies):
+    """Group emission lines and continuum groups by the absorbers in front.
+
+    A component's transmission depends only on *which* tau lines attenuate
+    it.  Components with the same set share one transmission curve, and the
+    number of distinct sets is the number of distinct depth orderings
+    (usually one or two), not the number of lines.  The grouping is static,
+    so it is resolved here in NumPy at trace time.
+
+    Parameters
+    ----------
+    is_tau : array-like of bool, shape ``(n_lines,)``
+    applies_matrix : array-like of bool, shape ``(n_lines, n_lines)``
+    cont_applies : array-like of bool, shape ``(n_groups, n_lines)``
+
+    Returns
+    -------
+    tuple or None
+        ``(tau_idx, patterns, line_class, cont_class)`` with ``tau_idx`` the
+        indices of the tau lines, ``patterns`` a bool ``(n_classes, n_lines)``
+        array (True where a tau line attenuates the class), ``line_class`` a
+        0/1 ``(n_classes, n_lines)`` array assigning emission lines to
+        classes and ``cont_class`` a 0/1 ``(n_classes, n_groups)`` array
+        assigning continuum groups.  ``None`` if any input is a traced
+        value, in which case the caller uses the dense per-line form.
+    """
+    inputs = (is_tau, applies_matrix, cont_applies)
+    if any(isinstance(a, Tracer) for a in inputs):
+        return None
+    tau = np.asarray(is_tau, dtype=bool)
+    app = np.asarray(applies_matrix, dtype=bool) & tau[None, :]
+    capp = np.atleast_2d(np.asarray(cont_applies, dtype=bool)) & tau[None, :]
+    em_idx = np.flatnonzero(~tau)
+    rows = np.concatenate([app[em_idx], capp], axis=0)
+    patterns, inverse = np.unique(rows, axis=0, return_inverse=True)
+    inverse = np.asarray(inverse).reshape(-1)
+    n_classes = patterns.shape[0]
+    line_class = np.zeros((n_classes, tau.shape[0]))
+    line_class[inverse[: em_idx.size], em_idx] = 1.0
+    cont_class = np.zeros((n_classes, capp.shape[0]))
+    cont_class[inverse[em_idx.size :], np.arange(capp.shape[0])] = 1.0
+    return np.flatnonzero(tau), patterns, line_class, cont_class
+
+
+def _class_terms(
+    classes, profiles, flux_per_line, tau_per_line, continuum, cover_per_line
+):
+    """Attenuated flux of each attenuation class and the tau-line depths.
+
+    Returns
+    -------
+    attenuated : jnp.ndarray, shape ``(n_classes, n_points)``
+        ``exp(-tau field) * (emission + continuum)`` of each class; the
+        total model is its sum over classes.
+    depth : jnp.ndarray, shape ``(n_tau, n_points)``
+        Effective optical depth of each tau line (in ``tau_idx`` order).
+    """
+    tau_idx, patterns, line_class, cont_class = classes
+    depth_tau = tau_per_line[tau_idx]
+    if cover_per_line is None:
+        depth = depth_tau[:, None] * profiles[tau_idx]
+    else:
+        depth = _effective_depth(depth_tau, profiles[tau_idx], cover_per_line[tau_idx])
+    fields = patterns[:, tau_idx].astype(float) @ depth  # (n_classes, n_points)
+    source = (line_class * flux_per_line[None, :]) @ profiles + cont_class @ continuum
+    return jnp.exp(-fields) * source, depth
 
 
 def compose_from_profiles(
@@ -107,11 +176,23 @@ def compose_from_profiles(
     """
     # Continuum may be 1-D (single group) or (n_groups, n_points): groups of
     # regions sharing a zorder, each with its own row of ``cont_applies``.
+    # Resolved before the jnp calls below, which stage constants under jit.
+    classes = (
+        _attenuation_classes(is_tau, applies_matrix, cont_applies) if has_tau else None
+    )
     continuum = jnp.atleast_2d(continuum)
     cont_applies = jnp.atleast_2d(cont_applies)
 
     if not has_tau:
         return (flux_per_line[:, None] * profiles).sum(axis=0) + continuum.sum(axis=0)
+
+    # Static zorder structure: one transmission curve per distinct set of
+    # absorbers instead of one per line.
+    if classes is not None:
+        attenuated, _ = _class_terms(
+            classes, profiles, flux_per_line, tau_per_line, continuum, cover_per_line
+        )
+        return attenuated.sum(axis=0)
 
     emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)  # (n_lines, n_points)
     absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)  # (n_lines, n_points)
@@ -197,6 +278,10 @@ def compose_leave_one_out(
         Per-line contribution.  Emission lines: attenuated flux profile
         (positive).  Absorption lines: flux removed (negative).
     """
+    # Resolved before the jnp calls below, which stage constants under jit.
+    classes = (
+        _attenuation_classes(is_tau, applies_matrix, cont_applies) if has_tau else None
+    )
     continuum = jnp.atleast_2d(continuum)
     cont_applies = jnp.atleast_2d(cont_applies)
 
@@ -206,6 +291,22 @@ def compose_leave_one_out(
         return total, emission_deltas
 
     emission_phi = jnp.where(is_tau[:, None], 0.0, profiles)  # (n_lines, n_points)
+
+    if classes is not None:
+        # total = sum over classes of A_u = T_u * S_u.  Removing tau line j
+        # multiplies T_u by exp(+depth_j) for every class it attenuates, so
+        # total - total_without_j = -expm1(depth_j) * sum_{u attenuated by j} A_u.
+        tau_idx, patterns, _, _ = classes
+        attenuated, depth_tau = _class_terms(
+            classes, profiles, flux_per_line, tau_per_line, continuum, cover_per_line
+        )
+        total = attenuated.sum(axis=0)
+        deltas = flux_per_line[:, None] * emission_phi  # (n_lines, n_points)
+        if tau_idx.size == 0:
+            return total, deltas
+        behind = patterns[:, tau_idx].T.astype(float) @ attenuated  # (n_tau, n_pts)
+        return total, deltas.at[tau_idx].set(-jnp.expm1(depth_tau) * behind)
+
     absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)  # (n_lines, n_points)
 
     if cover_per_line is None:

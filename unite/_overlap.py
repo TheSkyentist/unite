@@ -16,14 +16,16 @@ built once by :meth:`~unite.model.ModelBuilder.build`.
 
 from __future__ import annotations
 
+import contextlib
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
-from unite._lsf import _FWHM_TO_SIGMA, _lsf_convolve
+from unite._lsf import _FWHM_TO_SIGMA, _convolve_to_pixels
 from unite.continuum.compute import (
     integrate_continuum,
     interval_lsf_fwhm,
@@ -348,6 +350,9 @@ def convolved_term(
     inv_wl_scale,
     canonical_unit,
     source_fine: Callable,
+    static: bool = False,
+    cache: dict | None = None,
+    key: object = None,
 ):
     """Convolved, pixel-averaged ``r_m(x) F(x / m)`` on pixels ``[q0, q1)``.
 
@@ -364,24 +369,36 @@ def convolved_term(
         As for :func:`analytic_source`.
     source_fine : callable
         ``source_fine(photon_wl, fine_region_mask) -> F`` evaluating the
-        intrinsic (zero-LSF) composed source model.
+        intrinsic (zero-LSF) composed source model.  It may return leading
+        component axes, which are convolved with the same kernel.
+    static : bool, optional
+        ``True`` when the disperser's ``RScale`` and ``PixOffset`` are fixed
+        (*x_flat* and *r_scale* are concrete): the grid and LSF are then
+        evaluated at trace time and the kernel is a constant.
+    cache, key : dict and hashable, optional
+        Store and key for the constant kernel (see
+        :func:`unite._lsf._convolve_to_pixels`).
 
     Returns
     -------
-    jnp.ndarray, shape ``(q1 - q0,)``
+    jnp.ndarray, shape ``(..., q1 - q0)``
         Pixel-averaged convolved term (before ``OrderScale`` and
         ``FluxScale``).
     """
     m = window.order
-    x = x_flat[window.q0 * n_super : window.q1 * n_super]
-    photon = x / m
-    product = window.overlap.evaluate(x, canonical_unit) * source_fine(
-        photon, window.fine_region_mask
+    ctx = jax.ensure_compile_time_eval() if static else contextlib.nullcontext()
+    with ctx:
+        x = x_flat[window.q0 * n_super : window.q1 * n_super]
+        photon = x / m
+        ratio = window.overlap.evaluate(x, canonical_unit)
+        # On the observed axis the order-m LSF is m times its photon-axis FWHM.
+        sigma = (
+            m * order_lsf_fwhm(photon, m, disp, r_scale, inv_wl_scale) * _FWHM_TO_SIGMA
+        )
+    product = ratio * source_fine(photon, window.fine_region_mask)
+    return _convolve_to_pixels(
+        x, product, sigma, half_width, n_super, cache=cache, key=key
     )
-    # On the observed axis the order-m LSF is m times its photon-axis FWHM.
-    sigma = m * order_lsf_fwhm(photon, m, disp, r_scale, inv_wl_scale) * _FWHM_TO_SIGMA
-    conv = _lsf_convolve(x, product, sigma, half_width)
-    return conv.reshape(window.q1 - window.q0, n_super).mean(axis=1)
 
 
 def max_observed_lsf_fwhm(window: OverlapWindow, spectrum, wl_scale) -> float:
