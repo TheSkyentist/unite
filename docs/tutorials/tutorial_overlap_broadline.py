@@ -237,10 +237,9 @@ pyplot.show()
 # * **Narrow**: every line shares one redshift ``z`` and FWHM ``narrow``
 # * **Doublets/multiplets**: fixed ratios through one shared ``Flux`` and
 #   ``strength``
-# * **Broad hydrogen**: shared redshift and FWHM; free fluxes for
-#   H\ :math:`\alpha` and H\ :math:`\beta`, while the broad fluxes of
-#   H\ :math:`\gamma`, H\ :math:`\delta`, Pa\ :math:`\gamma` and
-#   Pa\ :math:`\delta` are tied by dependent priors
+# * **Broad hydrogen**: shared redshift and FWHM; a free flux for
+#   H\ :math:`\alpha`, while the broad flux of Pa\ :math:`\gamma` is tied to
+#   it by a dependent prior
 #
 # See :doc:`../usage/line_configuration` for the full line and profile
 # reference and :doc:`../usage/priors` for dependent priors.
@@ -296,22 +295,14 @@ def multiplet(name, centers, width, strength):
     )
 
 
-# Hydrogen: each line has its own flux, which we keep to tie the broad lines
+# Hydrogen: each line has its own flux; Ha and Pag are kept to tie the broad lines
 Ha = narrow('Ha', 6564.60, 0.5)
-Hb = narrow('Hb', 4862.71, 0.5)
-Hg = narrow('Hg', 4341.69, 0.5)
-Hd = narrow('Hd', 4102.89, 0.15)
-narrow('He', 3971.20, 0.05)
+narrow('Hb', 4862.71, 0.5)
 Pag = narrow('Pag', 10941.08, 0.15)
-Pad = narrow('Pad', 10052.12, 0.05)
-narrow('Pae', 9548.65, 0.05)
 
 # Single forbidden and helium lines
-narrow('OIII_4364', 4364.45, 0.15)
 narrow('HeI_5877', 5877.29, 0.15)
-narrow('HeI_7067', 7067.20, 0.05)
 narrow('HeI_10833', 10833.14, 0.15)
-narrow('OI_8449', 8448.78, 0.05)
 narrow('SII_6718', 6718.30, 0.15)
 narrow('SII_6733', 6732.67, 0.15)
 
@@ -325,18 +316,12 @@ multiplet('OII', [7321.13, 7322.20, 7331.76, 7332.83], 0.05, [0.6, 2, 1, 1.05])
 multiplet('SIII', [9070.05, 9532.25], 0.15, [1.0, 2.51])
 multiplet('CI', [9826.80, 9852.94], 0.05, [1.0, 2.98])
 
-# Broad hydrogen.  H-alpha and H-beta have free broad fluxes; the others keep
-# the broad-to-narrow ratio of the nearest free line, through a Fixed prior
-# that depends on other parameters.
+# Broad hydrogen.  H-alpha has a free broad flux; Pa-gamma keeps its
+# broad-to-narrow ratio, through a Fixed prior that depends on other parameters.
 Ha_broad = line.Flux('Ha_broad', prior=flux_prior(0.5))
-Hb_broad = line.Flux('Hb_broad', prior=flux_prior(0.5))
 broad_lines = {
     'Ha': (6564.60, Ha_broad),
-    'Hb': (4862.71, Hb_broad),
-    'Hg': (4341.69, line.Flux('Hg_broad', prior=prior.Fixed(Hg * Hb_broad / Hb))),
-    'Hd': (4102.89, line.Flux('Hd_broad', prior=prior.Fixed(Hd * Hb_broad / Hb))),
     'Pag': (10941.08, line.Flux('Pag_broad', prior=prior.Fixed(Pag * Ha_broad / Ha))),
-    'Pad': (10052.12, line.Flux('Pad_broad', prior=prior.Fixed(Pad * Ha_broad / Ha))),
 }
 for name, (center, flux) in broad_lines.items():
     line_configuration.add_line(
@@ -401,8 +386,8 @@ print(f'Line scale:      {spectra.line_scale:.4g}')
 print(f'Continuum scale: {spectra.continuum_scale:.4g}')
 
 # %%
-# With 50+ parameters and five spectra we use stochastic variational inference
-# (SVI) rather than NUTS: a multivariate-normal guide started from the priors'
+# With about 40 free parameters and five spectra we use stochastic variational
+# inference (SVI) rather than NUTS: a multivariate-normal guide started from the priors'
 # ``init`` values and optimised with Adam.  The posterior samples are drawn
 # from the guide.  See :doc:`../usage/inference` for other samplers.
 
@@ -410,7 +395,7 @@ model_fn, model_args = model.ModelBuilder(
     filtered_lines, filtered_cont, spectra
 ).build()
 
-N_STEPS = 6000
+N_STEPS = 3000
 guide = infer.autoguide.AutoMultivariateNormal(
     model_fn,
     init_loc_fn=infer.init_to_value(values=model_args.init_values),
