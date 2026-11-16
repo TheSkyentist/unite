@@ -35,6 +35,44 @@ _TINY_LSF: float = 1e-10
 # -------------------------------------------------------------------
 
 
+def _per_line_flux_z(cm, context, n_lines):
+    """Per-line flux and redshift offset from the shared-token matrices.
+
+    Single implementation used by :func:`_build_line_params` (sample time and
+    posterior evaluation) and by :mod:`unite.results` (vmapped over samples),
+    so reported fluxes and redshifts cannot drift from the fitted model.
+
+    Parameters
+    ----------
+    cm : ConfigMatrices
+        Precomputed parameter matrices and line metadata.
+    context : dict of str to array
+        Parameter values keyed by numpyro site name (scalars, or
+        batched under :func:`jax.vmap`).
+    n_lines : int
+        Number of lines.
+
+    Returns
+    -------
+    flux_per_line, z_per_line : jnp.ndarray
+        Both shape ``(n_lines,)``.  ``flux_per_line`` includes line
+        ``strengths``; it is zero for configurations with no flux tokens.
+    """
+    if cm.flux_names:
+        flux_per_line = (
+            mm(jnp.stack([context[n] for n in cm.flux_names]), cm.flux_matrix)
+            * cm.strengths
+        )
+    else:
+        flux_per_line = jnp.zeros(n_lines)
+
+    if cm.z_names:
+        z_per_line = mm(jnp.stack([context[n] for n in cm.z_names]), cm.z_matrix)
+    else:
+        z_per_line = jnp.zeros(n_lines)
+    return flux_per_line, z_per_line
+
+
 def _build_line_params(cm, context, n_lines, z_sys):
     """Unpack :class:`~unite.line.config.ConfigMatrices` into per-line arrays.
 
@@ -57,13 +95,7 @@ def _build_line_params(cm, context, n_lines, z_sys):
     flux_per_line, tau_per_line, centers, p0, p1, p2 : jnp.ndarray
         All shape ``(n_lines,)``.
     """
-    if cm.flux_names:
-        flux_per_line = (
-            mm(jnp.stack([context[n] for n in cm.flux_names]), cm.flux_matrix)
-            * cm.strengths
-        )
-    else:
-        flux_per_line = jnp.zeros(n_lines)
+    flux_per_line, z_per_line = _per_line_flux_z(cm, context, n_lines)
 
     if cm.tau_names:
         tau_per_line = (
@@ -73,8 +105,6 @@ def _build_line_params(cm, context, n_lines, z_sys):
     else:
         tau_per_line = jnp.zeros(n_lines)
 
-    z_vec = jnp.stack([context[n] for n in cm.z_names])
-    z_per_line = mm(z_vec, cm.z_matrix)
     centers = cm.wavelengths * (1.0 + z_sys + z_per_line)
 
     p0_kms = (

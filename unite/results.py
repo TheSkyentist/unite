@@ -16,23 +16,11 @@ from astropy.io import fits
 from astropy.table import QTable, Table
 
 from unite.compute import SpectrumPrediction, evaluate_model
+from unite.continuum.compute import eval_continuum
 from unite.continuum.library import ContinuumForm
+from unite.line.compute import _per_line_flux_z
 from unite.model import ModelArgs
 from unite.prior import Fixed
-
-# form.evaluate() expects scalar params; _compute_rew_columns needs it evaluated per
-# posterior sample, so we vmap+jit it and cache the result per form (keyed by id,
-# since ContinuumForm's __eq__/__hash__ are type-only) instead of re-tracing per line.
-_vmapped_evaluate_cache: dict[int, Callable] = {}
-
-
-def _vmapped_evaluate(form: ContinuumForm) -> Callable:
-    """Return a jitted, sample-vmapped version of ``form.evaluate``."""
-    cached = _vmapped_evaluate_cache.get(id(form))
-    if cached is None:
-        cached = jax.jit(jax.vmap(form.evaluate, in_axes=(0, None, 0, None, None)))
-        _vmapped_evaluate_cache[id(form)] = cached
-    return cached
 
 
 def count_parameters(model_fn, model_args) -> int:
@@ -726,21 +714,13 @@ def _compute_rew_columns(
             return _resolve_fixed(p, samples, args.name_to_token, n_samples)
         return np.asarray(samples[n])
 
-    # --- flux per line: (n_samples, n_lines) ---
-    if cm.flux_names:
-        flux_vecs = np.column_stack([_prior_to_samples(n) for n in cm.flux_names])
-        flux_per_line = (
-            flux_vecs @ np.asarray(cm.flux_matrix) * np.asarray(cm.strengths)
-        )
-    else:
-        flux_per_line = np.zeros((n_samples, n_lines))
-
-    # --- redshift per line: (n_samples, n_lines) ---
-    if cm.z_names:
-        z_vecs = np.column_stack([_prior_to_samples(n) for n in cm.z_names])
-        z_per_line = z_vecs @ np.asarray(cm.z_matrix)
-    else:
-        z_per_line = np.zeros((n_samples, n_lines))
+    # --- flux / redshift per line: (n_samples, n_lines) ---
+    # Shared with the model so results cannot drift from the fitted model.
+    _names = [*cm.flux_names, *cm.z_names]
+    _ctx = {n: _prior_to_samples(n) for n in _names}
+    _flux_j, _z_j = jax.vmap(lambda c: _per_line_flux_z(cm, c, n_lines))(_ctx)
+    flux_per_line = np.asarray(_flux_j)
+    z_per_line = np.asarray(_z_j)
 
     line_flux_scale = args.line_flux_scales[0]
     cont_scale = args.continuum_scales[0]
@@ -755,47 +735,26 @@ def _compute_rew_columns(
     # when either is None.  Rebind to non-Optional locals so closures see narrow types.
     _cont_config = args.cont_config
     _cont_resolved_params = args.cont_resolved_params
-    _cont_low = args.cont_low
-    _cont_high = args.cont_high
-    _cont_center = args.cont_center
-    _cont_nw_conv = args.cont_nw_conv
-    _cont_forms = args.cont_forms
     assert _cont_config is not None
     assert _cont_resolved_params is not None
-    assert _cont_low is not None
-    assert _cont_high is not None
-    assert _cont_center is not None
-    assert _cont_nw_conv is not None
-    assert _cont_forms is not None
 
-    # --- Helper: evaluate total continuum at a point, summing all covering regions ---
+    # --- Helper: total continuum at one point per sample ---
+    # Uses the model's own ``eval_continuum`` (region bounds, ``norm_wav``
+    # conversion, ``z_sys``), vmapped over samples, so it cannot drift from the
+    # fitted model.
+    _cont_names = sorted(
+        {
+            tok.name
+            for k in range(len(_cont_config))
+            for tok in _cont_resolved_params[k].values()
+        }
+    )
+    _cont_ctx = {n: _prior_to_samples(n) for n in _cont_names}
+    _cont_eval = jax.jit(jax.vmap(lambda ctx, wl: eval_continuum(wl, args, ctx, z_sys)))
+
     def _cont_at_point(obs_wl: np.ndarray) -> np.ndarray:
         """Total un-scaled continuum at obs_wl (n_samples,) → (n_samples,)."""
-        total = np.zeros(n_samples)
-        for k in range(len(_cont_config)):
-            obs_low = float(_cont_low[k]) * (1.0 + z_sys)
-            obs_high = float(_cont_high[k]) * (1.0 + z_sys)
-            obs_center = float(_cont_center[k]) * (1.0 + z_sys)
-            median_wl = float(np.median(obs_wl))
-            if median_wl < obs_low or median_wl > obs_high:
-                continue
-            cont_p: dict[str, np.ndarray] = {}
-            for pn, tok in _cont_resolved_params[k].items():
-                tok_name = tok.name
-                prior = args.all_priors[tok_name]
-                val: np.ndarray = (
-                    _resolve_fixed(prior, samples, args.name_to_token, n_samples)
-                    if isinstance(prior, Fixed)
-                    else np.asarray(samples[tok_name])
-                )
-                if pn == 'norm_wav':
-                    val = val * _cont_nw_conv[k] * (1.0 + z_sys)
-                cont_p[pn] = val
-            form = _cont_forms[k]
-            total = total + np.asarray(
-                _vmapped_evaluate(form)(obs_wl, obs_center, cont_p, obs_low, obs_high)
-            )
-        return total
+        return np.asarray(_cont_eval(_cont_ctx, obs_wl))
 
     for j in range(n_lines):
         label = args.line_labels[j]

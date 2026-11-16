@@ -1231,3 +1231,102 @@ class TestLogProbColumns:
         table = make_parameter_table(s, args)
         assert 'log_prob' in table.colnames
         assert 'log_likelihood' in table.colnames
+
+
+@pytest.fixture(scope='module')
+def dla_emission_rew_setup():
+    """Emission line on a ``DLAPowerLaw`` continuum at z_sys=2.
+
+    ``DLAPowerLaw.evaluate`` is the one continuum form whose output depends on
+    ``z_sys`` (rest wavelength = ``obs / (1 + z_sys + redshift)``).  The line
+    sits at rest 1225 AA, close to Lyman-alpha, so the continuum is strongly
+    suppressed with the correct ``z_sys`` but nearly unabsorbed with
+    ``z_sys=0``.
+    """
+    from unite.continuum import DLAPowerLaw
+
+    z_sys = 2.0
+    wavelength = np.linspace(3550, 4000, 600) * u.AA
+    disperser = SimpleDisperser(wavelength=wavelength, R=5000.0, name='dla')
+    low = wavelength - 0.5 * np.gradient(wavelength)
+    high = wavelength + 0.5 * np.gradient(wavelength)
+    flux_unit = u.Unit('1e-17 erg / (s cm2 AA)')
+    sigma = 4.0 / (2 * np.sqrt(2 * np.log(2)))
+    line_flux = 20 * np.exp(-0.5 * ((wavelength.value - 3675.0) / sigma) ** 2)
+    spec = Spectrum(
+        low=low,
+        high=high,
+        flux=(line_flux + 5.0) * flux_unit,
+        error=np.full(wavelength.size, 1.0) * flux_unit,
+        disperser=disperser,
+        name='dla',
+    )
+    lc = line.LineConfiguration()
+    lc.add_line(
+        'LyaWing',
+        1225.0 * u.AA,
+        redshift=line.Redshift(prior=prior.Fixed(0.0)),
+        fwhm_gauss=line.FWHM(prior=prior.Fixed(300.0)),
+        flux=line.Flux(prior=prior.Fixed(1.0)),
+    )
+    cont = ContinuumConfiguration.from_lines(
+        lc.centers, width=30_000 * u.km / u.s, form=DLAPowerLaw()
+    )
+    for region in cont:
+        region.params['scale'] = Scale(prior=prior.Fixed(1.0))
+        region.params['beta'] = ContShape(prior=prior.Fixed(-1.0))
+        region.params['log_NHI'] = ContShape(prior=prior.Fixed(21.0))
+        region.params['b'] = ContShape(prior=prior.Fixed(50.0))
+        region.params['redshift'] = ContShape(prior=prior.Fixed(0.0))
+    spectra = Spectra([spec], redshift=z_sys)
+    spectra.prepare(lc, cont)
+    spectra.compute_scales(spectra.prepared_line_config, spectra.prepared_cont_config)
+    _model_fn, args = model.ModelBuilder(
+        spectra.prepared_line_config, spectra.prepared_cont_config, spectra
+    ).build()
+    return args
+
+
+class TestREWUsesSystemicRedshift:
+    """REW must evaluate the continuum with the model's ``z_sys``."""
+
+    def test_emission_rew_matches_model_continuum(self, dla_emission_rew_setup):
+        """Regression: ``_compute_rew_columns`` once evaluated forms at z_sys=0.
+
+        The expected REW is built from ``form.evaluate`` called explicitly with
+        ``z_sys``; the ``z_sys=0`` value is asserted to differ so the test would
+        fail if the redshift were dropped again.
+        """
+        import jax.numpy as jnp
+
+        from unite.continuum.compute import _resolve_region_params
+        from unite.results import _compute_rew_columns
+
+        args = dla_emission_rew_setup
+        z_sys = args.redshift
+        assert z_sys == 2.0
+
+        ctx = {n: p.value for n, p in args.all_priors.items()}
+        obs_low, obs_high, obs_center, cparams = _resolve_region_params(
+            args, ctx, z_sys, 0
+        )
+        form = args.cont_forms[0]
+        obs_wl = 1225.0 * (1.0 + z_sys)  # line sits at rest wavelength, z_line=0
+
+        def cont_at(z):
+            return float(
+                form.evaluate(
+                    jnp.asarray(obs_wl), obs_center, cparams, obs_low, obs_high, 0.0, z
+                )
+            )
+
+        cont_correct, cont_wrong = cont_at(z_sys), cont_at(0.0)
+        assert cont_correct > 0.0
+        assert abs(cont_wrong / cont_correct - 1.0) > 0.1  # test is discriminating
+
+        rew = _compute_rew_columns({}, args)['rew_LyaWing']
+        flux_physical = args.line_flux_scales[0]
+        expected = flux_physical / (
+            cont_correct * args.continuum_scales[0] * (1 + z_sys)
+        )
+        np.testing.assert_allclose(rew, expected, rtol=1e-4)
