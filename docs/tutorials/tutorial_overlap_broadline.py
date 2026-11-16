@@ -2,8 +2,7 @@ r"""
 Order Overlap (Continuum)
 =========================
 
-In this tutorial we fit all five NIRSpec spectra (PRISM, G140M, G235M, G395M
-and G395H) of the broad-line source JADES-GS 187956 at :math:`z \approx 3.70`
+In this tutorial we fit three NIRSpec spectra (PRISM, G140M and G235M) of the broad-line source JADES-GS 187956 at :math:`z \approx 3.70`
 (DJA ID 152632) with one shared model.
 
 Light from higher diffraction orders can land on the detector of a grating
@@ -50,7 +49,7 @@ pyplot.style.use('unite.mplstyle')
 #
 # Each disperser carries its calibration tokens:
 #
-# * ``RScale`` — resolution scale, shared by all five gratings
+# * ``RScale`` — resolution scale, shared by all three dispersers
 # * ``FluxScale`` — flux normalization of each grating relative to the PRISM
 # * ``PixOffset`` — sub-pixel wavelength shift of the PRISM
 # * ``OrderOverlap`` + ``OrderScale`` — second-order light on G140M and G235M
@@ -145,21 +144,9 @@ g235m_disperser = nirspec.G235M(
     flux_scale=grating_flux_scale(),
     order_overlap=[instrument.OrderOverlap(2, g235m_ratio, scale=order_scale)],
 )
-g395m_disperser = nirspec.G395M(
-    r_source='point', r_scale=resolution_scale, flux_scale=grating_flux_scale()
-)
-g395h_disperser = nirspec.G395H(
-    r_source='point', r_scale=resolution_scale, flux_scale=grating_flux_scale()
-)
 
 instrument_config = instrument.InstrumentConfig(
-    [
-        prism_disperser,
-        g140m_disperser,
-        g235m_disperser,
-        g395m_disperser,
-        g395h_disperser,
-    ]
+    [prism_disperser, g140m_disperser, g235m_disperser]
 )
 print(instrument_config)
 
@@ -184,18 +171,15 @@ spectra = spectrum.Spectra(
             ('prism-clear', prism_disperser),
             ('g140m-f070lp', g140m_disperser),
             ('g235m-f170lp', g235m_disperser),
-            ('g395m-f290lp', g395m_disperser),
-            ('g395h-f290lp', g395h_disperser),
         ]
     ],
     redshift=zspec,
 )
 
 # %%
-# All five spectra together.  Redward of about 1.3 µm the G140M spectrum sits
+# All three spectra together.  Redward of about 1.3 µm the G140M spectrum sits
 # above the PRISM, and so does G235M redward of 3.2 µm: that is the
-# second-order continuum.  G395M and G395H, behind the F290LP filter, agree
-# with the PRISM.
+# second-order continuum.
 
 fig, ax = pyplot.subplots(figsize=(12, 6))
 # Gratings first, then the PRISM on top as the reference
@@ -386,7 +370,7 @@ print(f'Line scale:      {spectra.line_scale:.4g}')
 print(f'Continuum scale: {spectra.continuum_scale:.4g}')
 
 # %%
-# With about 40 free parameters and five spectra we use stochastic variational
+# With about 40 free parameters and three spectra we use stochastic variational
 # inference (SVI) rather than NUTS: a multivariate-normal guide started from the priors'
 # ``init`` values and optimised with Adam.  The posterior samples are drawn
 # from the guide.  See :doc:`../usage/inference` for other samplers.
@@ -455,11 +439,11 @@ def break_gaps(wavelength, *columns):
     ]
 
 
-fig, axes = pyplot.subplots(len(spectra_tables), 1, figsize=(12, 16), sharex=True)
+fig, axes = pyplot.subplots(len(spectra_tables), 1, figsize=(12, 10), sharex=True)
 fig.subplots_adjust(hspace=0.05, top=0.94, left=0.16)
 # Lower y-limit per panel: just below each spectrum's continuum, and low
 # enough in G235M to show its fainter second-order term
-y_floor = {'PRISM': 2, 'G140M': 1, 'G235M': 0.1, 'G395M': 2, 'G395H': 2}
+y_floor = {'PRISM': 2, 'G140M': 1, 'G235M': 0.1}
 for ax, (name, table) in zip(axes, spectra_tables.items(), strict=True):
     has_overlap = 'overlap_2' in table.colnames
     wavelength, data, total, second = break_gaps(
