@@ -20,6 +20,7 @@ from unite._utils import (
     _ensure_wavelength,
     _get_conversion_factor,
     _make_register,
+    mm,
 )
 from unite.continuum.functions import (
     bernstein_eval,
@@ -113,7 +114,13 @@ def _gaussian_convolve_poly(coeffs: Array, lsf_fwhm: ArrayLike) -> Array:
         for j in range(min(k // 2, max_half - 1) + 1):
             a_np[i + 2 * j, i, j] = binom_np[k, j]
 
-    return jnp.einsum('oij,j...,i->o...', jnp.asarray(a_np), moments, coeffs)
+    return jnp.einsum(
+        'oij,j...,i->o...',
+        jnp.asarray(a_np),
+        moments,
+        coeffs,
+        precision=jax.lax.Precision.HIGHEST,
+    )
 
 
 def _polyint_at(coeffs: Array, x: ArrayLike) -> Array:
@@ -962,7 +969,7 @@ class Chebyshev(ContinuumForm):
         cheb_coeffs = jnp.array(
             [1.0] + [params[f'c{i}'] for i in range(1, self._order + 1)]
         )
-        mono = (self._cheb2mono @ cheb_coeffs)[::-1]  # ascending → descending
+        mono = mm(self._cheb2mono, cheb_coeffs)[::-1]  # ascending → descending
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         shape = jnp.polyval(convolved, x)
@@ -989,7 +996,7 @@ class Chebyshev(ContinuumForm):
         cheb_coeffs = jnp.array(
             [1.0] + [params[f'c{i}'] for i in range(1, self._order + 1)]
         )
-        mono = (self._cheb2mono @ cheb_coeffs)[::-1]
+        mono = mm(self._cheb2mono, cheb_coeffs)[::-1]
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
         # Antiderivative in normalised coord; rescale to λ by dλ/du = scale_factor.
         shape_anti = _convolved_polyint(mono, lsf_fwhm_scaled, x) * scale_factor
@@ -1109,7 +1116,7 @@ class Legendre(ContinuumForm):
         leg_coeffs = jnp.array(
             [params['scale']] + [params[f'p{i}'] for i in range(1, self._order + 1)]
         )
-        mono = (self._leg2mono @ leg_coeffs)[::-1]  # ascending → descending
+        mono = mm(self._leg2mono, leg_coeffs)[::-1]  # ascending → descending
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
         return jnp.polyval(convolved, x)
@@ -1129,7 +1136,7 @@ class Legendre(ContinuumForm):
         leg_coeffs = jnp.array(
             [params['scale']] + [params[f'p{i}'] for i in range(1, self._order + 1)]
         )
-        mono = (self._leg2mono @ leg_coeffs)[::-1]  # ascending → descending
+        mono = mm(self._leg2mono, leg_coeffs)[::-1]  # ascending → descending
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / scale_factor
         # Antiderivative in normalised coord; rescale to λ by dλ/du = scale_factor.
         return _convolved_polyint(mono, lsf_fwhm_scaled, x) * scale_factor
@@ -1441,7 +1448,7 @@ class Bernstein(ContinuumForm):
             [jnp.array([1.0])]
             + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._degree + 1)]
         )
-        mono = (self._bern2mono @ coeffs)[::-1]  # ascending → descending
+        mono = mm(self._bern2mono, coeffs)[::-1]  # ascending → descending
         # LSF FWHM in t-coordinate: dt/dλ = 1 / (2 * scale_factor)
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * scale_factor)
         convolved = _gaussian_convolve_poly(mono, lsf_fwhm_scaled)
@@ -1472,7 +1479,7 @@ class Bernstein(ContinuumForm):
             [jnp.array([1.0])]
             + [jnp.atleast_1d(params[f'coeff_{i}']) for i in range(1, self._degree + 1)]
         )
-        mono = (self._bern2mono @ coeffs)[::-1]
+        mono = mm(self._bern2mono, coeffs)[::-1]
         lsf_fwhm_scaled = jnp.asarray(lsf_fwhm) / (2.0 * scale_factor)
         # Antiderivative in t-coord; rescale to λ via dλ/dt = 2 * scale_factor.
         shape_anti = _convolved_polyint(mono, lsf_fwhm_scaled, t) * (2.0 * scale_factor)

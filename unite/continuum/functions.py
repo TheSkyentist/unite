@@ -19,6 +19,8 @@ from astropy.constants import (
 from jax import Array, jit
 from jax.typing import ArrayLike
 
+from unite._utils import mm
+
 # ---------------------------------------------------------------------------
 # Physical constants
 # ---------------------------------------------------------------------------
@@ -100,7 +102,7 @@ def chebval(x: ArrayLike, coeffs: ArrayLike) -> Array:
     basis = jnp.cos(degrees[:, None] * theta[None, :])
 
     # Weighted sum: coeffs @ basis
-    return jnp.dot(coeffs, basis)
+    return mm(coeffs, basis)
 
     # ---------------------------------------------------------------------------
     # B-spline
@@ -137,7 +139,7 @@ def bernstein_eval(x, coeffs, binom_coeffs):
     # Resulting shape: (len(wavelength), n+1)
     basis = binom_coeffs * (x[:, None] ** i) * ((1.0 - x[:, None]) ** (n - i))
 
-    return basis @ coeffs
+    return mm(basis, coeffs)
 
 
 def bspline_basis(t: ArrayLike, knots: ArrayLike, degree: int) -> Array:
@@ -223,4 +225,4 @@ def bspline_eval(
     wavelength = jnp.asarray(wavelength)
     shape = wavelength.shape
     basis = bspline_basis(wavelength.reshape(-1), knots, degree)
-    return (basis @ coeffs).reshape(shape)
+    return mm(basis, coeffs).reshape(shape)

@@ -20,6 +20,8 @@ from jax import Array, jit
 from jax.scipy.special import erf, erfc, owens_t, wofz
 from jax.typing import ArrayLike
 
+from unite._utils import mm
+
 # Conversion: FWHM to sigma for the half-variance parametrization of erf.
 # sigma = FWHM / (2 sqrt(2 ln 2)); erf uses sqrt(2)*sigma, so the factor is:
 _HALFVAR_SIGMA_TO_FWHM: Final[float] = 2 * math.sqrt(math.log(2))
@@ -752,15 +754,15 @@ def _voigt_ida_params(
     rho_pows = jnp.stack([jnp.ones_like(rho), r1, r2, r3, r4, r5, r6])
 
     # Effective FWHM scaling parameters (eqs. 20-23)
-    wg = 1.0 - rho * jnp.dot(_IDA_A, rho_pows)
-    wl = 1.0 - one_minus_rho * jnp.dot(_IDA_B, rho_pows)
-    wi = jnp.dot(_IDA_C, rho_pows)
-    wp = jnp.dot(_IDA_D, rho_pows)
+    wg = 1.0 - rho * mm(_IDA_A, rho_pows)
+    wl = 1.0 - one_minus_rho * mm(_IDA_B, rho_pows)
+    wi = mm(_IDA_C, rho_pows)
+    wp = mm(_IDA_D, rho_pows)
 
     # Mixing fractions (eqs. 24-26)
-    eta_l = rho * (1.0 + one_minus_rho * jnp.dot(_IDA_F, rho_pows))
-    eta_i = rho * one_minus_rho * jnp.dot(_IDA_G, rho_pows)
-    eta_p = rho * one_minus_rho * jnp.dot(_IDA_H, rho_pows)
+    eta_l = rho * (1.0 + one_minus_rho * mm(_IDA_F, rho_pows))
+    eta_i = rho * one_minus_rho * mm(_IDA_G, rho_pows)
+    eta_p = rho * one_minus_rho * mm(_IDA_H, rho_pows)
     eta_g = 1.0 - eta_l - eta_i - eta_p
 
     # Absolute FWHM values for each component

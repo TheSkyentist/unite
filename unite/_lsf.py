@@ -16,6 +16,8 @@ import numpy as np
 from jax.core import Tracer
 from jax.typing import ArrayLike
 
+from unite._utils import mm
+
 #: Conversion factor from FWHM to Gaussian sigma: ``1 / (2 * sqrt(2 * ln 2))``.
 _FWHM_TO_SIGMA: float = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
 
@@ -112,7 +114,7 @@ def _lsf_convolve(
         kernel = jnp.exp(dx * dx * neg_inv_two_sigma_sq)
         # Normalise via a single scalar division at the end (flux-conserving),
         # avoiding the broadcast division of every kernel element.
-        return jnp.dot(kernel, wm) / jnp.sum(kernel)
+        return mm(kernel, wm) / jnp.sum(kernel)
 
     return jax.vmap(_at)(jnp.arange(len(x_fine)))
 

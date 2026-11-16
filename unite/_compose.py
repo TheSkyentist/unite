@@ -13,6 +13,8 @@ import jax.numpy as jnp
 import numpy as np
 from jax.core import Tracer
 
+from unite._utils import mm
+
 
 def _effective_depth(tau_per_line, absorption_phi, cover_per_line):
     """Per-absorber effective optical depth including covering fraction.
@@ -112,8 +114,10 @@ def _class_terms(
         depth = depth_tau[:, None] * profiles[tau_idx]
     else:
         depth = _effective_depth(depth_tau, profiles[tau_idx], cover_per_line[tau_idx])
-    fields = patterns[:, tau_idx].astype(float) @ depth  # (n_classes, n_points)
-    source = (line_class * flux_per_line[None, :]) @ profiles + cont_class @ continuum
+    fields = mm(patterns[:, tau_idx].astype(float), depth)  # (n_classes, n_points)
+    source = mm(line_class * flux_per_line[None, :], profiles) + mm(
+        cont_class, continuum
+    )
     return jnp.exp(-fields) * source, depth
 
 
@@ -200,16 +204,16 @@ def compose_from_profiles(
     # Per-component effective tau field:
     # tau_fields[j, p] = sum_k applies_matrix[j,k] * tau_per_line[k] * absorption_phi[k,p]
     if cover_per_line is None:
-        tau_fields = (
-            applies_matrix * tau_per_line[None, :]
-        ) @ absorption_phi  # (n_lines, n_points)
-        cont_tau = (
-            cont_applies * tau_per_line[None, :]
-        ) @ absorption_phi  # (G, n_points)
+        tau_fields = mm(
+            applies_matrix * tau_per_line[None, :], absorption_phi
+        )  # (n_lines, n_points)
+        cont_tau = mm(
+            cont_applies * tau_per_line[None, :], absorption_phi
+        )  # (G, n_points)
     else:
         depth = _effective_depth(tau_per_line, absorption_phi, cover_per_line)
-        tau_fields = applies_matrix @ depth
-        cont_tau = cont_applies @ depth
+        tau_fields = mm(applies_matrix, depth)
+        cont_tau = mm(cont_applies, depth)
     t_eff = jnp.exp(-tau_fields)  # (n_lines, n_points)
 
     attenuated_emission = (flux_per_line[:, None] * emission_phi * t_eff).sum(axis=0)
@@ -304,7 +308,7 @@ def compose_leave_one_out(
         deltas = flux_per_line[:, None] * emission_phi  # (n_lines, n_points)
         if tau_idx.size == 0:
             return total, deltas
-        behind = patterns[:, tau_idx].T.astype(float) @ attenuated  # (n_tau, n_pts)
+        behind = mm(patterns[:, tau_idx].T.astype(float), attenuated)  # (n_tau, n_pts)
         return total, deltas.at[tau_idx].set(-jnp.expm1(depth_tau) * behind)
 
     absorption_phi = jnp.where(is_tau[:, None], profiles, 0.0)  # (n_lines, n_points)
@@ -313,7 +317,7 @@ def compose_leave_one_out(
         depth = tau_per_line[:, None] * absorption_phi  # (n_lines, n_points)
     else:
         depth = _effective_depth(tau_per_line, absorption_phi, cover_per_line)
-    tau_fields = applies_matrix @ depth
+    tau_fields = mm(applies_matrix, depth)
     t_eff = jnp.exp(-tau_fields)  # (n_lines, n_points)
 
     # Precompute attenuated per-line terms; reused in the tau LOO loop below.
@@ -322,7 +326,7 @@ def compose_leave_one_out(
     )  # (n_lines, n_points)
     attenuated_emission = attenuated_per_line.sum(axis=0)
 
-    cont_tau = cont_applies @ depth  # (G, n)
+    cont_tau = mm(cont_applies, depth)  # (G, n)
     t_cont = jnp.exp(-cont_tau)  # (G, n)
     total = attenuated_emission + (t_cont * continuum).sum(axis=0)
 

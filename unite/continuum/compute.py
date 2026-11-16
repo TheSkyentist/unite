@@ -14,6 +14,8 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+from unite._utils import mm
+
 
 def _resolve_region_params(args, context, z_sys, k):
     """Extract observed-frame bounds and parameter dict for continuum region *k*.
@@ -89,7 +91,8 @@ def _group_sum(per_region, group_matrix, shape):
     group_matrix = jnp.asarray(group_matrix, dtype=float)
     if not per_region:
         return jnp.zeros((group_matrix.shape[0], *shape))
-    return jnp.tensordot(group_matrix, jnp.stack(per_region), axes=1)
+    stacked = jnp.stack(per_region).reshape(len(per_region), -1)
+    return mm(group_matrix, stacked).reshape(group_matrix.shape[0], *shape)
 
 
 def eval_continuum(

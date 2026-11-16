@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from unite._utils import C_KMS
+from unite._utils import C_KMS, mm
 from unite.line.library import _EVALUATE_BRANCHES, _INTEGRATE_BRANCHES
 
 # -------------------------------------------------------------------
@@ -59,8 +59,7 @@ def _build_line_params(cm, context, n_lines, z_sys):
     """
     if cm.flux_names:
         flux_per_line = (
-            jnp.stack([context[n] for n in cm.flux_names])
-            @ cm.flux_matrix
+            mm(jnp.stack([context[n] for n in cm.flux_names]), cm.flux_matrix)
             * cm.strengths
         )
     else:
@@ -68,42 +67,43 @@ def _build_line_params(cm, context, n_lines, z_sys):
 
     if cm.tau_names:
         tau_per_line = (
-            jnp.stack([context[n] for n in cm.tau_names]) @ cm.tau_matrix * cm.strengths
+            mm(jnp.stack([context[n] for n in cm.tau_names]), cm.tau_matrix)
+            * cm.strengths
         )
     else:
         tau_per_line = jnp.zeros(n_lines)
 
     z_vec = jnp.stack([context[n] for n in cm.z_names])
-    z_per_line = z_vec @ cm.z_matrix
+    z_per_line = mm(z_vec, cm.z_matrix)
     centers = cm.wavelengths * (1.0 + z_sys + z_per_line)
 
     p0_kms = (
-        jnp.stack([context[n] for n in cm.p0_names]) @ cm.p0_matrix
+        mm(jnp.stack([context[n] for n in cm.p0_names]), cm.p0_matrix)
         if cm.p0_names
         else jnp.zeros(n_lines)
     )
     p0 = centers * p0_kms / C_KMS
 
     p1v_kms = (
-        jnp.stack([context[n] for n in cm.p1v_names]) @ cm.p1v_matrix
+        mm(jnp.stack([context[n] for n in cm.p1v_names]), cm.p1v_matrix)
         if cm.p1v_names
         else jnp.zeros(n_lines)
     )
     p1v = centers * p1v_kms / C_KMS
     p1d = (
-        jnp.stack([context[n] for n in cm.p1d_names]) @ cm.p1d_matrix
+        mm(jnp.stack([context[n] for n in cm.p1d_names]), cm.p1d_matrix)
         if cm.p1d_names
         else jnp.zeros(n_lines)
     )
     p1 = p1v + p1d
 
     p2v_kms = (
-        jnp.stack([context[n] for n in cm.p2v_names]) @ cm.p2v_matrix
+        mm(jnp.stack([context[n] for n in cm.p2v_names]), cm.p2v_matrix)
         if cm.p2v_names
         else jnp.zeros(n_lines)
     )
     p2d = (
-        jnp.stack([context[n] for n in cm.p2d_names]) @ cm.p2d_matrix
+        mm(jnp.stack([context[n] for n in cm.p2d_names]), cm.p2d_matrix)
         if cm.p2d_names
         else jnp.zeros(n_lines)
     )
@@ -136,7 +136,7 @@ def _build_cover_params(cm, context, n_lines):
         return None
     vals = jnp.stack([context[n] for n in cm.cover_names])
     has_tok = cm.cover_matrix.sum(axis=0)  # 1 where a token is attached, else 0
-    return vals @ cm.cover_matrix + (1.0 - has_tok)
+    return mm(vals, cm.cover_matrix) + (1.0 - has_tok)
 
 
 # -------------------------------------------------------------------

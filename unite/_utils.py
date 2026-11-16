@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 
+import jax
+import jax.numpy as jnp
 from astropy import units as u
 from astropy.constants import c  # ty: ignore[import-not-found]
 
@@ -16,6 +18,35 @@ _T = TypeVar('_T')
 
 C_KMS: float = c.to('km/s').value
 """Speed of light in km/s."""
+
+# ---------------------------------------------------------------------------
+# Numerics
+# ---------------------------------------------------------------------------
+
+
+def mm(a, b):
+    """Matrix product that always runs at full floating-point precision.
+
+    On GPUs with TF32 tensor cores (A100, H100) JAX's default for float32
+    matmuls truncates operands to a 10-bit mantissa (~1e-3 relative error),
+    which puts a noise floor in the likelihood and its gradients.  Many model
+    products here contract tiny static 0/1 matrices against float data, so the
+    speed gain is negligible.  Every ``jnp`` matrix product in the model path
+    goes through this helper so the result does not depend on the user's
+    ``jax_default_matmul_precision``.
+
+    Parameters
+    ----------
+    a, b : array-like
+        Operands, with :func:`jax.numpy.matmul` semantics.
+
+    Returns
+    -------
+    jax.Array
+        ``a @ b`` evaluated with ``precision=HIGHEST``.
+    """
+    return jnp.matmul(a, b, precision=jax.lax.Precision.HIGHEST)
+
 
 # ---------------------------------------------------------------------------
 # Registry decorator factory
