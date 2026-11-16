@@ -6,6 +6,10 @@ build:
     python: "3.13"
   commands:
     - curl -fsSL https://pixi.sh/install.sh | bash
-    - $HOME/.pixi/bin/pixi run docs
+    - $HOME/.pixi/bin/pixi install -e docs
+    # Diagnostic split of `pixi run docs`: each step gets its own timing, and
+    # `timeout` makes a stall fail with a saved log instead of a silent kill.
+    - timeout 600 $HOME/.pixi/bin/pixi run -e docs sphinx-build -b html docs docs/_build/html
+    - $HOME/.pixi/bin/pixi run -e docs marimo export html examples/explorer.py -o docs/_build/html/_static/explorer.html --no-include-code
     - mkdir -p $READTHEDOCS_OUTPUT/html
     - cp -r docs/_build/html/. $READTHEDOCS_OUTPUT/html
