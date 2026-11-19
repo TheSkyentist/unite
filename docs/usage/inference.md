@@ -51,6 +51,20 @@ with jax.default_device(jax.devices('gpu')[0]):
 Install JAX with GPU support following the
 [official JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html).
 
+:::{important}
+On GPUs, set the following XLA flag **before JAX is imported** to work around an
+upstream XLA/JAX bug:
+
+```bash
+XLA_FLAGS=--xla_gpu_enable_triton_gemm=false python my_script.py
+```
+
+This disables XLA's Triton-based GEMM kernels and falls back to cuBLAS, which has a small
+performance impact because `unite`'s matrix products are small. However failing to set this
+can results in incorrect gradients and values, leading to inaccurate results as well as the
+sampler failing to converge. This may only happen when batching and on CUDA.
+:::
+
 ---
 
 ## Running the Model
