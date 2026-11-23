@@ -111,7 +111,6 @@ class OrderOverlap:
         self.order: int = int(order)
         self.path: Path = Path(path)
         self.scale: OrderScale = scale if scale is not None else OrderScale()
-        self._column_arg = column
 
         wl, ratio, col = _read_ratio_table(self.path, column)
         self.column: str = col
