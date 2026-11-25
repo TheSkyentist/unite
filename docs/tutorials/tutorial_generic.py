@@ -326,9 +326,11 @@ for row, s in enumerate(spectra):
 builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
 model_fn, model_args = builder.build()
 
-# ``dense_mass=True`` changes what warmup learns (a full mass matrix
-# instead of a diagonal one), worth it since this model has real correlations
-kernel = infer.NUTS(model_fn, dense_mass=True)
+# ``dense_mass`` changes what warmup learns. ``model_args.mass_blocks`` is a
+# mass matrix that is dense only within groups of parameters the configuration
+# couples (shared kinematics, continuum regions, dependent priors), which is
+# what ``builder.fit()`` uses by default.
+kernel = infer.NUTS(model_fn, dense_mass=model_args.mass_blocks)
 mcmc = infer.MCMC(
     kernel, num_warmup=500, num_samples=1000, num_chains=2, progress_bar=False
 )

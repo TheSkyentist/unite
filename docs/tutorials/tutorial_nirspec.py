@@ -340,12 +340,13 @@ builder = model.ModelBuilder(filtered_lines, filtered_cont, spectra)
 model_fn, model_args = builder.build()
 
 # %%
-# ``dense_mass=True`` only changes what warmup learns (a full mass matrix
-# instead of a diagonal one). Worth it here: ``fwhm_broad``'s prior is tied
-# to ``fwhm_narrow`` (Step 3). Arguably allways worth it since ``resolution_scale``
-# is always correlated with width.
+# ``dense_mass`` only changes what warmup learns. ``model_args.mass_blocks`` is
+# dense within groups of parameters the configuration couples and diagonal
+# between them. That matters here: ``fwhm_broad``'s prior is tied to
+# ``fwhm_narrow`` (Step 3), and ``resolution_scale`` is correlated with every
+# width. This is what ``builder.fit()`` uses by default.
 
-kernel = infer.NUTS(model_fn, dense_mass=True)
+kernel = infer.NUTS(model_fn, dense_mass=model_args.mass_blocks)
 mcmc = infer.MCMC(
     kernel, num_warmup=500, num_samples=1000, num_chains=2, progress_bar=False
 )

@@ -95,20 +95,60 @@ NumPyro initialization strategy) overrides both.
 recommended sampler for most problems. It uses gradient information to efficiently
 explore the posterior.
 
-:::{tip}
-`unite` models often correlate parameters (shared calibration tokens,
-[dependent priors](priors.md#dependent-priors)). `dense_mass=True` only
-affects what NUTS learns during warmup, a full mass matrix instead of a
-diagonal one, so it's cheap to leave on, which is why
-{meth}`~unite.model.ModelBuilder.fit` always uses it.
-:::
+(mass-matrix)=
+#### The mass matrix
+
+`unite` models often correlate parameters: lines share redshift and width tokens,
+a line's flux trades off against its width and the local continuum, and
+[dependent priors](priors.md#dependent-priors) tie parameters together. During warmup
+NUTS learns a *mass matrix* that rescales and rotates the parameter space to account
+for this. NumPyro offers two extremes: a diagonal matrix (per-parameter scales only,
+the default) or a fully dense one. A fully dense matrix has to estimate every pairwise
+correlation from a few hundred warmup draws, most of which are really zero.
+
+{meth}`~unite.model.ModelBuilder.fit` therefore defaults to `mass_matrix='blocks'`,
+which is dense *within* groups of parameters the configuration couples and diagonal
+between them:
+
+- dependent priors (a parameter and the parameters its bounds depend on),
+- the parameters of one continuum region,
+- each line's flux (or tau) together with its redshift, width, shape and covering
+  fraction, so lines sharing a token land in the same group,
+- each line together with the continuum region(s) that contain it,
+- the calibration parameters of one disperser.
+
+Groups hold at most 16 parameters; once a group is full, weaker couplings are skipped.
+The options are:
+
+| `mass_matrix` | Meaning |
+| --- | --- |
+| `'blocks'` (default) | Dense within the groups above, diagonal between them. |
+| `'dense'` | One full matrix over all parameters. |
+| `'diag'` | Per-parameter scales only (NumPyro's default). |
+| a list of tuples of site names | Your own groups; unlisted parameters are diagonal. |
+
+```python
+samples, model_args = builder.fit(mass_matrix='dense')
+samples, model_args = builder.fit(mass_matrix=[('z_narrow', 'fwhm_gauss_narrow')])
+```
+
+When you build the kernel yourself, the groups are available as
+{attr}`~unite.model.ModelArgs.mass_blocks`:
+
+```python
+kernel = infer.NUTS(model_fn, dense_mass=model_args.mass_blocks)
+```
+
+The mass matrix only affects warmup; it never changes the posterior. If a fit warms up
+slowly or has a small step size, try `'dense'`, or print `model_args.mass_blocks` to
+check that the groups match the correlations you expect.
 
 ```python
 import jax
 from numpyro import infer
 
 model_fn, model_args = builder.build()
-kernel = infer.NUTS(model_fn, dense_mass=True)  # full mass matrix — see tip above
+kernel = infer.NUTS(model_fn, dense_mass=model_args.mass_blocks)  # see {ref}`mass-matrix`
 mcmc = infer.MCMC(
     kernel,
     num_warmup=500,
@@ -171,7 +211,7 @@ kernel = infer.NUTS(
     model_fn,
     target_accept_prob=0.9,   # default 0.8; increase for difficult posteriors
     max_tree_depth=12,        # default 10; increase if chains get stuck, or decrease to speed up if you get "divergent transition after max tree depth" warnings
-    dense_mass=True,          # full mass matrix — see tip above
+    dense_mass=model_args.mass_blocks,  # structured mass matrix, see above
 )
 ```
 
@@ -207,7 +247,7 @@ samples = guide.sample_posterior(jax.random.PRNGKey(1), params, sample_shape=(50
 
 :::{note}
 The guide family determines what correlations SVI can represent, and it matters
-for the same reason `dense_mass` matters for NUTS (see the tip above):
+for the same reason the mass matrix matters for NUTS (see [the mass matrix](mass-matrix)):
 
 - `AutoNormal` / `AutoDiagonalNormal`: an independent Gaussian per
   parameter in unconstrained space. Fastest, but **structurally** cannot capture

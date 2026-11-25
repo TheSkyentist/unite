@@ -189,6 +189,29 @@ class ModelArgs:
             if prior.init is not None
         }
 
+    @property
+    def mass_blocks(self) -> list[tuple[str, ...]]:
+        """Dense mass-matrix blocks derived from the configuration.
+
+        Groups the free parameters that the configuration couples (shared
+        kinematics, a line's own parameters, a continuum region's parameters,
+        dependent priors, one disperser's calibration) into tuples of site
+        names.  Parameters in no block are left to a diagonal mass.  This is
+        the structure :meth:`ModelBuilder.fit` uses for
+        ``mass_matrix='blocks'``; pass it to NumPyro yourself as
+        ``NUTS(model_fn, dense_mass=model_args.mass_blocks)``.  Blocks hold at
+        most 16 parameters; call :func:`unite._mass.mass_blocks` directly to
+        change that.
+
+        Examples
+        --------
+        >>> model_fn, model_args = builder.build()
+        >>> kernel = numpyro.infer.NUTS(model_fn, dense_mass=model_args.mass_blocks)
+        """
+        from unite._mass import mass_blocks
+
+        return mass_blocks(self)
+
     def __bool__(self) -> bool:
         """Return True if the model has at least one spectrum."""
         return len(self.spectra) > 0
@@ -545,6 +568,48 @@ def unite_model(args: ModelArgs) -> None:
 # ------------------------------------------------------------------
 # Starting-value validation
 # ------------------------------------------------------------------
+
+
+def _resolve_mass_matrix(
+    mass_matrix: str | Sequence[Sequence[str]], args: ModelArgs
+) -> bool | list[tuple[str, ...]]:
+    """Translate a ``fit(mass_matrix=...)`` option into NumPyro's ``dense_mass``."""
+    if mass_matrix is None or isinstance(mass_matrix, str):
+        if mass_matrix == 'dense':
+            return True
+        if mass_matrix == 'diag':
+            return False
+        if mass_matrix == 'blocks':
+            try:
+                return args.mass_blocks
+            except Exception as err:
+                warnings.warn(
+                    f'Could not build mass-matrix blocks ({err!r}); using '
+                    "mass_matrix='dense'.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+                return True
+        msg = (
+            f"mass_matrix must be 'blocks', 'dense', 'diag' or a sequence of "
+            f'groups of parameter names, got {mass_matrix!r}.'
+        )
+        raise ValueError(msg)
+
+    free = {n for n, p in args.all_priors.items() if not isinstance(p, Fixed)}
+    blocks = [tuple(sorted(group)) for group in mass_matrix]
+    names = [n for b in blocks for n in b]
+    unknown = sorted(set(names) - free)
+    if unknown:
+        msg = (
+            f'mass_matrix names parameters that are not sampled: {unknown}. '
+            f'Sampled parameters: {sorted(free)}.'
+        )
+        raise ValueError(msg)
+    if len(names) != len(set(names)):
+        msg = 'mass_matrix lists a parameter in more than one group.'
+        raise ValueError(msg)
+    return blocks
 
 
 def _validate_init_values(
@@ -1104,6 +1169,8 @@ class ModelBuilder:
         init_strategy: Callable | None = None,
         chain_method: Literal['parallel', 'sequential', 'vectorized'] = 'parallel',
         extra_fields: Sequence[str] = ('diverging',),
+        mass_matrix: Literal['blocks', 'dense', 'diag']
+        | Sequence[Sequence[str]] = 'blocks',
     ) -> tuple[dict, ModelArgs]:
         """Fit the model using NUTS sampling (convenience wrapper).
 
@@ -1112,11 +1179,13 @@ class ModelBuilder:
         (e.g., custom kernel, SVI, nested sampling), call :meth:`build`
         directly and use numpyro's inference APIs.
 
-        The NUTS kernel is always built with ``dense_mass=True``. This only
-        affects what warmup learns (a full mass matrix instead of a
-        diagonal one), which helps because unite models often correlate
-        parameters, e.g. shared calibration tokens or dependent priors
-        (see :doc:`/usage/priors`).
+        ``mass_matrix`` sets what warmup learns for the NUTS mass matrix.
+        unite models often correlate parameters, e.g. shared kinematics,
+        calibration tokens or dependent priors (see :doc:`/usage/priors`),
+        so a diagonal mass is rarely enough, but a fully dense one has to
+        estimate many entries that are really zero.  The default
+        ``'blocks'`` is dense only within groups of parameters the
+        configuration couples (see :attr:`ModelArgs.mass_blocks`).
 
         Parameters
         ----------
@@ -1167,6 +1236,16 @@ class ModelBuilder:
             attribute such as ``'adapt_state.step_size'``.  Fields must be
             arrays with one entry per sample; pytree fields (``'z'``,
             ``'adapt_state'``) are rejected.  Pass ``()`` to record none.
+        mass_matrix : {'blocks', 'dense', 'diag'} or sequence of sequences of str, optional
+            Structure of the mass matrix learned during warmup (default:
+            ``'blocks'``).  ``'blocks'`` is dense within groups of coupled
+            parameters derived from the configuration (:attr:`ModelArgs.mass_blocks`)
+            and diagonal between them; if the groups cannot be built it
+            warns and uses ``'dense'``.  ``'dense'`` learns one full matrix
+            over all parameters.  ``'diag'`` learns only per-parameter
+            scales (NumPyro's own default).  A sequence of groups of
+            parameter site names, e.g. ``[('z_a', 'fwhm_a'), ('c0_a', 'c1_a')]``,
+            sets the blocks by hand; unlisted parameters are diagonal.
 
         Returns
         -------
@@ -1190,7 +1269,9 @@ class ModelBuilder:
         ------
         ValueError
             If an ``extra_fields`` name collides with ``'log_prob'``,
-            ``'log_likelihood'`` or a model parameter name.
+            ``'log_likelihood'`` or a model parameter name, or if
+            ``mass_matrix`` is not a recognised option or names an unknown
+            or repeated parameter.
         TypeError
             If an ``extra_fields`` entry is not an array (e.g. ``'z'``).
 
@@ -1214,6 +1295,7 @@ class ModelBuilder:
             n_super=n_super,
             conv_half_width=conv_half_width,
         )
+        dense_mass = _resolve_mass_matrix(mass_matrix, model_args)
         if init_strategy is None:
             init_values = model_args.init_values
             init_strategy = (
@@ -1222,7 +1304,7 @@ class ModelBuilder:
                 else infer.init_to_uniform
             )
         mcmc = infer.MCMC(
-            infer.NUTS(model_fn, dense_mass=True, init_strategy=init_strategy),
+            infer.NUTS(model_fn, dense_mass=dense_mass, init_strategy=init_strategy),
             num_warmup=num_warmup,
             num_samples=num_samples,
             num_chains=num_chains,

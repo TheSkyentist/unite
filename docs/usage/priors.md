@@ -125,8 +125,9 @@ flux_4363_broad = line.Flux(
 
 :::{warning}
 Dependent priors like this tie parameters' posteriors together. For NUTS,
-pass `dense_mass=True` so warmup learns a full mass matrix instead of a
-diagonal one; for SVI, use a full-rank guide (`AutoMultivariateNormal`)
+`fit()` already learns a mass matrix that is dense across the tied parameters (see
+[the mass matrix](inference.md#the-mass-matrix)); if you build the kernel yourself,
+pass `dense_mass=model_args.mass_blocks`. For SVI, use a full-rank guide (`AutoMultivariateNormal`)
 instead of a mean-field one (see [Sampling & Optimization](inference.md))
 :::
 
