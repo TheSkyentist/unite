@@ -62,7 +62,8 @@ z = line.Redshift('z', prior=prior.Uniform(-0.01, 0.01))
 fwhm = line.FWHM('fwhm', prior=prior.Uniform(50, 500))
 
 lc.add_line(
-    'H_alpha', 6563.0 * u.AA,
+    'H_alpha',
+    6563.0 * u.AA,
     redshift=z,
     fwhm_gauss=fwhm,
     flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 1)),
@@ -106,8 +107,7 @@ an explicit `names` array of the same length as `centers`.
 lc.add_lines('OIII', [4960, 5008] * u.AA, redshift=z, fwhm_gauss=fwhm)
 
 # Explicit names
-lc.add_lines('OIII', [4960, 5008] * u.AA,
-             names=['OIII_blue', 'OIII_red'], redshift=z)
+lc.add_lines('OIII', [4960, 5008] * u.AA, names=['OIII_blue', 'OIII_red'], redshift=z)
 ```
 
 Note how we fix the line ratio here.
@@ -115,10 +115,11 @@ Note how we fix the line ratio here.
 ```python
 flux = line.Flux('OIII')
 lc.add_lines(
-    'OIII', [4960, 5008] * u.AA,
-    redshift = z, # Same redshift
-    fwhm = [fwhm, fwhm], # Different FWHMs (just as an example)
-    flux = [line.Flux(prior = prior.Fixed(flux / 3)), flux], # Fixed ratio
+    'OIII',
+    [4960, 5008] * u.AA,
+    redshift=z,  # Same redshift
+    fwhm=[fwhm, fwhm],  # Different FWHMs (just as an example)
+    flux=[line.Flux(prior=prior.Fixed(flux / 3)), flux],  # Fixed ratio
 )
 ```
 
@@ -127,9 +128,13 @@ However, it is likely easier to specify multiples through the `strength` paramet
 ```python
 flux = line.Flux('OIII')
 lc.add_lines(
-    'OIII', [4960, 5008] * u.AA,
-    flux = line.Flux(), # Default behaviour, this would mean all lines have the same flux
-    strength = [1/3, 1] # But we pass a strength per line which is multiplied by the flux token when building the model
+    'OIII',
+    [4960, 5008] * u.AA,
+    flux=line.Flux(),  # Default behaviour, this would mean all lines have the same flux
+    strength=[
+        1 / 3,
+        1,
+    ],  # But we pass a strength per line which is multiplied by the flux token when building the model
 )
 ```
 
@@ -160,12 +165,27 @@ Fluxes are relative to a scale computed based on the spectrum. See Flux and Erro
 z = line.Redshift('z', prior=prior.Uniform(-0.01, 0.01))
 fwhm = line.FWHM('fwhm', prior=prior.Uniform(50, 500))
 
-lc.add_line('H_alpha',  6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 10)))
-lc.add_line('NII_6585', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('NII6585_flux', prior=prior.Uniform(0, 10)))
-lc.add_line('NII_6549', 6549.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('NII6549_flux', prior=prior.Uniform(0, 10)))
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm,
+    flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 10)),
+)
+lc.add_line(
+    'NII_6585',
+    6585.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm,
+    flux=line.Flux('NII6585_flux', prior=prior.Uniform(0, 10)),
+)
+lc.add_line(
+    'NII_6549',
+    6549.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm,
+    flux=line.Flux('NII6549_flux', prior=prior.Uniform(0, 10)),
+)
 ```
 
 Result: one `z` parameter and one `fwhm` parameter in the model, shared by all three lines.
@@ -197,10 +217,10 @@ So pass **only the semantic label**, not the full prefixed name:
 z = line.Redshift()
 
 # Explicit semantic labels → clear, shareable across lines
-z_nlr = line.Redshift('nlr')        # → site name 'z_nlr'
-z_blr = line.Redshift('blr')        # → site name 'z_blr'
-fwhm = line.FWHM('broad')           # → site name 'fwhm_broad'
-flux = line.Flux('Ha')              # → site name 'flux_Ha'
+z_nlr = line.Redshift('nlr')  # → site name 'z_nlr'
+z_blr = line.Redshift('blr')  # → site name 'z_blr'
+fwhm = line.FWHM('broad')  # → site name 'fwhm_broad'
+flux = line.Flux('Ha')  # → site name 'flux_Ha'
 ```
 
 The site names show up in:
@@ -220,12 +240,22 @@ Lines can share the same name but must have at least one different token, otherw
 z = line.Redshift('nlr', prior=prior.Uniform(-0.01, 0.01))
 
 fwhm_n = line.FWHM('narrow', prior=prior.Uniform(50, 400))
-fwhm_b = line.FWHM('broad',  prior=prior.Uniform(500, 3000))
+fwhm_b = line.FWHM('broad', prior=prior.Uniform(500, 3000))
 
-lc.add_line('H_alpha', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm_n,
-            flux=line.Flux('Ha_n', prior=prior.Uniform(0, 10)))
-lc.add_line('H_alpha', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm_b,
-            flux=line.Flux('Ha_b', prior=prior.Uniform(0, 10)))
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm_n,
+    flux=line.Flux('Ha_n', prior=prior.Uniform(0, 10)),
+)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm_b,
+    flux=line.Flux('Ha_b', prior=prior.Uniform(0, 10)),
+)
 ```
 
 ---
@@ -238,7 +268,7 @@ reference.
 
 ```python
 fwhm_narrow = line.FWHM('n', prior=prior.Uniform(50, 500))
-fwhm_broad  = line.FWHM('b', prior=prior.Uniform(fwhm_narrow + 150, 5000))
+fwhm_broad = line.FWHM('b', prior=prior.Uniform(fwhm_narrow + 150, 5000))
 ```
 
 This ensures the broad component is always at least 150 km/s wider than the narrow component.
@@ -276,8 +306,9 @@ $\mathrm{FWHM} = \sqrt{\mathrm{fwhm\_gauss}^2 + \mathrm{lsf\_fwhm}^2}$.
 **Parameters:** `fwhm_gauss` (km/s)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='Gaussian',
-            redshift=z, fwhm_gauss=fwhm, flux=flux)
+lc.add_line(
+    'H_alpha', 6563.0 * u.AA, profile='Gaussian', redshift=z, fwhm_gauss=fwhm, flux=flux
+)
 ```
 
 ### PseudoVoigt
@@ -300,11 +331,15 @@ different approximations depending on integration mode:
 **Parameters:** `fwhm_gauss` (km/s), `fwhm_lorentz` (km/s)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='PseudoVoigt',
-            redshift=z,
-            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
-            fwhm_lorentz=line.FWHM('l', prior=prior.Uniform(0, 500)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='PseudoVoigt',
+    redshift=z,
+    fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
+    fwhm_lorentz=line.FWHM('l', prior=prior.Uniform(0, 500)),
+    flux=flux,
+)
 ```
 
 ### Cauchy (Lorentzian)
@@ -314,10 +349,14 @@ A pure Lorentzian profile. Internally a `PseudoVoigt` with `fwhm_gauss = 0`.
 **Parameters:** `fwhm_lorentz` (km/s)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='Cauchy',
-            redshift=z,
-            fwhm_lorentz=line.FWHM('fwhm', prior=prior.Uniform(0, 1000)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='Cauchy',
+    redshift=z,
+    fwhm_lorentz=line.FWHM('fwhm', prior=prior.Uniform(0, 1000)),
+    flux=flux,
+)
 ```
 
 ### Laplace (Exponential)
@@ -346,12 +385,16 @@ parameters as $h_m' = h_m\,(\sigma_g/\sigma_\text{tot})^m$. See
 **Parameters:** `fwhm_gauss` (km/s), `h3` (dimensionless), `h4` (dimensionless)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='GaussHermite',
-            redshift=z,
-            fwhm_gauss=line.FWHM('fwhm', prior=prior.Uniform(50, 1000)),
-            h3=line.Param('h3', prior=prior.TruncatedNormal(0, 0.1, -0.3, 0.3)),
-            h4=line.Param('h4', prior=prior.TruncatedNormal(0, 0.1, -0.3, 0.3)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='GaussHermite',
+    redshift=z,
+    fwhm_gauss=line.FWHM('fwhm', prior=prior.Uniform(50, 1000)),
+    h3=line.Param('h3', prior=prior.TruncatedNormal(0, 0.1, -0.3, 0.3)),
+    h4=line.Param('h4', prior=prior.TruncatedNormal(0, 0.1, -0.3, 0.3)),
+    flux=flux,
+)
 ```
 
 ### SplitNormal
@@ -361,11 +404,15 @@ A two-sided Gaussian with independent widths on the blue and red sides.
 **Parameters:** `fwhm_blue` (km/s), `fwhm_red` (km/s)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='SplitNormal',
-            redshift=z,
-            fwhm_blue=line.FWHM('b', prior=prior.Uniform(50, 500)),
-            fwhm_red=line.FWHM('r',  prior=prior.Uniform(50, 500)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='SplitNormal',
+    redshift=z,
+    fwhm_blue=line.FWHM('b', prior=prior.Uniform(50, 500)),
+    fwhm_red=line.FWHM('r', prior=prior.Uniform(50, 500)),
+    flux=flux,
+)
 ```
 
 ### SkewNormal
@@ -384,11 +431,15 @@ See {doc}`/derivations/skew-normal` for the full derivation.
 **Parameters:** `fwhm_gauss` (km/s), `alpha` (dimensionless)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='SkewNormal',
-            redshift=z,
-            fwhm_gauss=line.FWHM('fwhm', prior=prior.Uniform(50, 500)),
-            alpha=line.LineShape('alpha', prior=prior.TruncatedNormal(0, 2, -10, 10)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='SkewNormal',
+    redshift=z,
+    fwhm_gauss=line.FWHM('fwhm', prior=prior.Uniform(50, 500)),
+    alpha=line.LineShape('alpha', prior=prior.TruncatedNormal(0, 2, -10, 10)),
+    flux=flux,
+)
 ```
 
 ### SkewVoigt
@@ -415,12 +466,16 @@ introduces sub-pixel quadrature error for marginally resolved lines. Consider us
 **Parameters:** `fwhm_gauss` (km/s), `fwhm_lorentz` (km/s), `alpha` (dimensionless)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='SkewVoigt',
-            redshift=z,
-            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
-            fwhm_lorentz=line.FWHM('l', prior=prior.Uniform(0, 500)),
-            alpha=line.LineShape('alpha', prior=prior.TruncatedNormal(0, 2, -10, 10)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='SkewVoigt',
+    redshift=z,
+    fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
+    fwhm_lorentz=line.FWHM('l', prior=prior.Uniform(0, 500)),
+    alpha=line.LineShape('alpha', prior=prior.TruncatedNormal(0, 2, -10, 10)),
+    flux=flux,
+)
 ```
 
 ### BoxGauss
@@ -437,11 +492,15 @@ window as `fwhm_gauss → 0` (with `lsf_fwhm → 0`).
 **Parameters:** `fwhm_box` (km/s), `fwhm_gauss` (km/s)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='BoxGauss',
-            redshift=z,
-            fwhm_box=line.FWHM('box', prior=prior.Uniform(100, 2000)),
-            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(0, 500)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='BoxGauss',
+    redshift=z,
+    fwhm_box=line.FWHM('box', prior=prior.Uniform(100, 2000)),
+    fwhm_gauss=line.FWHM('g', prior=prior.Uniform(0, 500)),
+    flux=flux,
+)
 ```
 
 ### GaussianSplitLaplace (Asymmetric EMG)
@@ -455,12 +514,16 @@ closed-form antiderivative of the Gaussian–split-Laplace CDF.
 **Parameters:** `fwhm_gauss` (km/s), `fwhm_l_blue` (km/s), `fwhm_l_red` (km/s)
 
 ```python
-lc.add_line('H_alpha', 6563.0 * u.AA, profile='GaussianSplitLaplace',
-            redshift=z,
-            fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
-            fwhm_l_blue=line.FWHM('lb', prior=prior.Uniform(0, 500)),
-            fwhm_l_red=line.FWHM('lr', prior=prior.Uniform(0, 500)),
-            flux=flux)
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    profile='GaussianSplitLaplace',
+    redshift=z,
+    fwhm_gauss=line.FWHM('g', prior=prior.Uniform(50, 500)),
+    fwhm_l_blue=line.FWHM('lb', prior=prior.Uniform(0, 500)),
+    fwhm_l_red=line.FWHM('lr', prior=prior.Uniform(0, 500)),
+    flux=flux,
+)
 ```
 
 ---
@@ -653,9 +716,9 @@ Pass `zorder` explicitly to `add_line()` to break from the default geometry:
 ```python
 # Absorber at zorder=1 (default) — absorbs Ha (zorder=0) but not AGN (zorder=2)
 lc = line.LineConfiguration()
-lc.add_line('Ha',     6563.0 * u.AA)                    # emission, zorder=0
-lc.add_line('AGN_Ha', 6563.0 * u.AA, zorder=2)          # emission, zorder=2 - not absorbed
-lc.add_line('NaD',    5893.0 * u.AA, tau=line.Tau())    # absorber, zorder=1 (default)
+lc.add_line('Ha', 6563.0 * u.AA)  # emission, zorder=0
+lc.add_line('AGN_Ha', 6563.0 * u.AA, zorder=2)  # emission, zorder=2 - not absorbed
+lc.add_line('NaD', 5893.0 * u.AA, tau=line.Tau())  # absorber, zorder=1 (default)
 ```
 
 The `zorder` column is visible when you print the configuration:

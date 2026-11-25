@@ -67,13 +67,16 @@ building a model. `line_scale` and `continuum_scale` are kept; re-run
 The goal of `prepare()` is to filter the line and continuum configurations to match the spectral coverage of the input spectra. This ensures that the model only includes lines and continuum regions that are actually observed, which improves efficiency and avoids fitting unconstrained parameters.
 
 ```python
-filtered_lines, filtered_cont = spectra.prepare(line_configuration, continuum_configuration)
+filtered_lines, filtered_cont = spectra.prepare(
+    line_configuration, continuum_configuration
+)
 
 # Optional kwargs with defaults:
 filtered_lines, filtered_cont = spectra.prepare(
-    line_configuration, continuum_configuration,
-    linedet_width=1000 * u.km / u.s,    # detection width for coverage check
-    drop_empty_regions=True,# drop continuum regions with no covered lines
+    line_configuration,
+    continuum_configuration,
+    linedet_width=1000 * u.km / u.s,  # detection width for coverage check
+    drop_empty_regions=True,  # drop continuum regions with no covered lines
 )
 ```
 
@@ -89,7 +92,7 @@ covered.
 After calling `prepare()`, the filtered configs are available as read-only properties:
 
 ```python
-spectra.is_prepared          # True once prepare() has been called
+spectra.is_prepared  # True once prepare() has been called
 spectra.prepared_line_config  # filtered LineConfiguration
 spectra.prepared_cont_config  # filtered ContinuumConfiguration (or None)
 ```
@@ -107,9 +110,10 @@ spectra.compute_scales(filtered_lines, filtered_cont)
 
 # Optional kwargs with defaults:
 spectra.compute_scales(
-    filtered_lines, filtered_cont,
+    filtered_lines,
+    filtered_cont,
     line_mask_width=1000 * u.km / u.s,  # FWHM for masking lines during continuum fit
-    box_width=1000 * u.km / u.s,        # maximum expected intrinsic line FWHM for line scale
+    box_width=1000 * u.km / u.s,  # maximum expected intrinsic line FWHM for line scale
     error_scale=True,
 )
 ```
@@ -163,23 +167,23 @@ The preferred access pattern is to iterate directly over `spectra`:
 spectra.compute_scales(filtered_lines, filtered_cont, error_scale=True)
 
 for s in spectra:
-    diag = s.scale_diagnostic       # SpectrumScaleDiagnostic for this spectrum
+    diag = s.scale_diagnostic  # SpectrumScaleDiagnostic for this spectrum
 
-    wl   = s.wavelength             # pixel-center wavelengths
-    flux = s.flux                   # observed flux
-    cont = diag.continuum_model     # NaN outside fitted regions
-    mask = diag.line_mask           # True = excluded near a line
+    wl = s.wavelength  # pixel-center wavelengths
+    flux = s.flux  # observed flux
+    cont = diag.continuum_model  # NaN outside fitted regions
+    mask = diag.line_mask  # True = excluded near a line
 
     for rinfo in diag.regions:
-        model = rinfo.model_on_region   # evaluated on in_region pixels
+        model = rinfo.model_on_region  # evaluated on in_region pixels
         print(f'  chi2_red = {rinfo.chi2_red:.2f}')
 ```
 
 You can also access diagnostics by index or name via `spectra.scale_diagnostics`:
 
 ```python
-diag = spectra.scale_diagnostics[0]          # integer index
-diag = spectra.scale_diagnostics['g235h']    # spectrum name (string key)
+diag = spectra.scale_diagnostics[0]  # integer index
+diag = spectra.scale_diagnostics['g235h']  # spectrum name (string key)
 ```
 
 ### Manual Scale Override
@@ -327,11 +331,19 @@ lc = LineConfiguration()
 lc.add_line('Ha', 0.6563, flux=Flux('ha'), redshift=Redshift('z'), fwhm=FWHM('v'))
 
 # Tau absorber at default zorder=1 — absorbs everything with zorder < 1
-lc.add_line('NaD', 0.5893, tau=Tau('tau_nad'), redshift=Redshift('z'), fwhm=FWHM('v_abs'))
+lc.add_line(
+    'NaD', 0.5893, tau=Tau('tau_nad'), redshift=Redshift('z'), fwhm=FWHM('v_abs')
+)
 
 # Emission line at zorder=2 — the tau absorber (zorder=1) does NOT attenuate this line
-lc.add_line('AGN', 0.6563, flux=Flux('ha_agn'), redshift=Redshift('z'), fwhm=FWHM('v_agn'),
-            zorder=2)
+lc.add_line(
+    'AGN',
+    0.6563,
+    flux=Flux('ha_agn'),
+    redshift=Redshift('z'),
+    fwhm=FWHM('v_agn'),
+    zorder=2,
+)
 ```
 
 #### Setting `zorder` on the continuum
@@ -371,8 +383,5 @@ reduces to the standard emission + continuum equation regardless of zorders.
 method:
 
 ```python
-samples, args = builder.fit(
-    integration_mode='convolution',
-    n_super=10,
-)
+samples, args = builder.fit(integration_mode='convolution', n_super=10)
 ```

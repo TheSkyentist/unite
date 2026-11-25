@@ -98,7 +98,7 @@ Two-token expressions — including ratios across parameters:
 # Flux ratio constraint: tie [OIII] 4363 ratio across kinematic components.
 # Same electron temperature in both narrow and broad components.
 flux_5007_narrow = line.Flux('5007_narrow', prior=prior.Uniform(0, 10))
-flux_5007_broad  = line.Flux('5007_broad',  prior=prior.Uniform(0, 10))
+flux_5007_broad = line.Flux('5007_broad', prior=prior.Uniform(0, 10))
 flux_4363_narrow = line.Flux('4363_narrow', prior=prior.Uniform(0, 10))
 
 # flux_4363_broad is fully determined — not a free parameter
@@ -136,8 +136,8 @@ instead of a mean-field one (see [Sampling & Optimization](inference.md))
 Dependencies can be **arbitrarily deep**:
 
 ```python
-fwhm_narrow    = line.FWHM('n',  prior=prior.Uniform(50, 500))
-fwhm_broad     = line.FWHM('b',  prior=prior.Uniform(fwhm_narrow + 150, 3000))
+fwhm_narrow = line.FWHM('n', prior=prior.Uniform(50, 500))
+fwhm_broad = line.FWHM('b', prior=prior.Uniform(fwhm_narrow + 150, 3000))
 fwhm_very_broad = line.FWHM('vb', prior=prior.Uniform(fwhm_broad + 200, 5000))
 ```
 
@@ -151,12 +151,12 @@ Both bounds **and** `loc` can be parameter expressions:
 fwhm_narrow = line.FWHM('n', prior=prior.Uniform(50, 500))
 
 # Broad component centerd at 2x narrow, with scatter
-fwhm_broad = line.FWHM('b', prior=prior.TruncatedNormal(
-    loc=fwhm_narrow * 2,
-    scale=50,
-    low=fwhm_narrow + 100,
-    high=5000,
-))
+fwhm_broad = line.FWHM(
+    'b',
+    prior=prior.TruncatedNormal(
+        loc=fwhm_narrow * 2, scale=50, low=fwhm_narrow + 100, high=5000
+    ),
+)
 ```
 
 ---
@@ -228,8 +228,7 @@ print(model_args.init_values)
 # e.g. {'z_z': 0.0, 'fwhm_gauss_narrow': 250.0, 'fwhm_gauss_broad': 1500.0}
 
 kernel = infer.NUTS(
-    model_fn,
-    init_strategy=infer.init_to_value(values=model_args.init_values),
+    model_fn, init_strategy=infer.init_to_value(values=model_args.init_values)
 )
 ```
 

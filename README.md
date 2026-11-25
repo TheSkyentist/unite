@@ -53,7 +53,7 @@ from unite.results import make_parameter_table, make_spectra_tables
 from unite.spectrum import Spectra, from_DJA
 
 # 1. Configure lines with shared kinematics
-z    = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
+z = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
 fwhm = line.FWHM('narrow', prior=prior.Uniform(100, 1000))
 
 lc = line.LineConfiguration()
@@ -62,14 +62,14 @@ lc.add_line(
     6563.0 * u.AA,
     redshift=z,
     fwhm_gauss=fwhm,
-    flux=line.Flux(prior=prior.Uniform(0, 10))
+    flux=line.Flux(prior=prior.Uniform(0, 10)),
 )
 lc.add_line(
     'NII_6585',
     6585.0 * u.AA,
     redshift=z,
     fwhm_gauss=fwhm,
-    flux=line.Flux(prior=prior.Uniform(0, 10))
+    flux=line.Flux(prior=prior.Uniform(0, 10)),
 )
 # Tau-parametrized absorption line: transmission = exp(-tau * phi).
 # Optionally pass covering_fraction=line.CoveringFraction(prior=prior.Uniform(0, 1))
@@ -79,10 +79,12 @@ lc.add_line(
     6563.0 * u.AA,
     redshift=z,
     fwhm_gauss=line.FWHM('abs', prior=prior.Uniform(50, 500)),
-    tau=line.Tau(prior=prior.Uniform(0, 5))
+    tau=line.Tau(prior=prior.Uniform(0, 5)),
 )
 
-cc = ContinuumConfiguration.from_lines(lc.centers, width=15_000*u.km/u.s, form=Linear())
+cc = ContinuumConfiguration.from_lines(
+    lc.centers, width=15_000 * u.km / u.s, form=Linear()
+)
 
 # 2. Load spectra (NIRSpec example; any instrument works)
 g395m = nirspec.G395M()

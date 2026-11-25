@@ -57,6 +57,8 @@ There is none for benchmarks; they are run locally before merging (see above).
    ```python
    def run():
        return block(jit_fn(args))
+
+
    benchmark(run)
    ```
 
@@ -66,8 +68,8 @@ There is none for benchmarks; they are run locally before merging (see above).
 
    ```python
    fn = jax.jit(...)
-   fn(args).block_until_ready()       # compile here
-   benchmark(lambda: block(fn(args))) # measure here
+   fn(args).block_until_ready()  # compile here
+   benchmark(lambda: block(fn(args)))  # measure here
    ```
 
 3. **Compile-time benchmarks need `jax.clear_caches()`** between rounds (handled by `bench_compile.py` via `benchmark.pedantic(setup=...)`).

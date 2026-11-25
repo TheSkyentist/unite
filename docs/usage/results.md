@@ -8,7 +8,7 @@ All functions share the same signature:
 ```python
 from unite.results import make_parameter_table, make_spectra_tables, make_hdul
 
-samples = mcmc.get_samples()   # dict of str → ndarray, shape (n_samples,)
+samples = mcmc.get_samples()  # dict of str → ndarray, shape (n_samples,)
 ```
 
 :::{tip}
@@ -32,7 +32,7 @@ flag per sample; pass e.g. `('diverging', 'accept_prob', 'num_steps')` for more,
 `()` for none. These keys are not added to the parameter table.
 
 ```python
-print(f"{samples['diverging'].sum()} divergent transitions")
+print(f'{samples['diverging'].sum()} divergent transitions')
 ```
 
 Both keys are consumed by {func}`~unite.results.freeze_from_samples` (see
@@ -58,7 +58,8 @@ print(table.colnames)
 #  'cont_slope_0', 'cont_intercept_0', ...]
 
 import numpy as np
-print(f"Ha_flux: {np.median(table['Ha_flux']):.3f} ± {np.std(table['Ha_flux']):.3f}")
+
+print(f'Ha_flux: {np.median(table['Ha_flux']):.3f} ± {np.std(table['Ha_flux']):.3f}')
 ```
 
 ### Percentile summaries
@@ -93,12 +94,14 @@ parameter; in full-posterior mode the raw arrays are stored.
 ```python
 # After builder.fit(), both keys are already in samples:
 table = make_parameter_table(samples, model_args)
-print(table['log_prob'])        # shape (n_samples,)
+print(table['log_prob'])  # shape (n_samples,)
 print(table['log_likelihood'])  # shape (n_samples,)
 
 # Or as percentiles:
-table = make_parameter_table(samples, model_args, percentiles=np.array([0.16, 0.5, 0.84]))
-print(table['log_prob'])        # shape (3,)
+table = make_parameter_table(
+    samples, model_args, percentiles=np.array([0.16, 0.5, 0.84])
+)
+print(table['log_prob'])  # shape (3,)
 ```
 
 ### Column units
@@ -199,7 +202,7 @@ t = tables['my_spectrum']
 
 # Or iterate over all spectra
 for name, t in tables.items():
-    print(name)          # spectrum name (same as t.meta['SPECNAME'])
+    print(name)  # spectrum name (same as t.meta['SPECNAME'])
     print(t.colnames)
     # ['wavelength', 'model_total', 'H_alpha_0', 'H_alpha_1', 'NII_6585_0',
     #  'NII_6549_0', 'cont_region_0', 'observed_flux', 'observed_error']
@@ -236,12 +239,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 percentiles = np.array([0.16, 0.5, 0.84])
-tables = make_spectra_tables(samples, model_args, percentiles=percentiles, insert_nan=True)
+tables = make_spectra_tables(
+    samples, model_args, percentiles=percentiles, insert_nan=True
+)
 
 fig, ax = plt.subplots()
 for name, t in tables.items():
-    ax.step(t['wavelength'], t['model_total'][:, 1],  # median (index 1 = 0.5 percentile)
-            where='mid', label=name)
+    ax.step(
+        t['wavelength'],
+        t['model_total'][:, 1],  # median (index 1 = 0.5 percentile)
+        where='mid',
+        label=name,
+    )
 ax.set_xlabel('Wavelength')
 ax.legend()
 ```
@@ -318,7 +327,7 @@ from astropy.table import Table
 
 with fits.open('results.fits') as hdul:
     param_table = Table.read(hdul['PARAMETERS'])
-    spec_table  = Table.read(hdul[2])   # first spectrum
+    spec_table = Table.read(hdul[2])  # first spectrum
 
 print(param_table['Ha_flux'])
 ```
@@ -374,13 +383,18 @@ from unite import line, prior
 # Doing so would change continuum_scale and make the frozen amplitude values
 # physically inconsistent.
 
-z_narrow2   = line.Redshift('narrow', prior=frozen['z_narrow'])
+z_narrow2 = line.Redshift('narrow', prior=frozen['z_narrow'])
 fwhm_narrow2 = line.FWHM('narrow', prior=frozen['fwhm_gauss_narrow'])
 
 lc2 = line.LineConfiguration()
-lc2.add_line('Ha', 6563.0 * u.AA, profile='Gaussian',
-             redshift=z_narrow2, fwhm_gauss=fwhm_narrow2,
-             flux=line.Flux(prior=prior.Uniform(0, 3)))
+lc2.add_line(
+    'Ha',
+    6563.0 * u.AA,
+    profile='Gaussian',
+    redshift=z_narrow2,
+    fwhm_gauss=fwhm_narrow2,
+    flux=line.Flux(prior=prior.Uniform(0, 3)),
+)
 ```
 
 For a full worked example — including how to pin `norm_wav` correctly when the
@@ -401,11 +415,12 @@ The fix is to include `norm_wav` explicitly in the frozen `ContinuumRegion`:
 from unite import continuum
 
 frozen_region = continuum.ContinuumRegion(
-    low * u.AA, high * u.AA,
+    low * u.AA,
+    high * u.AA,
     form=continuum.Linear(),
     params={
-        'scale':    continuum.Scale(prior=frozen['scale_a']),
-        'angle':    continuum.ContShape(prior=frozen['angle_a']),
+        'scale': continuum.Scale(prior=frozen['scale_a']),
+        'angle': continuum.ContShape(prior=frozen['angle_a']),
         'norm_wav': continuum.NormWavelength(prior=frozen['norm_wav_a']),
     },
 )
@@ -511,22 +526,26 @@ applied by {meth}`~unite.spectrum.Spectra.compute_scales`.
 import numpy as np
 
 percentiles = np.array([0.16, 0.5, 0.84])
-spectra_tables = make_spectra_tables(samples, model_args, percentiles=percentiles, insert_nan=True)
+spectra_tables = make_spectra_tables(
+    samples, model_args, percentiles=percentiles, insert_nan=True
+)
 
 chi2_total = 0.0
 n_pixels_total = 0
 for t in spectra_tables.values():
-    obs   = np.asarray(t['observed_flux'])
-    err   = np.asarray(t['scaled_error'])
-    med   = np.asarray(t['model_total'][:, 1])  # median (50th percentile)
+    obs = np.asarray(t['observed_flux'])
+    err = np.asarray(t['scaled_error'])
+    med = np.asarray(t['model_total'][:, 1])  # median (50th percentile)
     valid = np.isfinite(obs) & np.isfinite(err) & np.isfinite(med) & (err > 0)
     resid = (obs[valid] - med[valid]) / err[valid]
-    chi2_total     += float(np.sum(resid**2))
+    chi2_total += float(np.sum(resid**2))
     n_pixels_total += int(valid.sum())
 
-dof      = n_pixels_total - n_params
+dof = n_pixels_total - n_params
 chi2_red = chi2_total / dof
-print(f'χ²_ν = {chi2_red:.3f}  ({n_pixels_total} pixels − {n_params} params = {dof} DoF)')
+print(
+    f'χ²_ν = {chi2_red:.3f}  ({n_pixels_total} pixels − {n_params} params = {dof} DoF)'
+)
 ```
 
 ### Log-Likelihood and Log-Posterior
@@ -550,14 +569,16 @@ from numpyro.infer.util import log_density, log_likelihood
 
 # Log-likelihood — shape (n_samples,) after summing over pixels
 log_liks = log_likelihood(model_fn, samples, model_args)
-n_samp   = next(iter(log_liks.values())).shape[0]
+n_samp = next(iter(log_liks.values())).shape[0]
 total_ll = sum(v.reshape(n_samp, -1).sum(-1) for v in log_liks.values())
 print(f'Mean log-likelihood: {total_ll.mean():.2f}')
+
 
 # Log-posterior (unnormalized log-joint: log p(θ, data))
 def _log_joint(sample):
     ld, _ = log_density(model_fn, (model_args,), {}, sample)
     return ld
+
 
 log_joint = jax.jit(jax.vmap(_log_joint))(samples)
 print(f'Mean log-posterior: {log_joint.mean():.2f}')
@@ -569,13 +590,11 @@ WAIC is computed per pixel from the log-likelihood arrays.  Lower WAIC is better
 
 ```python
 # Per-pixel log-likelihoods: (n_samples, n_pixels_total)
-ll_obs = jnp.concatenate(
-    [v.reshape(n_samp, -1) for v in log_liks.values()], axis=-1
-)
+ll_obs = jnp.concatenate([v.reshape(n_samp, -1) for v in log_liks.values()], axis=-1)
 
-lppd   = jnp.sum(jax.nn.logsumexp(ll_obs, axis=0) - jnp.log(n_samp))
+lppd = jnp.sum(jax.nn.logsumexp(ll_obs, axis=0) - jnp.log(n_samp))
 p_waic = jnp.sum(jnp.var(ll_obs, axis=0))
-waic   = -2.0 * (lppd - p_waic)
+waic = -2.0 * (lppd - p_waic)
 print(f'WAIC: {waic:.2f}')
 ```
 
@@ -594,10 +613,10 @@ import arviz as az
 # SVI — no mcmc object, so build InferenceData from dicts
 idata = az.from_dict(
     posterior=samples,
-    log_likelihood=log_liks,   # dict of site → (n_samples, n_pixels)
+    log_likelihood=log_liks,  # dict of site → (n_samples, n_pixels)
 )
 
-az.waic(idata)   # waic, waic_se, p_waic
-az.loo(idata)    # PSIS-LOO; flags poorly-constrained pixels via Pareto-k
+az.waic(idata)  # waic, waic_se, p_waic
+az.loo(idata)  # PSIS-LOO; flags poorly-constrained pixels via Pareto-k
 az.compare({'model_a': idata_a, 'model_b': idata_b})  # rank multiple models
 ```

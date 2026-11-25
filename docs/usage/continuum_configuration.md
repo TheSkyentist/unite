@@ -23,8 +23,10 @@ from astropy import units as u
 
 lc = LineConfiguration(...)
 cc = ContinuumConfiguration.from_lines(
-    lc.centers, # Or any array of wavelenths definign cents.
-    width=30_000 * u.km / u.s,  # Total width of each region in velocity units, default is 30,000 km/s
+    lc.centers,  # Or any array of wavelenths definign cents.
+    width=30_000
+    * u.km
+    / u.s,  # Total width of each region in velocity units, default is 30,000 km/s
     form=Linear(),  # Functional for in each region, default is Linear which takes no arguments
 )
 ```
@@ -125,8 +127,9 @@ cc = ContinuumConfiguration(regions, zorder=2)
 cc = ContinuumConfiguration(
     [
         ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=PowerLaw(), name='stars'),
-        ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=Blackbody(), name='dust',
-                        zorder=2),
+        ContinuumRegion(
+            0.9 * u.um, 1.4 * u.um, form=Blackbody(), name='dust', zorder=2
+        ),
     ],
     allow_overlap=True,
 )
@@ -183,10 +186,13 @@ from unite.prior import TruncatedNormal, Uniform, Fixed
 from astropy import units as u
 
 region = continuum.ContinuumRegion(
-    1.0 * u.um, 1.5 * u.um,
+    1.0 * u.um,
+    1.5 * u.um,
     form=continuum.PowerLaw(),
     params={
-        'scale': continuum.Scale('pl', prior=TruncatedNormal(low = 0, high = 2.0, loc=1, scale=0.1)),
+        'scale': continuum.Scale(
+            'pl', prior=TruncatedNormal(low=0, high=2.0, loc=1, scale=0.1)
+        ),
         'beta': continuum.ContShape('pl', prior=Uniform(-3.0, 0.0)),
         # 'norm_wav' keeps its default Fixed(region_center) prior
     },
@@ -198,7 +204,8 @@ Invalid parameter names are caught when assembling the configuration:
 
 ```python
 region = continuum.ContinuumRegion(
-    1.0 * u.um, 2.0 * u.um,
+    1.0 * u.um,
+    2.0 * u.um,
     form=continuum.Linear(),
     params={'amplitude': continuum.Scale('amp', prior=Uniform(0, 10))},
 )
@@ -220,7 +227,7 @@ Alternatively, **use region names for automatic naming**. If you don't provide e
 
 ```python
 regions = [
-    ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=PowerLaw(), name='red'),
+    ContinuumRegion(0.9 * u.um, 1.4 * u.um, form=PowerLaw(), name='red')
     # Auto-creates tokens: scale_red, beta_red, norm_wav_red
 ]
 ```
@@ -241,27 +248,25 @@ from astropy import units as u
 
 pl = continuum.PowerLaw()
 shared_scale = continuum.Scale('pl', prior=Uniform(0, 10))
-shared_beta  = continuum.ContShape('pl', prior=Uniform(-5, 5))
-shared_nw    = continuum.NormWavelength('pl', prior=Fixed(1.25))
+shared_beta = continuum.ContShape('pl', prior=Uniform(-5, 5))
+shared_nw = continuum.NormWavelength('pl', prior=Fixed(1.25))
 
-cc = continuum.ContinuumConfiguration([
-    continuum.ContinuumRegion(
-        0.9 * u.um, 1.4 * u.um, form=pl,
-        params={
-            'scale': shared_scale,
-            'beta': shared_beta,
-            'norm_wav': shared_nw
-        },
-    ),
-    continuum.ContinuumRegion(
-        1.7 * u.um, 2.5 * u.um, form=pl,
-        params={
-            'scale': shared_scale,
-            'beta': shared_beta,
-            'norm_wav': shared_nw
-        },
-    ),
-])
+cc = continuum.ContinuumConfiguration(
+    [
+        continuum.ContinuumRegion(
+            0.9 * u.um,
+            1.4 * u.um,
+            form=pl,
+            params={'scale': shared_scale, 'beta': shared_beta, 'norm_wav': shared_nw},
+        ),
+        continuum.ContinuumRegion(
+            1.7 * u.um,
+            2.5 * u.um,
+            form=pl,
+            params={'scale': shared_scale, 'beta': shared_beta, 'norm_wav': shared_nw},
+        ),
+    ]
+)
 ```
 
 ---
@@ -323,6 +328,7 @@ $f(\lambda) = \text{scale} + \tan(\theta) \times (\lambda - \lambda_\text{norm})
 
 ```python
 from unite.continuum import Linear
+
 form = Linear()
 ```
 
@@ -334,6 +340,7 @@ $f(\lambda) = \text{scale} \times (\lambda / \lambda_\text{norm})^\beta$
 
 ```python
 from unite.continuum import PowerLaw
+
 form = PowerLaw()
 ```
 
@@ -345,7 +352,8 @@ $f(\lambda) = \text{scale} + c_1 x + c_2 x^2 + \ldots$ where $x = \lambda - \lam
 
 ```python
 from unite.continuum import Polynomial
-form = Polynomial(degree=2)   # quadratic
+
+form = Polynomial(degree=2)  # quadratic
 ```
 
 Constructor parameter: `degree` (default 1).
@@ -364,6 +372,7 @@ This can lead to large instability outside the nominal range.
 
 ```python
 from unite.continuum import Chebyshev
+
 form = Chebyshev(order=3, stretch=1)  # half_width in same units as region bounds
 ```
 
@@ -387,6 +396,7 @@ where $\lambda_\text{rest} = \lambda_\text{obs} / (1 + z_\text{sys} + \delta z)$
 
 ```python
 from unite.continuum import DLAPowerLaw
+
 form = DLAPowerLaw()
 ```
 
@@ -430,10 +440,11 @@ lc.add_line('Lya', 1215.67 * u.AA, redshift=z_galaxy, fwhm_gauss=line.FWHM('lya'
 #    The value received by DLAPowerLaw.evaluate() is treated as a *delta-z* from z_sys,
 #    so sharing z_galaxy here means the DLA sits at exactly the galaxy redshift.
 dla_region = continuum.ContinuumRegion(
-    0.8 * u.um, 0.9 * u.um,
+    0.8 * u.um,
+    0.9 * u.um,
     form=continuum.DLAPowerLaw(),
     params={
-        'redshift': z_galaxy,              # shared with line config
+        'redshift': z_galaxy,  # shared with line config
         'log_NHI': continuum.ContShape('NHI', prior=Uniform(20, 22)),
         'b': continuum.ContShape('b_dla', prior=Uniform(10, 100)),
         'norm_wav': continuum.NormWavelength('uv', prior=Fixed(0.85)),
@@ -447,11 +458,10 @@ If you want the DLA to float independently from the galaxy redshift, use a
 
 ```python
 dla_region = continuum.ContinuumRegion(
-    0.8 * u.um, 0.9 * u.um,
+    0.8 * u.um,
+    0.9 * u.um,
     form=continuum.DLAPowerLaw(),
-    params={
-        'redshift': continuum.ContShape('dz', prior=Uniform(-0.02, 0.02)),
-    },
+    params={'redshift': continuum.ContShape('dz', prior=Uniform(-0.02, 0.02))},
 )
 ```
 
@@ -489,6 +499,7 @@ Unlike `Chebyshev`, `scale` may be negative (e.g. for regions dominated by calib
 
 ```python
 from unite.continuum import Legendre
+
 form = Legendre(order=3)
 ```
 
@@ -503,6 +514,7 @@ The x-coordinate is normalised to $[-1, 1]$, scaled by `stretch`, then shifted t
 
 ```python
 from unite.continuum import Bernstein
+
 form = Bernstein(degree=4, stretch=1)
 ```
 
@@ -517,6 +529,7 @@ $f(\lambda) = \text{scale} \times B_\lambda(T) / B_{\lambda_\text{norm}}, T)$
 
 ```python
 from unite.continuum import Blackbody
+
 form = Blackbody()
 ```
 
@@ -533,6 +546,7 @@ $f(\lambda) = \text{scale} \times \times B_\lambda(T) / B_{\lambda_\text{norm}},
 
 ```python
 from unite.continuum import ModifiedBlackbody
+
 form = ModifiedBlackbody()
 ```
 
@@ -552,7 +566,7 @@ Extinction is normalised at `norm_wav`, so `scale` is the **observed**
 from unite.continuum import AttenuatedBlackbody
 from astropy import units as u
 
-form = AttenuatedBlackbody()                         # default: lambda_V = 0.55 μm (V band)
+form = AttenuatedBlackbody()  # default: lambda_V = 0.55 μm (V band)
 form = AttenuatedBlackbody(lambda_ext=4400 * u.AA)  # B Band
 ```
 
@@ -574,7 +588,9 @@ from unite.continuum import Template
 
 form = Template('path/to/template.fits')
 # select columns explicitly
-form = Template('template.ecsv', wavelength_colname='wave', usecols=['wave', 'flux_a', 'flux_b'])
+form = Template(
+    'template.ecsv', wavelength_colname='wave', usecols=['wave', 'flux_a', 'flux_b']
+)
 ```
 
 Constructor parameters:

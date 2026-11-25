@@ -35,6 +35,7 @@ performance on GPUs. Enable it before any JAX import:
 
 ```python
 import jax
+
 jax.enable_64(True)
 
 from unite import line, model, prior
@@ -55,6 +56,7 @@ spectrum. See {doc}`auto_tutorials/tutorial_generic` for the full annotated walk
 
 ```python
 import jax
+
 jax.config.update('jax_enable_x64', True)
 
 import astropy.units as u
@@ -92,12 +94,27 @@ z = line.Redshift('z', prior=prior.Uniform(-0.005, 0.005))
 fwhm = line.FWHM('fwhm', prior=prior.Uniform(1.0, 10.0))
 
 lc = line.LineConfiguration()
-lc.add_line('H_alpha', 6563.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 5)))
-lc.add_line('NII_6585', 6585.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('NII6585_flux', prior=prior.Uniform(0, 5)))
-lc.add_line('NII_6549', 6549.0 * u.AA, redshift=z, fwhm_gauss=fwhm,
-            flux=line.Flux('NII6549_flux', prior=prior.Uniform(0, 5)))
+lc.add_line(
+    'H_alpha',
+    6563.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm,
+    flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 5)),
+)
+lc.add_line(
+    'NII_6585',
+    6585.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm,
+    flux=line.Flux('NII6585_flux', prior=prior.Uniform(0, 5)),
+)
+lc.add_line(
+    'NII_6549',
+    6549.0 * u.AA,
+    redshift=z,
+    fwhm_gauss=fwhm,
+    flux=line.Flux('NII6549_flux', prior=prior.Uniform(0, 5)),
+)
 
 cc = ContinuumConfiguration.from_lines(lc.centers, pad=0.05, form=Linear())
 

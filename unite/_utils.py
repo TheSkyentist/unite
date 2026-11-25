@@ -8,7 +8,7 @@ from typing import Any, TypeVar
 import jax
 import jax.numpy as jnp
 from astropy import units as u
-from astropy.constants import c  # ty: ignore[import-not-found]
+from astropy.constants import c  # ty: ignore[missing-module-member]
 
 _T = TypeVar('_T')
 

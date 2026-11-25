@@ -134,8 +134,8 @@ from unite.instrument import nirspec
 NIRSpec dispersers support two resolution calibration modes via `r_source`:
 
 ```python
-g235h = nirspec.G235H(r_source='point')     # point-source R (de Graaff et al. 2024)
-g235h = nirspec.G235H(r_source='uniform')   # uniform illumination R from JDox
+g235h = nirspec.G235H(r_source='point')  # point-source R (de Graaff et al. 2024)
+g235h = nirspec.G235H(r_source='uniform')  # uniform illumination R from JDox
 ```
 
 - **`'point'`** (default): Uses polynomial fits to the slit-centered point-source resolving power
@@ -163,8 +163,12 @@ g395m = nirspec.G395M(r_scale=r_scale)
 # PRISM has free flux and wavelength offsets relative to G395M
 prism = nirspec.PRISM(
     r_scale=r_scale,
-    flux_scale=FluxScale(prior=prior.TruncatedNormal(low=0.8, high=1.4, loc=1.1, scale=0.1)),  # de Graaff+25 Fig 8
-    pix_offset=PixOffset(prior=prior.TruncatedNormal(low=-0.2, high=0.6, loc=0.2, scale=0.1)),  # de Graaff+25 Fig 9
+    flux_scale=FluxScale(
+        prior=prior.TruncatedNormal(low=0.8, high=1.4, loc=1.1, scale=0.1)
+    ),  # de Graaff+25 Fig 8
+    pix_offset=PixOffset(
+        prior=prior.TruncatedNormal(low=-0.2, high=0.6, loc=0.2, scale=0.1)
+    ),  # de Graaff+25 Fig 9
 )
 ```
 
@@ -224,9 +228,7 @@ from astropy import units as u
 
 wavelength = np.linspace(4000, 9000, 500) * u.AA
 disperser = generic.SimpleDisperser(
-    wavelength=wavelength,
-    R=3000.0,
-    name='my_spectrograph',
+    wavelength=wavelength, R=3000.0, name='my_spectrograph'
 )
 ```
 
@@ -245,13 +247,18 @@ For maximum flexibility, pass callables that return $R(\lambda)$ and $d\lambda/\
 ```python
 from unite.instrument import generic
 
+
 def my_R(wavelength):
     return 2000 + 500 * (wavelength - 4000) / 5000
+
 
 def my_dlam(wavelength):
     return wavelength / my_R(wavelength)
 
-disperser = generic.GenericDisperser(R_func=my_R, dlam_dpix_func=my_dlam, unit=u.AA, name='custom')
+
+disperser = generic.GenericDisperser(
+    R_func=my_R, dlam_dpix_func=my_dlam, unit=u.AA, name='custom'
+)
 ```
 
 ---
@@ -276,9 +283,7 @@ order-*m* to first-order throughput ratio.
 from unite.instrument import OrderOverlap, OrderScale
 
 s2 = OrderScale(prior=prior.TruncatedNormal(1.0, 0.2, 0.5, 1.5))
-g140m = nirspec.G140M(
-    order_overlap=[OrderOverlap(2, 'g140m_order2.fits', scale=s2)],
-)
+g140m = nirspec.G140M(order_overlap=[OrderOverlap(2, 'g140m_order2.fits', scale=s2)])
 ```
 
 **The ratio file.** {class}`~unite.instrument.OrderOverlap` reads any file supported by
@@ -354,9 +359,9 @@ dc = InstrumentConfig([prism, g395m])
 Dispersers can be retrieved by name:
 
 ```python
-d = dc['G395M']      # returns the G395M disperser
-d = dc['PRISM']      # returns the PRISM disperser
-names = dc.names     # ['PRISM', 'G395M']
+d = dc['G395M']  # returns the G395M disperser
+d = dc['PRISM']  # returns the PRISM disperser
+names = dc.names  # ['PRISM', 'G395M']
 ```
 
 This is particularly useful after loading a configuration from YAML:
@@ -397,7 +402,13 @@ from astropy import units as u
 
 flux_unit = 1e-20 * u.erg / (u.s * u.cm**2 * u.AA)
 
-spectrum = from_edges(wl_edges[:-1], wl_edges[1:], flux_array * flux_unit, err_array * flux_unit, disperser)
+spectrum = from_edges(
+    wl_edges[:-1],
+    wl_edges[1:],
+    flux_array * flux_unit,
+    err_array * flux_unit,
+    disperser,
+)
 ```
 
 Pass a boolean `mask` array (True = bad pixel) to exclude pixels before the spectrum is
@@ -405,7 +416,7 @@ constructed — masked pixels are removed entirely, not zeroed:
 
 ```python
 bad = np.zeros(len(flux_array), dtype=bool)
-bad[42] = True   # flag a known bad pixel
+bad[42] = True  # flag a known bad pixel
 
 spectrum = from_edges(low, high, flux, err, disperser, mask=bad)
 ```
@@ -451,7 +462,9 @@ spectrum = from_arrays(low=low, high=high, flux=flux, error=err, disperser=dispe
 spectrum = from_arrays(center=wavelengths, flux=flux, error=err, disperser=disperser)
 
 # With bad-pixel masking
-spectrum = from_arrays(low=low, high=high, flux=flux, error=err, disperser=disperser, mask=bad)
+spectrum = from_arrays(
+    low=low, high=high, flux=flux, error=err, disperser=disperser, mask=bad
+)
 ```
 
 This is useful when the wavelength representation is determined at runtime or when you want to
@@ -537,9 +550,7 @@ from unite.instrument import desi, FluxScale
 from unite import prior
 
 # B arm is the flux reference; R arm has a free flux scale
-r_disp = desi.DESIDisperser('R',
-    flux_scale=FluxScale(prior=prior.Uniform(0.8, 1.2))
-)
+r_disp = desi.DESIDisperser('R', flux_scale=FluxScale(prior=prior.Uniform(0.8, 1.2)))
 spectra_list = from_desi_fits('spectra.fits', dispersers={'R': r_disp})
 ```
 
@@ -568,11 +579,9 @@ from unite.spectrum import Spectra, from_DJA, from_sdss_fits
 g395h = nirspec.G395H()
 
 # SDSS disperser with a free flux scale relative to NIRSpec
-sdss_disp = sdss.SDSSDisperser(
-    flux_scale=FluxScale(prior=prior.Uniform(0.5, 2.0))
-)
+sdss_disp = sdss.SDSSDisperser(flux_scale=FluxScale(prior=prior.Uniform(0.5, 2.0)))
 
-spec_nir  = from_DJA('g395h.fits', disperser=g395h)
+spec_nir = from_DJA('g395h.fits', disperser=g395h)
 spec_sdss = from_sdss_fits('spec-PLATE-MJD-FIBER.fits', disperser=sdss_disp)
 
 spectra = Spectra([spec_nir, spec_sdss], redshift=z_sys)

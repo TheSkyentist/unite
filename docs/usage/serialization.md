@@ -15,9 +15,9 @@ from unite.config import Configuration
 from unite.instrument.config import InstrumentConfig
 
 config = Configuration(
-    lines=lc,           # LineConfiguration
-    continuum=cc,       # ContinuumConfiguration (optional)
-    dispersers=dc,      # InstrumentConfig (optional)
+    lines=lc,  # LineConfiguration
+    continuum=cc,  # ContinuumConfiguration (optional)
+    dispersers=dc,  # InstrumentConfig (optional)
 )
 ```
 
@@ -215,7 +215,7 @@ When combining configs where one has continuum/dispersers and the other doesn't,
 
 ```python
 cfg1 = Configuration(lines_1, continuum_1)  # has continuum
-cfg2 = Configuration(lines_2)               # no continuum
+cfg2 = Configuration(lines_2)  # no continuum
 
 cfg_combined = cfg1 + cfg2
 # cfg_combined.continuum is continuum_1
@@ -230,7 +230,7 @@ Configuration combination uses **strict mode**, raising an error if any names co
 try:
     cfg_combined = cfg1 + cfg2
 except ValueError as e:
-    print(f"Name collision: {e}")
+    print(f'Name collision: {e}')
 ```
 
 Rename conflicting tokens before combining, or use sub-configuration merging with `strict=False` if you want to share tokens by name:

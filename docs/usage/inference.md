@@ -20,6 +20,7 @@ performance on GPUs. Enable it before any JAX import:
 
 ```python
 import jax
+
 jax.enable_64(True)
 
 from unite import line, model, prior
@@ -40,8 +41,9 @@ usually leaves a GPU mostly idle; to benefit, run several chains with
 
 ```python
 import jax
-print(jax.devices())           # e.g. [CudaDevice(id=0)]
-print(jax.default_backend())   # 'gpu', 'cpu', or 'tpu'
+
+print(jax.devices())  # e.g. [CudaDevice(id=0)]
+print(jax.default_backend())  # 'gpu', 'cpu', or 'tpu'
 
 # Select a specific device
 with jax.default_device(jax.devices('gpu')[0]):
@@ -65,18 +67,19 @@ results as well as the sampler failing to converge.
 
 ```python
 from unite import model
+
 builder = model.ModelBuilder(line_config, cont_config, spectra)
 samples, model_args = builder.fit(
-    num_warmup = 250,       # Warmup samples
-    num_samples = 1000,     # Number of Samples
-    num_chains = 1,         # Number of Chains
-    chain_method = 'parallel',  # or 'vectorized' to batch chains on one device
-    seed = 0,               # Random Seed
-    progress_bar = True,    # Display a progress bar
+    num_warmup=250,  # Warmup samples
+    num_samples=1000,  # Number of Samples
+    num_chains=1,  # Number of Chains
+    chain_method='parallel',  # or 'vectorized' to batch chains on one device
+    seed=0,  # Random Seed
+    progress_bar=True,  # Display a progress bar
     # Forwarded to ModelBuilder.build (see its documentation):
-    integration_mode = 'analytic',  # or 'convolution'
-    n_super = 10,                   # sub-pixel points (convolution mode only)
-    conv_half_width = None,         # LSF kernel half-width (convolution mode only)
+    integration_mode='analytic',  # or 'convolution'
+    n_super=10,  # sub-pixel points (convolution mode only)
+    conv_half_width=None,  # LSF kernel half-width (convolution mode only)
 )
 ```
 
@@ -148,13 +151,10 @@ import jax
 from numpyro import infer
 
 model_fn, model_args = builder.build()
-kernel = infer.NUTS(model_fn, dense_mass=model_args.mass_blocks)  # see {ref}`mass-matrix`
-mcmc = infer.MCMC(
-    kernel,
-    num_warmup=500,
-    num_samples=1000,
-    progress_bar=True,
-)
+kernel = infer.NUTS(
+    model_fn, dense_mass=model_args.mass_blocks
+)  # see {ref}`mass-matrix`
+mcmc = infer.MCMC(kernel, num_warmup=500, num_samples=1000, progress_bar=True)
 mcmc.run(jax.random.PRNGKey(0), model_args)
 samples = mcmc.get_samples()
 ```
@@ -209,8 +209,8 @@ a larger target acceptance probability:
 ```python
 kernel = infer.NUTS(
     model_fn,
-    target_accept_prob=0.9,   # default 0.8; increase for difficult posteriors
-    max_tree_depth=12,        # default 10; increase if chains get stuck, or decrease to speed up if you get "divergent transition after max tree depth" warnings
+    target_accept_prob=0.9,  # default 0.8; increase for difficult posteriors
+    max_tree_depth=12,  # default 10; increase if chains get stuck, or decrease to speed up if you get "divergent transition after max tree depth" warnings
     dense_mass=model_args.mass_blocks,  # structured mass matrix, see above
 )
 ```
@@ -234,12 +234,7 @@ from numpyro.infer import autoguide
 
 model_fn, model_args = builder.build()
 guide = autoguide.AutoMultivariateNormal(model_fn)
-svi = infer.SVI(
-    model_fn,
-    guide,
-    optim.Adam(step_size=0.01),
-    loss=infer.Trace_ELBO()
-)
+svi = infer.SVI(model_fn, guide, optim.Adam(step_size=0.01), loss=infer.Trace_ELBO())
 svi_result = svi.run(jax.random.PRNGKey(0), 10000, model_args)
 params = svi_result.params
 samples = guide.sample_posterior(jax.random.PRNGKey(1), params, sample_shape=(500,))
@@ -312,14 +307,11 @@ pip install jaxns
 ```python
 from numpyro.contrib.nested_sampling import NestedSampler
 
-ns = NestedSampler(
-    model_fn,
-    constructor_kwargs={'num_live_points': 500},
-)
+ns = NestedSampler(model_fn, constructor_kwargs={'num_live_points': 500})
 ns.run(jax.random.PRNGKey(0), model_args)
 
-samples   = ns.get_samples(jax.random.PRNGKey(1), num_samples=1000)
-log_Z     = ns.log_evidence_mean
+samples = ns.get_samples(jax.random.PRNGKey(1), num_samples=1000)
+log_Z = ns.log_evidence_mean
 log_Z_err = ns.log_evidence_uncert
 print(f'log Z = {log_Z:.2f} ± {log_Z_err:.2f}')
 ```

@@ -172,9 +172,9 @@ Every token carries a **prior distribution** that is sampled in the NumPyro mode
 ```python
 from unite import prior
 
-prior.Uniform(low, high)                       # flat prior
-prior.TruncatedNormal(loc, scale, low, high)   # Gaussian with hard bounds
-prior.Fixed(value)                             # not sampled; held constant
+prior.Uniform(low, high)  # flat prior
+prior.TruncatedNormal(loc, scale, low, high)  # Gaussian with hard bounds
+prior.Fixed(value)  # not sampled; held constant
 ```
 
 Priors can be _dependent_ on other tokens — for example, constraining a broad FWHM to always
@@ -182,7 +182,7 @@ exceed a narrow FWHM by at least 150 km/s:
 
 ```python
 fwhm_narrow = line.FWHM('narrow', prior=prior.Uniform(100, 1000))
-fwhm_broad  = line.FWHM('broad',  prior=prior.Uniform(fwhm_narrow + 150, 5000))
+fwhm_broad = line.FWHM('broad', prior=prior.Uniform(fwhm_narrow + 150, 5000))
 ```
 
 See {doc}`usage/priors` for the full reference on supported priors, dependent priors, and
@@ -204,7 +204,7 @@ lc.add_line(
     redshift=z,
     fwhm_gauss=fwhm,
     flux=line.Flux('Ha_flux', prior=prior.Uniform(0, 10)),
-    profile='Gaussian',   # default
+    profile='Gaussian',  # default
 )
 ```
 
@@ -224,8 +224,8 @@ from the line centers:
 from unite.continuum import ContinuumConfiguration, Linear
 
 cc = ContinuumConfiguration.from_lines(
-    lc.centers,    # wavelength array of line rest-frame centers
-    form=Linear(), # continuum form (or string name, e.g. 'Linear')
+    lc.centers,  # wavelength array of line rest-frame centers
+    form=Linear(),  # continuum form (or string name, e.g. 'Linear')
 )
 ```
 
@@ -323,6 +323,7 @@ all pre-computed matrices, scales, and data arrays.
 ```python
 # NUTS (recommended for well-behaved posteriors)
 from numpyro import infer
+
 kernel = infer.NUTS(model_fn)
 mcmc = infer.MCMC(kernel, num_warmup=500, num_samples=1000)
 mcmc.run(jax.random.PRNGKey(0), model_args)
